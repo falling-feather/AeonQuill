@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Download,
+  House,
   LoaderCircle,
   PanelRight,
   Redo2,
@@ -14,6 +15,8 @@ import {
 import { IconButton } from './ui/IconButton'
 
 type TopBarProps = {
+  onHome?: () => void
+  projectTitle?: string
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
@@ -27,6 +30,8 @@ type TopBarProps = {
 }
 
 export function TopBar({
+  onHome,
+  projectTitle = '本地创作项目',
   canUndo,
   canRedo,
   onUndo,
@@ -52,12 +57,21 @@ export function TopBar({
   return (
     <header className="top-bar">
       <div className="brand-block">
+        {onHome ? (
+          <IconButton
+            label="返回光阴砚主页"
+            className="home-mode-button"
+            onClick={onHome}
+          >
+            <House size={17} strokeWidth={1.8} />
+          </IconButton>
+        ) : null}
         <div className="brand-mark" aria-hidden="true">
           <span />
           <span />
           <span />
         </div>
-        <strong className="brand-name">妙绘</strong>
+        <strong className="brand-name">光阴砚 <span>AEONQUILL</span></strong>
         <div className="top-separator" />
         <div className="project-menu" ref={menuRef}>
           <button
@@ -66,7 +80,7 @@ export function TopBar({
             aria-expanded={projectMenuOpen}
             onClick={() => setProjectMenuOpen((open) => !open)}
           >
-            角色资产实验 <ChevronDown size={14} strokeWidth={1.8} />
+            {projectTitle} <ChevronDown size={14} strokeWidth={1.8} />
           </button>
           {projectMenuOpen ? (
             <div className="project-popover" role="menu">

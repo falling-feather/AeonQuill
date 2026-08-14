@@ -25,7 +25,7 @@ bridgeProcess = spawn(process.execPath, ['server/index.mjs'], {
   }),
 })
 
-console.log(`MiaoHui app: http://127.0.0.1:${bridgePort}`)
+console.log(`AEONQUILL app: http://127.0.0.1:${bridgePort}`)
 console.log(`ComfyUI policy: ${config.launchPolicy}`)
 
 let shuttingDown = false

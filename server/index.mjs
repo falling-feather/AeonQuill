@@ -805,9 +805,9 @@ async function runImageJob(jobId, { signal }) {
         })
         await runtimeManager.stop('gpu-image-job')
         runtimeCache = null
-        await store.log(jobId, 'success', '已关闭妙绘托管的空闲 ComfyUI，释放显存给图片模型')
+        await store.log(jobId, 'success', '已关闭光阴砚托管的空闲 ComfyUI，释放显存给图片模型')
       } else if (await runtimeManager.isReady()) {
-        await store.log(jobId, 'warning', '检测到外部 ComfyUI；妙绘不会关闭外部进程，请留意显存占用')
+        await store.log(jobId, 'warning', '检测到外部 ComfyUI；光阴砚不会关闭外部进程，请留意显存占用')
       }
     }
     await store.update(jobId, {
@@ -1751,7 +1751,7 @@ const server = createServer(async (request, response) => {
 })
 
 server.listen(port, host, () => {
-  console.log(`MiaoHui local bridge: http://${host}:${port}`)
+  console.log(`AEONQUILL local bridge: http://${host}:${port}`)
   console.log(`ComfyUI executor: ${comfy.baseUrl}`)
 })
 

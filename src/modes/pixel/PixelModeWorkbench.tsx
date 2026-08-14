@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Copy,
   Download,
   Eraser,
@@ -68,6 +69,7 @@ export type PixelSpriteSheetPayload = {
 export type PixelModeWorkbenchProps = {
   initialDocument?: PixelDocument
   className?: string
+  onBack?: () => void
   onDocumentChange?: (document: PixelDocument) => void
   onSpriteSheetReady?: (payload: PixelSpriteSheetPayload) => void
 }
@@ -162,6 +164,7 @@ function putRgbaOnCanvas(
 export function PixelModeWorkbench({
   initialDocument,
   className = '',
+  onBack,
   onDocumentChange,
   onSpriteSheetReady,
 }: PixelModeWorkbenchProps) {
@@ -398,6 +401,11 @@ export function PixelModeWorkbench({
     >
       <header className="aq-pixel-header">
         <div className="aq-pixel-brand">
+          {onBack ? (
+            <button type="button" className="aq-pixel-back" onClick={onBack} aria-label="返回光阴砚主页">
+              <ArrowLeft size={17} />
+            </button>
+          ) : null}
           <span className="aq-pixel-brand-mark" aria-hidden="true"><i /><i /><i /></span>
           <div>
             <span>AEONQUILL / PIXEL</span>

@@ -1,0 +1,36 @@
+.aq-product-mode-host {
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  min-height: 620px;
+  overflow: hidden;
+  background: #f4f1eb;
+}
+
+.aq-product-notice {
+  position: fixed;
+  z-index: 200;
+  right: 20px;
+  bottom: 20px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 11px 14px;
+  border: 1px solid rgba(240, 179, 90, 0.36);
+  border-radius: 10px;
+  color: #f8f3e8;
+  background: rgba(25, 24, 30, 0.94);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+}
+
+.aq-product-mode-host > .aq-pixel-mode,
+.aq-product-mode-host > .aq-video-workbench {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 720px) {
+  .aq-product-mode-host {
+    min-height: 100dvh;
+    overflow: auto;
+  }
+}

@@ -277,7 +277,7 @@ export class ComfyRuntimeManager {
   async stop(reason = 'manual') {
     this.clearIdleTimer()
     if (!this.owned || !this.process) {
-      if (await this.isReady()) throw new Error('当前 ComfyUI 不是由妙绘启动，不能自动关闭')
+      if (await this.isReady()) throw new Error('当前 ComfyUI 不是由光阴砚启动，不能自动关闭')
       this.state = 'stopped'
       this.emit()
       return false

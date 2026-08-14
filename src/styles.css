@@ -147,6 +147,19 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.brand-name span {
+  margin-left: 4px;
+  color: #8a6a34;
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0.12em;
+}
+
+.home-mode-button {
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
 .top-separator {
   width: 1px;
   height: 24px;

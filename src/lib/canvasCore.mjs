@@ -244,7 +244,7 @@ export function assertCanvasDocument(document) {
 
 export function createCanvasDocument({
   id = 'local-project',
-  title = '妙绘画布',
+  title = '光阴砚画布',
   elements,
   camera,
   now = Date.now(),
@@ -276,7 +276,7 @@ export function migrateCanvasDocument(input, options = {}) {
   const migrated = {
     schemaVersion: CANVAS_DOCUMENT_SCHEMA_VERSION,
     id: typeof input.id === 'string' && input.id.trim() ? input.id : (options.id ?? 'local-project'),
-    title: typeof input.title === 'string' && input.title.trim() ? input.title : (options.title ?? '妙绘画布'),
+    title: typeof input.title === 'string' && input.title.trim() ? input.title : (options.title ?? '光阴砚画布'),
     revision: Number.isSafeInteger(input.revision) && input.revision >= 0 ? input.revision : 0,
     createdAt,
     updatedAt: Number.isSafeInteger(input.updatedAt) && input.updatedAt >= createdAt ? input.updatedAt : createdAt,

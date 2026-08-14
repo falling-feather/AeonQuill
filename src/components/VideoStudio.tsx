@@ -296,7 +296,7 @@ export function VideoStudio({
           <strong>{starting ? '正在按需启动 ComfyUI' : ready ? 'ComfyUI 已就绪' : 'ComfyUI 当前休眠'}</strong>
           <small>
             {ready
-              ? `${lifecycle?.owned ? '妙绘托管' : '外部进程'} · ${formatBytes(runtime?.vramFree)} 可用`
+              ? `${lifecycle?.owned ? '光阴砚托管' : '外部进程'} · ${formatBytes(runtime?.vramFree)} 可用`
               : lifecycle?.policy === 'manual' ? '手动模式，不会自动启动' : '提交任务时自动启动'}
           </small>
         </span>

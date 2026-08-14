@@ -60,6 +60,24 @@
   gap: 11px;
 }
 
+.aq-pixel-back {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--aq-pixel-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.aq-pixel-back:hover {
+  border-color: rgba(240, 179, 90, 0.48);
+  background: var(--aq-pixel-accent-soft);
+}
+
 .aq-pixel-brand-mark {
   position: relative;
   width: 29px;

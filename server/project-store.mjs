@@ -500,7 +500,7 @@ export class ProjectStore {
           updated_at = excluded.updated_at
       `).run(
         prepared.document.id,
-        String(prepared.document.title || '妙绘画布'),
+        String(prepared.document.title || '光阴砚画布'),
         PROJECT_SCHEMA_VERSION,
         prepared.document.revision,
         stableJson(prepared.document),

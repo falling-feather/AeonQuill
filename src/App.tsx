@@ -83,7 +83,7 @@ function loadProject(): CanvasDocument {
       if (!stored) continue
       return migrateCanvasDocument(JSON.parse(stored), {
         id: 'local-project',
-        title: '妙绘本地画布',
+        title: '光阴砚本地画布',
       })
     } catch {
       // Try the next compatible storage generation before falling back to seed data.
@@ -127,7 +127,11 @@ const imageOperationLabels: Record<ImageOperationId, string> = {
   'semantic-element-extract': 'SAM 元素提取',
 }
 
-function App() {
+export type BalancedWorkbenchProps = {
+  onBack?: () => void
+}
+
+function App({ onBack }: BalancedWorkbenchProps) {
   const initialProject = useRef(loadProject())
   const [canvasDocument, setCanvasDocument] = useState<CanvasDocument>(initialProject.current)
   const documentRef = useRef(canvasDocument)
@@ -1360,6 +1364,8 @@ function App() {
   return (
     <div className="app-shell">
       <TopBar
+        onHome={onBack}
+        projectTitle={canvasDocument.title}
         canUndo={historyCounts.past > 0}
         canRedo={historyCounts.future > 0}
         onUndo={undo}
