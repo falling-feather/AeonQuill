@@ -11,6 +11,7 @@ import type {
   ModeAvailabilitySummary,
   RecentProjectSummary,
   RuntimeSurfaceSummary,
+  ShellFeedback,
 } from './contracts'
 import {
   defaultModeRegistry,
@@ -25,11 +26,13 @@ export interface AeonQuillShellProps {
   modeAvailability?: Partial<Record<ProductModeId, ModeAvailabilitySummary>>
   runtime: LocalRuntimeSummary
   recentProjects?: readonly RecentProjectSummary[]
+  recentProjectsFeedback?: ShellFeedback
   refreshingRuntime?: boolean
   onModeSelect?: (modeId: ProductModeId) => void
   onModeOpen?: (modeId: ProductModeId) => void
   onCreateProject?: (modeId: ProductModeId) => void
-  onOpenProject?: (projectId: string) => void
+  onOpenProject?: (projectId: string, modeId: ProductModeId) => void
+  onRetryProjects?: () => void
   onOpenSettings?: () => void
   onRefreshRuntime?: () => void
   onRuntimeItemAction?: (item: RuntimeSurfaceSummary) => void
@@ -41,11 +44,13 @@ export function AeonQuillShell({
   modeAvailability,
   runtime,
   recentProjects = [],
+  recentProjectsFeedback,
   refreshingRuntime = false,
   onModeSelect,
   onModeOpen,
   onCreateProject,
   onOpenProject,
+  onRetryProjects,
   onOpenSettings,
   onRefreshRuntime,
   onRuntimeItemAction,
@@ -93,8 +98,11 @@ export function AeonQuillShell({
 
           <RecentProjects
             projects={recentProjects}
+            feedback={recentProjectsFeedback}
+            startLabel={`进入${activeMode?.title ?? '均衡模式'}`}
             onCreateProject={() => onCreateProject?.(activeMode?.id ?? 'balanced')}
             onOpenProject={onOpenProject}
+            onRetry={onRetryProjects}
           />
 
           <RuntimeSummary

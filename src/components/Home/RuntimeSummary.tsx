@@ -13,6 +13,7 @@ import type {
   RuntimeSurfaceId,
   RuntimeSurfaceSummary,
 } from '../../shell/contracts'
+import { SurfaceState } from './SurfaceState'
 
 const RUNTIME_ICONS: Record<RuntimeSurfaceId, LucideIcon> = {
   bridge: Link2,
@@ -130,6 +131,13 @@ export function RuntimeSummary({
           </button>
         </div>
       </div>
+      {runtime.feedback ? (
+        <SurfaceState
+          feedback={runtime.feedback}
+          compact
+          onAction={runtime.feedback.actionLabel ? onRefresh : undefined}
+        />
+      ) : null}
       {runtime.detail ? <p className="aq-runtime__detail">{runtime.detail}</p> : null}
       <div className="aq-runtime__items">
         {runtime.items.map((item) => (

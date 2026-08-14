@@ -1,4 +1,5 @@
 export { AeonQuillShell, type AeonQuillShellProps } from './AeonQuillShell'
+export { ModeErrorBoundary } from './ModeErrorBoundary'
 export type {
   LocalRuntimeSummary,
   ModeAvailability,
@@ -7,6 +8,8 @@ export type {
   RuntimeHealth,
   RuntimeSurfaceId,
   RuntimeSurfaceSummary,
+  ShellFeedback,
+  ShellFeedbackStatus,
 } from './contracts'
 export {
   createModeRegistry,
@@ -20,3 +23,19 @@ export {
   type ModeViewProps,
   type ProductModeId,
 } from './modeRegistry'
+export {
+  createProductTarget,
+  DEFAULT_BALANCED_PROJECT_ID,
+  parseProductHash,
+  parseShellPreferences,
+  parseSmartVideoSession,
+  PRODUCT_SHELL_PREFERENCES_KEY,
+  resolveCollectionState,
+  serializeShellPreferences,
+  serializeSmartVideoSession,
+  SMART_VIDEO_SESSION_KEY,
+  type CollectionState,
+  type ProductLocation,
+  type ShellPreferences,
+  type SmartVideoSessionSummary,
+} from './productShellState.mjs'

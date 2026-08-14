@@ -20,6 +20,7 @@ export interface LocalRuntimeSummary {
   detail?: string
   lastCheckedLabel?: string
   privacyNote?: string
+  feedback?: ShellFeedback
   items: readonly RuntimeSurfaceSummary[]
 }
 
@@ -38,4 +39,14 @@ export interface ModeAvailabilitySummary {
   status: ModeAvailability
   label: string
   reason?: string
+}
+
+export type ShellFeedbackStatus = 'loading' | 'empty' | 'error' | 'recovered' | 'info'
+
+export interface ShellFeedback {
+  status: ShellFeedbackStatus
+  title: string
+  detail?: string
+  actionLabel?: string
+  secondaryActionLabel?: string
 }

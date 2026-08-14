@@ -2,7 +2,7 @@ export function BrandWelcome() {
   return (
     <section className="aq-brand-welcome" aria-labelledby="aq-home-title">
       <div className="aq-brand-welcome__copy">
-        <h1 id="aq-home-title">
+        <h1 id="aq-home-title" tabIndex={-1}>
           <span className="aq-brand-welcome__cn">光阴砚</span>
           <span className="aq-brand-welcome__en">AEONQUILL</span>
         </h1>
