@@ -151,6 +151,14 @@ try {
   assert.ok(report.timeline.bridgeReadyMs > 0)
   assert.ok(report.timeline.windowLoadedMs >= report.timeline.bridgeReadyMs)
   assert.ok(report.timeline.windowLoadedMs < 20_000, `Cold start took ${report.timeline.windowLoadedMs}ms`)
+  assert.ok(
+    report.timeline.windowCloseRequestedMs >= report.timeline.rendererProbedMs,
+    'QA must exercise the same CloseRequested event as the main window close button',
+  )
+  assert.ok(
+    report.timeline.shutdownFinishedMs >= report.timeline.windowCloseRequestedMs,
+    'Bridge shutdown must finish after the main window requests application exit',
+  )
   assert.equal(report.rendererProbe.tauriGlobalType, 'undefined')
   assert.equal(report.rendererProbe.processType, 'undefined')
   assert.equal(report.rendererProbe.requireType, 'undefined')
@@ -190,7 +198,7 @@ try {
     },
     validation: {
       completedAt: new Date().toISOString(),
-      assertions: 28,
+      assertions: 30,
       tauriExitCode: result.exitCode,
     },
   }

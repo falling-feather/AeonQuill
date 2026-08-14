@@ -221,6 +221,10 @@ try {
   assert.equal(appReport.packaged, true)
   assert.equal(appReport.rendererProbe.processType, 'undefined')
   assert.equal(appReport.rendererProbe.requireType, 'undefined')
+  assert.ok(
+    appReport.timeline.windowCloseRequestedMs >= appReport.timeline.rendererProbedMs,
+    'Installed app QA must close the real main window instead of requesting a synthetic app exit',
+  )
   assert.equal(appReport.shutdown?.forced, false)
   assert.equal(appReport.shutdown?.portClosed, true)
   for (const directory of [

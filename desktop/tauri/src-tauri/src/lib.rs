@@ -32,6 +32,7 @@ struct Timeline {
     bridge_ready_ms: Option<u128>,
     window_loaded_ms: Option<u128>,
     renderer_probed_ms: Option<u128>,
+    window_close_requested_ms: Option<u128>,
     shutdown_finished_ms: Option<u128>,
 }
 
@@ -587,10 +588,10 @@ fn setup_desktop(
             if !title_runtime.record_renderer_probe(&title) || !title_runtime.qa_mode {
                 return;
             }
-            let handle = window.app_handle().clone();
+            let close_window = window.clone();
             thread::spawn(move || {
                 thread::sleep(qa_auto_close_delay());
-                handle.exit(0);
+                let _ = close_window.close();
             });
         })
         .build()?;
@@ -630,7 +631,22 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("AEONQUILL desktop runtime failed to initialize");
 
-    let exit_code = app.run_return(|_, _| {});
+    let exit_runtime = Arc::clone(&runtime);
+    let exit_code = app.run_return(move |app_handle, event| {
+        if let tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { .. },
+            ..
+        } = event
+        {
+            if label == "main" {
+                if let Ok(mut report) = exit_runtime.report.lock() {
+                    report.timeline.window_close_requested_ms = Some(exit_runtime.elapsed_ms());
+                }
+                app_handle.exit(0);
+            }
+        }
+    });
     let shutdown = runtime.shutdown_bridge();
     if let Err(error) = runtime.write_qa_report(shutdown, None) {
         eprintln!("{error}");

@@ -39,6 +39,10 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
+  assert.match(tauriSource, /close_window\.close\(\)/)
+  assert.match(tauriSource, /tauri::RunEvent::WindowEvent/)
+  assert.match(tauriSource, /tauri::WindowEvent::CloseRequested/)
+  assert.match(tauriSource, /app_handle\.exit\(0\)/)
   for (const key of [
     'AEONQUILL_RUNTIME_DIR',
     'AEONQUILL_DATA_DIR',
