@@ -1,7 +1,7 @@
 {
   "$schema": "../../../../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "MiaoHui",
-  "version": "0.1.0",
+  "productName": "AEONQUILL",
+  "version": "../../../package.json",
   "identifier": "com.miaohui.desktop",
   "build": {
     "frontendDist": "../../../dist"
@@ -16,12 +16,32 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "AEONQUILL Project",
+    "copyright": "Copyright © 2026 AEONQUILL contributors",
+    "shortDescription": "Local-first image, pixel art and AI video creative workstation",
+    "longDescription": "光阴砚 AEONQUILL brings image editing, pixel-art creation and controlled local video workflows into one local-first creative workstation.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../release/INSTALL.zh-CN.md": "release/INSTALL.zh-CN.md",
+      "../../release/LIMITATIONS.zh-CN.md": "release/LIMITATIONS.zh-CN.md",
+      "../../release/THIRD-PARTY-NOTICES.md": "release/THIRD-PARTY-NOTICES.md"
+    },
     "externalBin": [
-      "binaries/miaohui-bridge"
+      "binaries/aeonquill-bridge"
     ],
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "compression": "lzma",
+        "startMenuFolder": "AEONQUILL"
       }
     }
   }

@@ -10,18 +10,36 @@ import {
   waitForBridgeClosed,
   waitForBridgeReady,
 } from '../shared/bridge-contract.mjs'
+import { selectElectronUserDataDirectory } from '../shared/user-data-compat.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from '../../server/security.mjs'
 
 const startupStartedAt = Date.now()
-const qaMode = process.env.MIAOHUI_DESKTOP_QA === '1'
-const qaUserData = process.env.MIAOHUI_DESKTOP_USER_DATA
+const qaMode = (process.env.AEONQUILL_DESKTOP_QA || process.env.MIAOHUI_DESKTOP_QA) === '1'
+const qaUserData = process.env.AEONQUILL_DESKTOP_USER_DATA || process.env.MIAOHUI_DESKTOP_USER_DATA
 
-app.setName('MiaoHui')
-if (qaUserData) {
-  const resolvedUserData = resolve(qaUserData)
-  mkdirSync(resolvedUserData, { recursive: true })
-  app.setPath('userData', resolvedUserData)
+app.setName('AEONQUILL')
+const storagePathsExplicit = [
+  'AEONQUILL_RUNTIME_DIR',
+  'AEONQUILL_DATA_DIR',
+  'AEONQUILL_CACHE_DIR',
+  'AEONQUILL_LOG_DIR',
+  'AEONQUILL_CONFIG',
+  'MIAOHUI_RUNTIME_DIR',
+  'MIAOHUI_DATA_DIR',
+  'MIAOHUI_CACHE_DIR',
+  'MIAOHUI_LOG_DIR',
+  'MIAOHUI_CONFIG',
+].some((key) => Boolean(process.env[key]))
+const userDataSelection = selectElectronUserDataDirectory({
+  defaultDirectory: app.getPath('userData'),
+  legacyDirectory: join(app.getPath('appData'), 'MiaoHui'),
+  explicitDirectory: qaUserData,
+  storagePathsExplicit,
+})
+if (userDataSelection.layout === 'explicit') {
+  mkdirSync(userDataSelection.directory, { recursive: true })
 }
+app.setPath('userData', userDataSelection.directory)
 
 let mainWindow = null
 let bridgeProcess = null
@@ -66,25 +84,46 @@ function summarizeAppMetrics() {
 
 function runtimePaths() {
   const appRoot = app.getAppPath()
+  const appDataRoot = resolve(app.getPath('userData'))
   const runtimeDirectory = resolve(
-    process.env.MIAOHUI_RUNTIME_DIR || join(app.getPath('userData'), 'runtime'),
+    process.env.AEONQUILL_RUNTIME_DIR
+      || process.env.MIAOHUI_RUNTIME_DIR
+      || join(appDataRoot, 'runtime'),
   )
+  const dataDirectory = resolve(process.env.AEONQUILL_DATA_DIR || join(appDataRoot, 'data'))
+  const cacheDirectory = resolve(process.env.AEONQUILL_CACHE_DIR || join(appDataRoot, 'cache'))
+  const logDirectory = resolve(process.env.AEONQUILL_LOG_DIR || join(appDataRoot, 'logs'))
   const configPath = resolve(
-    process.env.MIAOHUI_CONFIG
-      || (app.isPackaged
-        ? join(app.getPath('userData'), 'config', 'local.json')
-        : join(appRoot, 'config', 'local.json')),
+    process.env.AEONQUILL_CONFIG
+      || process.env.MIAOHUI_CONFIG
+      || join(appDataRoot, 'config', 'local.json'),
   )
-  return { appRoot, runtimeDirectory, configPath }
+  return { appRoot, appDataRoot, runtimeDirectory, dataDirectory, cacheDirectory, logDirectory, configPath }
 }
 
-function createBridgeEnvironment({ port, runtimeDirectory, configPath }) {
+function createBridgeEnvironment({
+  port,
+  runtimeDirectory,
+  dataDirectory,
+  cacheDirectory,
+  logDirectory,
+  configPath,
+}) {
   return createRestrictedChildEnvironment({
+    AEONQUILL_PORT: port,
+    AEONQUILL_HOST: LOOPBACK_HOST,
+    AEONQUILL_RUNTIME_DIR: runtimeDirectory,
+    AEONQUILL_DATA_DIR: dataDirectory,
+    AEONQUILL_CACHE_DIR: cacheDirectory,
+    AEONQUILL_LOG_DIR: logDirectory,
+    AEONQUILL_CONFIG: configPath,
     MIAOHUI_PORT: port,
     MIAOHUI_HOST: LOOPBACK_HOST,
     MIAOHUI_RUNTIME_DIR: runtimeDirectory,
     MIAOHUI_CONFIG: configPath,
     MIAOHUI_ALLOWED_ORIGINS: process.env.MIAOHUI_ALLOWED_ORIGINS,
+    AEONQUILL_COMFY_POLICY: process.env.AEONQUILL_COMFY_POLICY,
+    AEONQUILL_COMFY_IDLE_SECONDS: process.env.AEONQUILL_COMFY_IDLE_SECONDS,
     MIAOHUI_COMFY_POLICY: process.env.MIAOHUI_COMFY_POLICY,
     MIAOHUI_COMFY_IDLE_SECONDS: process.env.MIAOHUI_COMFY_IDLE_SECONDS,
     MIAOHUI_IMAGE_CONCURRENCY: process.env.MIAOHUI_IMAGE_CONCURRENCY,
@@ -101,16 +140,36 @@ function createBridgeEnvironment({ port, runtimeDirectory, configPath }) {
 }
 
 async function startBridge() {
-  const { appRoot, runtimeDirectory, configPath } = runtimePaths()
-  await mkdir(runtimeDirectory, { recursive: true })
+  const {
+    appRoot,
+    runtimeDirectory,
+    dataDirectory,
+    cacheDirectory,
+    logDirectory,
+    configPath,
+  } = runtimePaths()
+  await Promise.all([
+    mkdir(runtimeDirectory, { recursive: true }),
+    mkdir(dataDirectory, { recursive: true }),
+    mkdir(cacheDirectory, { recursive: true }),
+    mkdir(logDirectory, { recursive: true }),
+    mkdir(dirname(configPath), { recursive: true }),
+  ])
   bridgePort = await findAvailableLoopbackPort()
   bridgeBaseUrl = `http://${LOOPBACK_HOST}:${bridgePort}`
   const bridgeEntry = join(appRoot, 'server', 'index.mjs')
 
   bridgeProcess = utilityProcess.fork(bridgeEntry, [], {
     cwd: appRoot,
-    env: createBridgeEnvironment({ port: bridgePort, runtimeDirectory, configPath }),
-    serviceName: 'MiaoHui Local Bridge',
+    env: createBridgeEnvironment({
+      port: bridgePort,
+      runtimeDirectory,
+      dataDirectory,
+      cacheDirectory,
+      logDirectory,
+      configPath,
+    }),
+    serviceName: 'AEONQUILL Local Bridge',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   bridgeProcess.stdout?.on('data', (chunk) => {
@@ -132,7 +191,7 @@ async function startBridge() {
       fatalError = new Error(`Local bridge exited unexpectedly with code ${code}`)
       if (mainWindow && !mainWindow.isDestroyed()) {
         void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
-          '<main style="font:16px system-ui;padding:40px"><h1>妙绘本地服务已停止</h1><p>请重新启动应用；诊断信息已保存在本机运行目录。</p></main>',
+          '<main style="font:16px system-ui;padding:40px"><h1>AEONQUILL 本地服务已停止</h1><p>请重新启动应用；诊断信息已保存在本机运行目录。</p></main>',
         )}`)
       }
     }
@@ -184,7 +243,7 @@ async function createMainWindow() {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#f6f6f2',
-    title: 'MiaoHui 妙绘',
+    title: '光阴砚 AEONQUILL',
     webPreferences: {
       nodeIntegration: false,
       nodeIntegrationInWorker: false,
@@ -270,8 +329,9 @@ async function stopBridge() {
 async function writeQaReport(shutdown = null, error = null) {
   if (!qaMode) return
   const { runtimeDirectory } = runtimePaths()
-  const reportPath = process.env.MIAOHUI_DESKTOP_REPORT
-    ? resolve(process.env.MIAOHUI_DESKTOP_REPORT)
+  const configuredReportPath = process.env.AEONQUILL_DESKTOP_REPORT || process.env.MIAOHUI_DESKTOP_REPORT
+  const reportPath = configuredReportPath
+    ? resolve(configuredReportPath)
     : join(runtimeDirectory, 'desktop-electron-qa.json')
   if (!isPathInside(runtimeDirectory, reportPath)) {
     throw new Error('Desktop QA report must be written inside the isolated runtime directory')
@@ -289,6 +349,7 @@ async function writeQaReport(shutdown = null, error = null) {
     platform: process.platform,
     arch: process.arch,
     packaged: app.isPackaged,
+    userDataLayout: userDataSelection.layout,
     timeline,
     bridge: {
       host: LOOPBACK_HOST,
@@ -341,7 +402,9 @@ async function run() {
   await createMainWindow()
 
   if (qaMode) {
-    const autoCloseMs = Math.max(250, Math.min(12_000, Number(process.env.MIAOHUI_DESKTOP_AUTOCLOSE_MS) || 600))
+    const configuredAutoClose = process.env.AEONQUILL_DESKTOP_AUTOCLOSE_MS
+      || process.env.MIAOHUI_DESKTOP_AUTOCLOSE_MS
+    const autoCloseMs = Math.max(250, Math.min(12_000, Number(configuredAutoClose) || 600))
     setTimeout(() => app.quit(), autoCloseMs)
   }
 }
@@ -367,7 +430,7 @@ if (!hasSingleInstanceLock) {
   run().catch(async (error) => {
     fatalError = error
     console.error(safeMessage(error))
-    if (!qaMode) dialog.showErrorBox('妙绘启动失败', safeMessage(error))
+    if (!qaMode) dialog.showErrorBox('AEONQUILL 启动失败', safeMessage(error))
     try {
       await completeShutdown(error)
     } finally {

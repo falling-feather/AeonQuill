@@ -48,7 +48,7 @@ export async function waitForBridgeReady({
       if (!response.ok) throw new Error(`health returned HTTP ${response.status}`)
       const health = await response.json()
       if (health?.ok !== true || health?.service !== 'miaohui-local-bridge') {
-        throw new Error('health response did not identify the MiaoHui bridge')
+        throw new Error('health response did not identify the AEONQUILL bridge')
       }
       return health
     } catch (error) {

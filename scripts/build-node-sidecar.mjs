@@ -2,12 +2,15 @@ import { spawn } from 'node:child_process'
 import { mkdir, rename, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const metadata = await loadReleaseMetadata(projectRoot)
+const releasePaths = resolveReleasePaths(metadata)
 const pkgCli = join(projectRoot, 'node_modules', '@yao-pkg', 'pkg', 'lib-es5', 'bin.js')
 const outputDirectory = join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'binaries')
-const outputName = 'miaohui-bridge-x86_64-pc-windows-msvc.exe'
-const outputPath = join(outputDirectory, outputName)
+const outputName = metadata.sidecarBuildFilename
+const outputPath = releasePaths.sourceSidecar
 const temporaryPath = join(outputDirectory, outputName.replace(/\.exe$/i, '.building.exe'))
 
 async function fileExists(pathname) {
@@ -38,7 +41,7 @@ async function run(command, args) {
 }
 
 if (Number(process.versions.node.split('.')[0]) < 22) {
-  throw new Error('The MiaoHui sidecar build requires Node.js 22 or newer')
+  throw new Error('The AEONQUILL sidecar build requires Node.js 22 or newer')
 }
 if (!(await fileExists(join(projectRoot, 'dist', 'index.html')))) {
   throw new Error('Frontend dist is missing; run npm run build first')

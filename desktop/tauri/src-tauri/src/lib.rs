@@ -22,7 +22,7 @@ use tauri_plugin_shell::{
 const LOOPBACK_HOST: &str = "127.0.0.1";
 const BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(20);
 const BRIDGE_STOP_TIMEOUT: Duration = Duration::from_secs(8);
-const QA_TITLE_PREFIX: &str = "__MIAOHUI_QA__";
+const QA_TITLE_PREFIX: &str = "__AEONQUILL_QA__";
 
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,7 +84,10 @@ struct DesktopRuntime {
 
 impl DesktopRuntime {
     fn new() -> Self {
-        let qa_mode = std::env::var("MIAOHUI_DESKTOP_QA").as_deref() == Ok("1");
+        let qa_mode = std::env::var("AEONQUILL_DESKTOP_QA")
+            .or_else(|_| std::env::var("MIAOHUI_DESKTOP_QA"))
+            .as_deref()
+            == Ok("1");
         Self {
             started_at: Instant::now(),
             qa_mode,
@@ -319,7 +322,8 @@ fn wait_for_port_closed(port: u16, timeout: Duration) -> bool {
 }
 
 fn qa_auto_close_delay() -> Duration {
-    let milliseconds = std::env::var("MIAOHUI_DESKTOP_AUTOCLOSE_MS")
+    let milliseconds = std::env::var("AEONQUILL_DESKTOP_AUTOCLOSE_MS")
+        .or_else(|_| std::env::var("MIAOHUI_DESKTOP_AUTOCLOSE_MS"))
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(600)
@@ -329,6 +333,13 @@ fn qa_auto_close_delay() -> Duration {
 
 fn normalize_env_key(value: &OsStr) -> String {
     value.to_string_lossy().to_ascii_uppercase()
+}
+
+fn configured_path(primary_key: &str, legacy_key: Option<&str>, fallback: PathBuf) -> PathBuf {
+    std::env::var_os(primary_key)
+        .or_else(|| legacy_key.and_then(std::env::var_os))
+        .map(PathBuf::from)
+        .unwrap_or(fallback)
 }
 
 fn safe_child_environment() -> HashMap<OsString, OsString> {
@@ -372,12 +383,17 @@ fn safe_child_environment() -> HashMap<OsString, OsString> {
 
 fn configured_child_environment(
     runtime_directory: &Path,
+    data_directory: &Path,
+    cache_directory: &Path,
+    log_directory: &Path,
     config_path: &Path,
     port: u16,
 ) -> HashMap<OsString, OsString> {
     let mut environment = safe_child_environment();
     let forwarded_keys = [
         "MIAOHUI_ALLOWED_ORIGINS",
+        "AEONQUILL_COMFY_POLICY",
+        "AEONQUILL_COMFY_IDLE_SECONDS",
         "MIAOHUI_COMFY_POLICY",
         "MIAOHUI_COMFY_IDLE_SECONDS",
         "MIAOHUI_IMAGE_CONCURRENCY",
@@ -396,6 +412,24 @@ fn configured_child_environment(
             environment.insert(key.into(), value);
         }
     }
+    environment.insert("AEONQUILL_PORT".into(), port.to_string().into());
+    environment.insert("AEONQUILL_HOST".into(), LOOPBACK_HOST.into());
+    environment.insert(
+        "AEONQUILL_RUNTIME_DIR".into(),
+        runtime_directory.as_os_str().into(),
+    );
+    environment.insert(
+        "AEONQUILL_DATA_DIR".into(),
+        data_directory.as_os_str().into(),
+    );
+    environment.insert(
+        "AEONQUILL_CACHE_DIR".into(),
+        cache_directory.as_os_str().into(),
+    );
+    environment.insert("AEONQUILL_LOG_DIR".into(), log_directory.as_os_str().into());
+    environment.insert("AEONQUILL_CONFIG".into(), config_path.as_os_str().into());
+
+    // Mirror the original bridge contract until server-side migration is complete.
     environment.insert("MIAOHUI_PORT".into(), port.to_string().into());
     environment.insert("MIAOHUI_HOST".into(), LOOPBACK_HOST.into());
     environment.insert(
@@ -412,19 +446,49 @@ fn setup_desktop(
     runtime: &Arc<DesktopRuntime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let default_data_directory = app.path().app_local_data_dir()?;
-    let runtime_directory = std::env::var_os("MIAOHUI_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_data_directory.join("runtime"));
-    let config_path = std::env::var_os("MIAOHUI_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_data_directory.join("config").join("local.json"));
-    fs::create_dir_all(&runtime_directory)?;
+    let runtime_directory = configured_path(
+        "AEONQUILL_RUNTIME_DIR",
+        Some("MIAOHUI_RUNTIME_DIR"),
+        default_data_directory.join("runtime"),
+    );
+    let data_directory = configured_path(
+        "AEONQUILL_DATA_DIR",
+        None,
+        default_data_directory.join("data"),
+    );
+    let cache_directory = configured_path(
+        "AEONQUILL_CACHE_DIR",
+        None,
+        default_data_directory.join("cache"),
+    );
+    let log_directory = configured_path(
+        "AEONQUILL_LOG_DIR",
+        None,
+        default_data_directory.join("logs"),
+    );
+    let config_path = configured_path(
+        "AEONQUILL_CONFIG",
+        Some("MIAOHUI_CONFIG"),
+        default_data_directory.join("config").join("local.json"),
+    );
+    for directory in [
+        &runtime_directory,
+        &data_directory,
+        &cache_directory,
+        &log_directory,
+    ] {
+        fs::create_dir_all(directory)?;
+    }
+    if let Some(config_directory) = config_path.parent() {
+        fs::create_dir_all(config_directory)?;
+    }
     *runtime
         .runtime_directory
         .lock()
         .map_err(|_| "runtime directory lock poisoned")? = Some(runtime_directory.clone());
     if runtime.qa_mode {
-        let report_path = std::env::var_os("MIAOHUI_DESKTOP_REPORT")
+        let report_path = std::env::var_os("AEONQUILL_DESKTOP_REPORT")
+            .or_else(|| std::env::var_os("MIAOHUI_DESKTOP_REPORT"))
             .map(PathBuf::from)
             .unwrap_or_else(|| runtime_directory.join("tauri-desktop-qa.json"));
         *runtime
@@ -440,10 +504,17 @@ fn setup_desktop(
         .tauri_ready_ms = Some(runtime.elapsed_ms());
 
     let port = reserve_loopback_port()?;
-    let environment = configured_child_environment(&runtime_directory, &config_path, port);
+    let environment = configured_child_environment(
+        &runtime_directory,
+        &data_directory,
+        &cache_directory,
+        &log_directory,
+        &config_path,
+        port,
+    );
     let (mut events, child) = app
         .shell()
-        .sidecar("miaohui-bridge")?
+        .sidecar("aeonquill-bridge")?
         .env_clear()
         .envs(environment)
         .current_dir(&runtime_directory)
@@ -497,7 +568,7 @@ fn setup_desktop(
     let navigation_origin = base_url.clone();
     let title_runtime = Arc::clone(runtime);
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(base_url.parse()?))
-        .title("MiaoHui 妙绘")
+        .title("光阴砚 AEONQUILL")
         .inner_size(1480.0, 940.0)
         .min_inner_size(960.0, 640.0)
         .resizable(true)
@@ -550,7 +621,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("MiaoHui desktop runtime failed to initialize");
+        .expect("AEONQUILL desktop runtime failed to initialize");
 
     let exit_code = app.run_return(|_, _| {});
     let shutdown = runtime.shutdown_bridge();

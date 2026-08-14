@@ -5,22 +5,18 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const metadata = await loadReleaseMetadata(projectRoot)
+const releasePaths = resolveReleasePaths(metadata)
 const metricsScript = join(projectRoot, 'scripts', 'process-tree-metrics.ps1')
 const reportPath = join(projectRoot, '.runtime', 'qa', 'desktop-shell-benchmark-final.json')
-const electronExecutable = join(
-  projectRoot,
-  '.runtime',
-  'releases',
-  'electron',
-  'MiaoHui-win32-x64',
-  'MiaoHui.exe',
-)
-const tauriTarget = join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'target', 'release')
-const tauriExecutable = join(tauriTarget, 'miaohui-desktop.exe')
-const tauriSidecar = join(tauriTarget, 'miaohui-bridge.exe')
-const tauriInstaller = join(tauriTarget, 'bundle', 'nsis', 'MiaoHui_0.1.0_x64-setup.exe')
+const electronExecutable = releasePaths.electronExecutable
+const tauriTarget = releasePaths.targetReleaseRoot
+const tauriExecutable = releasePaths.builtApp
+const tauriSidecar = releasePaths.bundledSidecar
+const tauriInstaller = releasePaths.installer
 
 function delay(duration) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, duration))
@@ -40,6 +36,7 @@ async function availablePort() {
 }
 
 function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode)
   return new Promise((resolvePromise) => {
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit)
@@ -83,7 +80,9 @@ async function snapshotProcessTree(rootProcessId) {
   let stderr = ''
   child.stdout.on('data', (chunk) => { stdout += chunk })
   child.stderr.on('data', (chunk) => { stderr += chunk })
-  const exitCode = await waitForChildExit(child, 12_000)
+  // A cold Win32_Process CIM query can take more than 12 seconds on a busy
+  // Windows workstation even though the shell under test is healthy.
+  const exitCode = await waitForChildExit(child, 30_000)
   if (exitCode === 'timeout') await terminateProcessTree(child)
   assert.equal(exitCode, 0, `Process metrics failed: ${stderr}`)
   const parsed = JSON.parse(stdout.trim() || '[]')
@@ -113,8 +112,10 @@ function median(values) {
 }
 
 async function runShell(shell, iteration) {
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), `miaohui-${shell}-benchmark-`))
-  const shellReportPath = join(runtimeDirectory, 'reports', `${shell}.json`)
+  const runtimeDirectory = await mkdtemp(join(tmpdir(), `aeonquill-${shell}-benchmark-`))
+  const appDataRoot = join(runtimeDirectory, 'app-local-data')
+  const runtimePath = join(appDataRoot, 'runtime')
+  const shellReportPath = join(runtimePath, 'reports', `${shell}.json`)
   const unavailableComfyPort = await availablePort()
   const executable = shell === 'electron' ? electronExecutable : tauriExecutable
   const cwd = shell === 'electron' ? dirname(electronExecutable) : tauriTarget
@@ -126,12 +127,15 @@ async function runShell(shell, iteration) {
     stdio: ['ignore', 'ignore', 'pipe'],
     env: {
       ...process.env,
-      MIAOHUI_DESKTOP_QA: '1',
-      MIAOHUI_DESKTOP_AUTOCLOSE_MS: '9000',
-      MIAOHUI_DESKTOP_REPORT: shellReportPath,
-      MIAOHUI_DESKTOP_USER_DATA: join(runtimeDirectory, 'user-data'),
-      MIAOHUI_RUNTIME_DIR: runtimeDirectory,
-      MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
+      AEONQUILL_DESKTOP_QA: '1',
+      AEONQUILL_DESKTOP_AUTOCLOSE_MS: '9000',
+      AEONQUILL_DESKTOP_REPORT: shellReportPath,
+      AEONQUILL_DESKTOP_USER_DATA: appDataRoot,
+      AEONQUILL_RUNTIME_DIR: runtimePath,
+      AEONQUILL_DATA_DIR: join(appDataRoot, 'data'),
+      AEONQUILL_CACHE_DIR: join(appDataRoot, 'cache'),
+      AEONQUILL_LOG_DIR: join(appDataRoot, 'logs'),
+      AEONQUILL_CONFIG: join(appDataRoot, 'config', 'local.json'),
       MIAOHUI_COMFY_POLICY: 'manual',
       COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
     },

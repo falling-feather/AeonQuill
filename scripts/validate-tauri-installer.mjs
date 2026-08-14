@@ -7,33 +7,36 @@ import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { waitForBridgeClosed } from '../desktop/shared/bridge-contract.mjs'
+import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const metadata = await loadReleaseMetadata(projectRoot)
+const releasePaths = resolveReleasePaths(metadata)
 const runtimeRoot = resolve(projectRoot, '.runtime')
-const installerPath = join(
-  projectRoot,
-  'desktop',
-  'tauri',
-  'src-tauri',
-  'target',
-  'release',
-  'bundle',
-  'nsis',
-  'MiaoHui_0.1.0_x64-setup.exe',
-)
+const installerPath = releasePaths.installer
 const testRoot = join(runtimeRoot, 'install-test', `tauri-${process.pid}`)
 const installDirectory = join(testRoot, 'app')
-const appRuntimeDirectory = join(testRoot, 'runtime')
+const userDataDirectory = join(testRoot, 'user-data-preserve')
+const appRuntimeDirectory = join(userDataDirectory, 'runtime')
+const appDataDirectory = join(userDataDirectory, 'data')
+const appCacheDirectory = join(userDataDirectory, 'cache')
+const appLogDirectory = join(userDataDirectory, 'logs')
+const appConfigPath = join(userDataDirectory, 'config', 'local.json')
+const userDataSentinel = join(userDataDirectory, 'projects', 'keep-after-uninstall.txt')
+const legacyRuntimeSentinel = join(appRuntimeDirectory, 'projects', 'legacy-runtime-sentinel.txt')
+const legacyRuntimeDatabase = join(appRuntimeDirectory, 'projects', 'projects.sqlite3')
+const newDataDatabase = join(appDataDirectory, 'projects', 'projects.sqlite3')
 const appReportPath = join(appRuntimeDirectory, 'reports', 'installed-app.json')
 const finalReportPath = join(runtimeRoot, 'qa', 'tauri-installer-final.json')
-const uninstallRegistryKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MiaoHui'
+const uninstallRegistryKey = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${metadata.productName}`
 const startMenuShortcut = join(
   process.env.APPDATA || '',
   'Microsoft',
   'Windows',
   'Start Menu',
   'Programs',
-  'MiaoHui.lnk',
+  metadata.productName,
+  `${metadata.productName}.lnk`,
 )
 
 function assertRuntimeTarget(target) {
@@ -59,6 +62,7 @@ async function availablePort() {
 }
 
 function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode)
   return new Promise((resolvePromise) => {
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit)
@@ -150,10 +154,13 @@ async function waitUntilRegistryMissing(timeoutMs) {
 for (const target of [testRoot, installDirectory, appRuntimeDirectory]) assertRuntimeTarget(target)
 const installerStats = await stat(installerPath)
 assert.ok(installerStats.isFile() && installerStats.size > 10 * 1024 * 1024, 'NSIS installer is missing')
-assert.equal(await pathExists(startMenuShortcut), false, 'Refusing to overwrite an existing MiaoHui shortcut')
+assert.equal(await pathExists(startMenuShortcut), false, 'Refusing to overwrite an existing AEONQUILL shortcut')
 const registryBefore = await runProcess('reg.exe', ['query', uninstallRegistryKey], { timeoutMs: 10_000 })
-assert.equal(registryBefore.exitCode, 1, 'Refusing to overwrite an existing MiaoHui uninstall registration')
-await mkdir(testRoot, { recursive: true })
+assert.equal(registryBefore.exitCode, 1, 'Refusing to overwrite an existing AEONQUILL uninstall registration')
+await mkdir(dirname(userDataSentinel), { recursive: true })
+await writeFile(userDataSentinel, 'AEONQUILL user data must survive uninstall.\n', 'utf8')
+await mkdir(dirname(legacyRuntimeSentinel), { recursive: true })
+await writeFile(legacyRuntimeSentinel, 'AEONQUILL legacy runtime data must remain visible.\n', 'utf8')
 
 let installedAppProcess = null
 try {
@@ -165,14 +172,22 @@ try {
   assert.equal(installResult.exitCode, 0, `Installer exit=${installResult.exitCode}\n${installResult.stderr}`)
   const installMs = Date.now() - installStartedAt
 
-  const installedAppPath = join(installDirectory, 'miaohui-desktop.exe')
-  const installedSidecarPath = join(installDirectory, 'miaohui-bridge.exe')
+  const installedAppPath = join(installDirectory, metadata.appExecutable)
+  const installedSidecarPath = join(installDirectory, metadata.sidecarRuntimeFilename)
+  const installedReleaseFiles = [
+    join(installDirectory, 'release', 'INSTALL.zh-CN.md'),
+    join(installDirectory, 'release', 'LIMITATIONS.zh-CN.md'),
+    join(installDirectory, 'release', 'THIRD-PARTY-NOTICES.md'),
+  ]
   const [installedAppStats, installedSidecarStats] = await Promise.all([
     stat(installedAppPath),
     stat(installedSidecarPath),
   ])
   assert.ok(installedAppStats.size > 1_000_000)
   assert.ok(installedSidecarStats.size > 20_000_000)
+  for (const releaseFile of installedReleaseFiles) {
+    assert.ok((await stat(releaseFile)).size > 500, `Bundled release notice is missing: ${releaseFile}`)
+  }
   const uninstallEntry = (await readdir(installDirectory)).find((name) => /^uninstall.*\.exe$/i.test(name))
   assert.ok(uninstallEntry, 'NSIS uninstaller was not installed')
   const uninstallerPath = join(installDirectory, uninstallEntry)
@@ -185,11 +200,14 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      MIAOHUI_DESKTOP_QA: '1',
-      MIAOHUI_DESKTOP_AUTOCLOSE_MS: '600',
-      MIAOHUI_DESKTOP_REPORT: appReportPath,
-      MIAOHUI_RUNTIME_DIR: appRuntimeDirectory,
-      MIAOHUI_CONFIG: join(appRuntimeDirectory, 'no-local-config.json'),
+      AEONQUILL_DESKTOP_QA: '1',
+      AEONQUILL_DESKTOP_AUTOCLOSE_MS: '600',
+      AEONQUILL_DESKTOP_REPORT: appReportPath,
+      AEONQUILL_RUNTIME_DIR: appRuntimeDirectory,
+      AEONQUILL_DATA_DIR: appDataDirectory,
+      AEONQUILL_CACHE_DIR: appCacheDirectory,
+      AEONQUILL_LOG_DIR: appLogDirectory,
+      AEONQUILL_CONFIG: appConfigPath,
       MIAOHUI_COMFY_POLICY: 'manual',
       COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
     },
@@ -205,6 +223,25 @@ try {
   assert.equal(appReport.rendererProbe.requireType, 'undefined')
   assert.equal(appReport.shutdown?.forced, false)
   assert.equal(appReport.shutdown?.portClosed, true)
+  for (const directory of [
+    appRuntimeDirectory,
+    appDataDirectory,
+    appCacheDirectory,
+    appLogDirectory,
+    dirname(appConfigPath),
+  ]) {
+    assert.equal((await stat(directory)).isDirectory(), true)
+  }
+  assert.equal((await stat(legacyRuntimeDatabase)).isFile(), true)
+  assert.equal(
+    await pathExists(newDataDatabase),
+    false,
+    'An empty new data directory must not hide durable data from the legacy runtime layout',
+  )
+  assert.equal(
+    await readFile(legacyRuntimeSentinel, 'utf8'),
+    'AEONQUILL legacy runtime data must remain visible.\n',
+  )
   assert.equal(
     await waitForBridgeClosed({ baseUrl: `http://127.0.0.1:${appReport.bridgePort}`, timeoutMs: 1_000 }),
     true,
@@ -219,11 +256,26 @@ try {
   assert.equal(await waitUntilMissing(installedAppPath, 15_000), true, 'Installed executable remained after uninstall')
   assert.equal(await waitUntilRegistryMissing(15_000), true, 'Uninstall registration remained after uninstall')
   assert.equal(await waitUntilMissing(startMenuShortcut, 15_000), true, 'Start menu shortcut remained after uninstall')
+  assert.equal(
+    await readFile(userDataSentinel, 'utf8'),
+    'AEONQUILL user data must survive uninstall.\n',
+    'Uninstaller removed or changed user project data',
+  )
+  assert.equal(
+    await readFile(legacyRuntimeSentinel, 'utf8'),
+    'AEONQUILL legacy runtime data must remain visible.\n',
+    'Uninstaller removed or changed compatible legacy runtime data',
+  )
   const uninstallMs = Date.now() - uninstallStartedAt
 
   const report = {
     schemaVersion: 1,
     status: 'passed',
+    product: {
+      name: metadata.productName,
+      version: metadata.version,
+      identifier: metadata.identifier,
+    },
     installer: {
       filename: installerPath.split(/[\\/]/).pop(),
       bytes: installerStats.size,
@@ -237,12 +289,14 @@ try {
       executableBytes: installedAppStats.size,
       sidecarBytes: installedSidecarStats.size,
       uninstallerCreated: true,
+      releaseNoticesInstalled: installedReleaseFiles.length,
     },
     installedApp: {
       lifecycleMs: appLifecycleMs,
       windowLoadedMs: appReport.timeline.windowLoadedMs,
       rendererSandboxed: true,
       bridgeExitedGracefully: true,
+      legacyRuntimeDataFallback: true,
     },
     uninstallation: {
       exitCode: uninstallResult.exitCode,
@@ -250,6 +304,7 @@ try {
       installedExecutableRemoved: true,
       uninstallRegistrationRemoved: true,
       startMenuShortcutRemoved: true,
+      userDataPreserved: true,
     },
     validatedAt: new Date().toISOString(),
   }

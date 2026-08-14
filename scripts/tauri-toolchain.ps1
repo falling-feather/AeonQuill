@@ -4,49 +4,49 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$miaohuiProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$miaohuiVsShell = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
-if (-not (Test-Path -LiteralPath $miaohuiVsShell -PathType Leaf)) {
+$aeonquillProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$aeonquillVsShell = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
+if (-not (Test-Path -LiteralPath $aeonquillVsShell -PathType Leaf)) {
   throw 'Visual Studio 2022 C++ Build Tools were not found.'
 }
 
-& $miaohuiVsShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+& $aeonquillVsShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
 
 # Launch-VsDevShell changes terminal encoding on this machine, so resolve the
 # Unicode workspace paths only after the MSVC environment has been loaded.
-$miaohuiRustRoot = (Resolve-Path (Join-Path $miaohuiProjectRoot '.runtime\toolchains\rust')).Path
-$env:RUSTUP_HOME = Join-Path $miaohuiRustRoot 'rustup'
-$env:CARGO_HOME = Join-Path $miaohuiRustRoot 'cargo'
+$aeonquillRustRoot = (Resolve-Path (Join-Path $aeonquillProjectRoot '.runtime\toolchains\rust')).Path
+$env:RUSTUP_HOME = Join-Path $aeonquillRustRoot 'rustup'
+$env:CARGO_HOME = Join-Path $aeonquillRustRoot 'cargo'
 $env:PATH = "$(Join-Path $env:CARGO_HOME 'bin');$env:PATH"
-$miaohuiCargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
-$miaohuiManifest = Join-Path $miaohuiProjectRoot 'desktop\tauri\src-tauri\Cargo.toml'
-$miaohuiTauriCli = Join-Path $miaohuiProjectRoot 'node_modules\@tauri-apps\cli\tauri.js'
+$aeonquillCargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
+$aeonquillManifest = Join-Path $aeonquillProjectRoot 'desktop\tauri\src-tauri\Cargo.toml'
+$aeonquillTauriCli = Join-Path $aeonquillProjectRoot 'node_modules\@tauri-apps\cli\tauri.js'
 
-if (-not (Test-Path -LiteralPath $miaohuiCargo -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $aeonquillCargo -PathType Leaf)) {
   throw 'Project-local Rust toolchain is missing. Install it under .runtime/toolchains/rust first.'
 }
-if (-not (Test-Path -LiteralPath $miaohuiTauriCli -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $aeonquillTauriCli -PathType Leaf)) {
   throw '@tauri-apps/cli is not installed.'
 }
 
 if ($Mode -eq 'check') {
-  & $miaohuiCargo fmt --manifest-path $miaohuiManifest --check
+  & $aeonquillCargo fmt --manifest-path $aeonquillManifest --check
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-  & $miaohuiCargo check --manifest-path $miaohuiManifest
+  & $aeonquillCargo check --manifest-path $aeonquillManifest
   exit $LASTEXITCODE
 }
 
-Push-Location (Join-Path $miaohuiProjectRoot 'desktop\tauri')
+Push-Location (Join-Path $aeonquillProjectRoot 'desktop\tauri')
 try {
-  $miaohuiTauriArguments = @('build', '--ci')
+  $aeonquillTauriArguments = @('build', '--ci')
   if ($Mode -eq 'debug') {
-    $miaohuiTauriArguments += @('--debug', '--no-bundle')
+    $aeonquillTauriArguments += @('--debug', '--no-bundle')
   } elseif ($Mode -eq 'release') {
-    $miaohuiTauriArguments += '--no-bundle'
+    $aeonquillTauriArguments += '--no-bundle'
   } elseif ($Mode -eq 'bundle') {
-    $miaohuiTauriArguments += @('--bundles', 'nsis')
+    $aeonquillTauriArguments += @('--bundles', 'nsis')
   }
-  & (Get-Command node.exe).Source $miaohuiTauriCli @miaohuiTauriArguments
+  & (Get-Command node.exe).Source $aeonquillTauriCli @aeonquillTauriArguments
   exit $LASTEXITCODE
 } finally {
   Pop-Location

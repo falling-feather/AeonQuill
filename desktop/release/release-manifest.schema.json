@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeonquill.local/schemas/release-manifest-v1.json",
+  "title": "AEONQUILL Windows stage release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "target",
+    "source",
+    "build",
+    "artifacts",
+    "components",
+    "externalDependencies",
+    "licensing",
+    "excluded",
+    "files"
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "filename": { "type": "string", "pattern": "^[^\\\\/:]+$", "minLength": 1, "maxLength": 180 },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256"],
+      "properties": {
+        "file": { "$ref": "#/$defs/filename" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sidecarComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256", "nodeMajor", "systemNodeRequired", "parentControl"],
+      "properties": {
+        "file": { "$ref": "#/$defs/filename" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "nodeMajor": { "const": 22 },
+        "systemNodeRequired": { "const": false },
+        "parentControl": { "const": "stdio" }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "displayName", "packageName", "version", "identifier", "identifierMigrationStatus", "channel", "distributionStatus"],
+      "properties": {
+        "name": { "const": "AEONQUILL" },
+        "displayName": { "const": "光阴砚 AEONQUILL" },
+        "packageName": { "const": "aeonquill" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+        "identifier": { "const": "com.miaohui.desktop" },
+        "identifierMigrationStatus": { "const": "legacy-preserved-for-data-continuity" },
+        "channel": { "const": "stage" },
+        "distributionStatus": { "const": "unsigned-test-package" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "arch", "format", "installScope"],
+      "properties": {
+        "platform": { "const": "windows" },
+        "arch": { "const": "x64" },
+        "format": { "const": "nsis" },
+        "installScope": { "const": "currentUser" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gitCommit", "workingTreeDirty"],
+      "properties": {
+        "gitCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "workingTreeDirty": { "type": "boolean" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generatedAt", "nodeVersion", "tauriCliVersion", "electronFallbackVersion", "webview2Mode"],
+      "properties": {
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "nodeVersion": { "type": "string" },
+        "tauriCliVersion": { "type": "string" },
+        "electronFallbackVersion": { "type": "string" },
+        "webview2Mode": { "const": "embedBootstrapper" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "file", "bytes", "sha256", "signature"],
+        "properties": {
+          "role": { "const": "windows-x64-nsis-installer" },
+          "file": { "$ref": "#/$defs/filename" },
+          "bytes": { "type": "integer", "minimum": 10485760 },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "signature": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signed", "valid", "status", "subject"],
+            "properties": {
+              "signed": { "type": "boolean" },
+              "valid": { "type": "boolean" },
+              "status": { "type": "string" },
+              "subject": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application", "sidecar"],
+      "properties": {
+        "application": { "$ref": "#/$defs/component" },
+        "sidecar": { "$ref": "#/$defs/sidecarComponent" }
+      }
+    },
+    "externalDependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "bundled", "required", "discovery"],
+        "properties": {
+          "name": { "type": "string" },
+          "bundled": { "type": ["boolean", "string"] },
+          "required": { "type": "boolean" },
+          "discovery": { "type": "string" }
+        }
+      }
+    },
+    "licensing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "publicCommercialReleaseReady", "noticeFile", "limitationsFile", "unresolved"],
+      "properties": {
+        "status": { "const": "stage-review-required" },
+        "publicCommercialReleaseReady": { "const": false },
+        "noticeFile": { "$ref": "#/$defs/filename" },
+        "limitationsFile": { "$ref": "#/$defs/filename" },
+        "unresolved": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "excluded": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installGuide", "limitations", "notices", "schema", "checksums"],
+      "properties": {
+        "installGuide": { "$ref": "#/$defs/filename" },
+        "limitations": { "$ref": "#/$defs/filename" },
+        "notices": { "$ref": "#/$defs/filename" },
+        "schema": { "$ref": "#/$defs/filename" },
+        "checksums": { "$ref": "#/$defs/filename" }
+      }
+    }
+  }
+}

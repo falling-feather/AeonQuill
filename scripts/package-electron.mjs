@@ -5,13 +5,17 @@ import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promi
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packager } from '@electron/packager'
+import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const metadata = await loadReleaseMetadata(projectRoot)
+const releasePaths = resolveReleasePaths(metadata)
 const runtimeRoot = resolve(projectRoot, '.runtime')
 const stageRoot = join(runtimeRoot, 'desktop-stage', 'electron')
-const releaseRoot = join(runtimeRoot, 'releases', 'electron')
+const releaseRoot = releasePaths.electronReleaseRoot
 const qaReportPath = join(runtimeRoot, 'qa', 'electron-package-final.json')
-const electronVersion = '43.4.0'
+const electronVersion = metadata.electronVersion
+assert.match(electronVersion || '', /^\d+\.\d+\.\d+$/)
 const electronZipName = `electron-v${electronVersion}-win32-x64.zip`
 
 function assertRuntimeTarget(target) {
@@ -63,7 +67,11 @@ async function directoryStats(rootDirectory) {
 
 for (const target of [stageRoot, releaseRoot]) assertRuntimeTarget(target)
 await rm(stageRoot, { recursive: true, force: true })
-await mkdir(join(stageRoot, 'src', 'lib'), { recursive: true })
+await Promise.all([
+  mkdir(join(stageRoot, 'src', 'lib', 'pixel'), { recursive: true }),
+  mkdir(join(stageRoot, 'src', 'lib', 'story'), { recursive: true }),
+  mkdir(join(stageRoot, 'src', 'shell'), { recursive: true }),
+])
 
 await Promise.all([
   cp(join(projectRoot, 'dist'), join(stageRoot, 'dist'), { recursive: true }),
@@ -71,11 +79,15 @@ await Promise.all([
   cp(join(projectRoot, 'desktop', 'electron'), join(stageRoot, 'desktop', 'electron'), { recursive: true }),
   cp(join(projectRoot, 'desktop', 'shared'), join(stageRoot, 'desktop', 'shared'), { recursive: true }),
   cp(join(projectRoot, 'src', 'lib', 'canvasCore.mjs'), join(stageRoot, 'src', 'lib', 'canvasCore.mjs')),
+  cp(join(projectRoot, 'src', 'lib', 'pixel', 'pixelCore.mjs'), join(stageRoot, 'src', 'lib', 'pixel', 'pixelCore.mjs')),
+  cp(join(projectRoot, 'src', 'lib', 'story', 'storyProject.mjs'), join(stageRoot, 'src', 'lib', 'story', 'storyProject.mjs')),
+  cp(join(projectRoot, 'src', 'lib', 'story', 'storyExecution.mjs'), join(stageRoot, 'src', 'lib', 'story', 'storyExecution.mjs')),
+  cp(join(projectRoot, 'src', 'shell', 'productShellState.mjs'), join(stageRoot, 'src', 'shell', 'productShellState.mjs')),
 ])
 await writeFile(join(stageRoot, 'package.json'), `${JSON.stringify({
-  name: 'miaohui-desktop',
-  productName: 'MiaoHui',
-  version: '0.1.0',
+  name: 'aeonquill-desktop',
+  productName: metadata.productName,
+  version: metadata.version,
   private: true,
   type: 'module',
   main: 'desktop/electron/main.mjs',
@@ -94,10 +106,10 @@ await mkdir(releaseRoot, { recursive: true })
 const packagePaths = await packager({
   dir: stageRoot,
   out: releaseRoot,
-  name: 'MiaoHui',
-  executableName: 'MiaoHui',
-  appVersion: '0.1.0',
-  buildVersion: '0.1.0',
+  name: metadata.productName,
+  executableName: metadata.productName,
+  appVersion: metadata.version,
+  buildVersion: metadata.version,
   electronVersion,
   electronZipDir: dirname(electronZipPath),
   platform: 'win32',
@@ -107,22 +119,25 @@ const packagePaths = await packager({
   prune: false,
   asar: false,
   win32metadata: {
-    CompanyName: 'MiaoHui',
-    FileDescription: 'MiaoHui local-first creative workstation',
-    OriginalFilename: 'MiaoHui.exe',
-    ProductName: 'MiaoHui',
-    InternalName: 'MiaoHui',
+    CompanyName: 'AEONQUILL Project',
+    FileDescription: 'AEONQUILL local-first image and video creative workstation',
+    OriginalFilename: metadata.electronExecutable,
+    ProductName: metadata.productName,
+    InternalName: metadata.productName,
   },
 })
 assert.equal(packagePaths.length, 1)
 const packageDirectory = packagePaths[0]
+assert.equal(packageDirectory, releasePaths.electronDirectory)
 const packageStats = await directoryStats(packageDirectory)
-const executableStats = await stat(join(packageDirectory, 'MiaoHui.exe'))
+const executableStats = await stat(join(packageDirectory, metadata.electronExecutable))
 const stageStats = await directoryStats(stageRoot)
 const report = {
   schemaVersion: 1,
   status: 'passed',
   shell: 'electron',
+  product: metadata.productName,
+  appVersion: metadata.version,
   version: electronVersion,
   platform: 'win32',
   arch: 'x64',

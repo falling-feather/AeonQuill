@@ -8,16 +8,11 @@ import { dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { waitForBridgeClosed, waitForBridgeReady } from '../desktop/shared/bridge-contract.mjs'
+import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
-const sidecarPath = join(
-  projectRoot,
-  'desktop',
-  'tauri',
-  'src-tauri',
-  'binaries',
-  'miaohui-bridge-x86_64-pc-windows-msvc.exe',
-)
+const metadata = await loadReleaseMetadata(projectRoot)
+const sidecarPath = resolveReleasePaths(metadata).sourceSidecar
 const finalReportPath = join(projectRoot, '.runtime', 'qa', 'node-sidecar-final.json')
 
 async function availablePort() {
@@ -52,7 +47,7 @@ async function sha256(pathname) {
 const sidecarStats = await stat(sidecarPath)
 assert.ok(sidecarStats.isFile() && sidecarStats.size > 20 * 1024 * 1024, 'Packaged sidecar is missing or too small')
 
-const runtimeDirectory = await mkdtemp(join(tmpdir(), 'miaohui-sidecar-qa-'))
+const runtimeDirectory = await mkdtemp(join(tmpdir(), 'aeonquill-sidecar-qa-'))
 const bridgePort = await availablePort()
 const unavailableComfyPort = await availablePort()
 const baseUrl = `http://127.0.0.1:${bridgePort}`

@@ -6,13 +6,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { waitForBridgeClosed } from '../desktop/shared/bridge-contract.mjs'
+import { loadReleaseMetadata } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const metadata = await loadReleaseMetadata(projectRoot)
 const releaseMode = process.argv.includes('--release')
 const buildProfile = releaseMode ? 'release' : 'debug'
 const targetDirectory = join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'target', buildProfile)
-const appPath = join(targetDirectory, 'miaohui-desktop.exe')
-const sidecarPath = join(targetDirectory, 'miaohui-bridge.exe')
+const appPath = join(targetDirectory, metadata.appExecutable)
+const sidecarPath = join(targetDirectory, metadata.sidecarRuntimeFilename)
 const finalReportPath = join(
   projectRoot,
   '.runtime',
@@ -34,6 +36,7 @@ async function availablePort() {
 }
 
 function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode)
   return new Promise((resolvePromise) => {
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit)
@@ -67,7 +70,13 @@ async function terminateProcessTree(child) {
 }
 
 async function runTauriQa(runtimeDirectory) {
-  const reportPath = join(runtimeDirectory, 'reports', 'tauri.json')
+  const appDataRoot = join(runtimeDirectory, 'app-local-data')
+  const runtimePath = join(appDataRoot, 'runtime')
+  const dataPath = join(appDataRoot, 'data')
+  const cachePath = join(appDataRoot, 'cache')
+  const logPath = join(appDataRoot, 'logs')
+  const configPath = join(appDataRoot, 'config', 'local.json')
+  const reportPath = join(runtimePath, 'reports', 'tauri.json')
   const unavailableComfyPort = await availablePort()
   const stdout = []
   const stderr = []
@@ -77,10 +86,13 @@ async function runTauriQa(runtimeDirectory) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      MIAOHUI_DESKTOP_QA: '1',
-      MIAOHUI_DESKTOP_REPORT: reportPath,
-      MIAOHUI_RUNTIME_DIR: runtimeDirectory,
-      MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
+      AEONQUILL_DESKTOP_QA: '1',
+      AEONQUILL_DESKTOP_REPORT: reportPath,
+      AEONQUILL_RUNTIME_DIR: runtimePath,
+      AEONQUILL_DATA_DIR: dataPath,
+      AEONQUILL_CACHE_DIR: cachePath,
+      AEONQUILL_LOG_DIR: logPath,
+      AEONQUILL_CONFIG: configPath,
       MIAOHUI_COMFY_POLICY: 'manual',
       COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
     },
@@ -103,7 +115,13 @@ async function runTauriQa(runtimeDirectory) {
   } finally {
     await terminateProcessTree(child)
   }
-  return { report, exitCode, stdout: stdout.join('').trim(), stderr: stderr.join('').trim() }
+  return {
+    report,
+    exitCode,
+    stdout: stdout.join('').trim(),
+    stderr: stderr.join('').trim(),
+    runtimeLayout: { runtimePath, dataPath, cachePath, logPath, configPath },
+  }
 }
 
 const [appStats, sidecarStats] = await Promise.all([stat(appPath), stat(sidecarPath)])
@@ -118,7 +136,7 @@ assert.equal(config.app.withGlobalTauri, false)
 assert.deepEqual(capability.permissions, ['core:default'])
 assert.equal(capability.permissions.some((permission) => permission.startsWith('shell:')), false)
 
-const runtimeDirectory = await mkdtemp(join(tmpdir(), 'miaohui-tauri-qa-'))
+const runtimeDirectory = await mkdtemp(join(tmpdir(), 'aeonquill-tauri-qa-'))
 try {
   const result = await runTauriQa(runtimeDirectory)
   const { report } = result
@@ -137,6 +155,20 @@ try {
   assert.equal(report.rendererProbe.processType, 'undefined')
   assert.equal(report.rendererProbe.requireType, 'undefined')
   assert.equal(report.rendererProbe.documentReadyState, 'complete')
+  for (const directory of [
+    result.runtimeLayout.runtimePath,
+    result.runtimeLayout.dataPath,
+    result.runtimeLayout.cachePath,
+    result.runtimeLayout.logPath,
+    dirname(result.runtimeLayout.configPath),
+  ]) {
+    assert.equal((await stat(directory)).isDirectory(), true)
+  }
+  assert.equal(
+    (await stat(join(result.runtimeLayout.dataPath, 'projects', 'projects.sqlite3'))).isFile(),
+    true,
+    'A clean desktop start must persist projects in the dedicated data directory',
+  )
   assert.equal(
     await waitForBridgeClosed({ baseUrl: `http://127.0.0.1:${report.bridgePort}`, timeoutMs: 1_000 }),
     true,
@@ -158,7 +190,7 @@ try {
     },
     validation: {
       completedAt: new Date().toISOString(),
-      assertions: 22,
+      assertions: 28,
       tauriExitCode: result.exitCode,
     },
   }
