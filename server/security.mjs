@@ -218,7 +218,7 @@ export function redactSensitiveText(value) {
     .replace(/\bBearer\s+[a-zA-Z0-9._~+/=-]+/gi, 'Bearer [redacted]')
     .replace(/\bmiaohui_session=[^;\s]+/gi, 'miaohui_session=[redacted]')
     .replace(/(\b(?:api[_-]?key|auth(?:orization)?|cookie|credential|password|secret|session|token)\b\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/[a-zA-Z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\r\n]*/g, '[local-path]')
+    .replace(/(?<![a-zA-Z0-9+.-])[a-zA-Z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\r\n]*/g, '[local-path]')
     .replace(/\\\\[^\\/\s]+[\\/][^\s"'<>|]+/g, '[local-path]')
 }
 

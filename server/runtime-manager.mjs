@@ -1,10 +1,10 @@
 import { openSync } from 'node:fs'
-import { mkdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { projectRoot, runtimeDirectory } from './runtime-paths.mjs'
+import { dataDirectory, logDirectory, runtimeDirectory } from './runtime-paths.mjs'
+import { normalizeLoopbackComfyUrl, readLocalConfigFile } from './runtime-settings.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from './security.mjs'
-const configPath = process.env.MIAOHUI_CONFIG || join(projectRoot, 'config', 'local.json')
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const START_TIMEOUT_MS = 4 * 60 * 1000
 
@@ -14,15 +14,6 @@ async function fileExists(pathname) {
     return (await stat(pathname)).isFile()
   } catch {
     return false
-  }
-}
-
-async function readConfig() {
-  try {
-    return JSON.parse(await readFile(configPath, 'utf8'))
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-    return {}
   }
 }
 
@@ -38,37 +29,68 @@ function normalizeIdleTimeout(value) {
 
 export async function loadLocalRuntimeConfig() {
   await mkdir(runtimeDirectory, { recursive: true })
-  const config = await readConfig()
+  let config = {}
+  let configReadError
+  try {
+    config = await readLocalConfigFile()
+  } catch (error) {
+    configReadError = {
+      code: error.code || 'INVALID_LOCAL_CONFIG',
+      message: error.message || '本机配置无法读取',
+    }
+  }
+  let comfyUrl = 'http://127.0.0.1:8188'
+  try {
+    comfyUrl = normalizeLoopbackComfyUrl(process.env.COMFY_URL || config.comfyUrl || comfyUrl)
+  } catch (error) {
+    configReadError = {
+      code: error.code || 'INVALID_COMFY_URL',
+      message: error.message || 'ComfyUI 地址无效',
+    }
+  }
   const imageTools = config.imageTools && typeof config.imageTools === 'object' ? config.imageTools : {}
   return {
-    comfyUrl: String(process.env.COMFY_URL || config.comfyUrl || 'http://127.0.0.1:8188').replace(/\/$/, ''),
-    comfyRoot: process.env.COMFY_ROOT || config.comfyRoot,
-    pythonPath: process.env.COMFY_PYTHON || config.pythonPath,
-    bridgePort: Number(process.env.MIAOHUI_PORT || config.bridgePort || 8787),
+    comfyUrl,
+    comfyRoot: typeof (process.env.COMFY_ROOT || config.comfyRoot) === 'string'
+      ? process.env.COMFY_ROOT || config.comfyRoot
+      : undefined,
+    pythonPath: typeof (process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath) === 'string'
+      ? process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath
+      : undefined,
+    bridgePort: Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || config.bridgePort || 8787),
     allowedOrigins: [
       ...(Array.isArray(config.allowedOrigins) ? config.allowedOrigins : []),
-      ...String(process.env.MIAOHUI_ALLOWED_ORIGINS || '').split(','),
+      ...String(process.env.AEONQUILL_ALLOWED_ORIGINS || process.env.MIAOHUI_ALLOWED_ORIGINS || '').split(','),
     ].map((value) => String(value).trim()).filter(Boolean),
-    launchPolicy: normalizePolicy(process.env.MIAOHUI_COMFY_POLICY || config.comfyLaunchPolicy),
-    idleTimeoutMs: normalizeIdleTimeout(process.env.MIAOHUI_COMFY_IDLE_SECONDS || config.comfyIdleSeconds),
+    launchPolicy: normalizePolicy(
+      process.env.AEONQUILL_COMFY_POLICY || process.env.MIAOHUI_COMFY_POLICY || config.comfyLaunchPolicy,
+    ),
+    idleTimeoutMs: normalizeIdleTimeout(
+      process.env.AEONQUILL_COMFY_IDLE_SECONDS
+        || process.env.MIAOHUI_COMFY_IDLE_SECONDS
+        || config.comfyIdleSeconds,
+    ),
     imageTools: {
       ffmpegPath: process.env.FFMPEG_PATH || imageTools.ffmpegPath || 'ffmpeg',
       ffprobePath: process.env.FFPROBE_PATH || imageTools.ffprobePath,
-      rembgPath: process.env.MIAOHUI_REMBG_PATH || imageTools.rembgPath,
-      rembgModelsPath: process.env.MIAOHUI_REMBG_MODELS
+      rembgPath: process.env.AEONQUILL_REMBG_PATH || process.env.MIAOHUI_REMBG_PATH || imageTools.rembgPath,
+      rembgModelsPath: process.env.AEONQUILL_REMBG_MODELS
+        || process.env.MIAOHUI_REMBG_MODELS
         || imageTools.rembgModelsPath
-        || join(runtimeDirectory, 'models', 'rembg'),
-      realEsrganPath: process.env.MIAOHUI_REALESRGAN_PATH
+        || join(dataDirectory, 'models', 'rembg'),
+      realEsrganPath: process.env.AEONQUILL_REALESRGAN_PATH
+        || process.env.MIAOHUI_REALESRGAN_PATH
         || imageTools.realEsrganPath
         || join(
-          runtimeDirectory,
+          dataDirectory,
           'tools',
           'realesrgan-ncnn-vulkan',
           process.platform === 'win32' ? 'realesrgan-ncnn-vulkan.exe' : 'realesrgan-ncnn-vulkan',
         ),
-      realEsrganModelsPath: process.env.MIAOHUI_REALESRGAN_MODELS
+      realEsrganModelsPath: process.env.AEONQUILL_REALESRGAN_MODELS
+        || process.env.MIAOHUI_REALESRGAN_MODELS
         || imageTools.realEsrganModelsPath
-        || join(runtimeDirectory, 'models', 'realesrgan-ncnn-vulkan'),
+        || join(dataDirectory, 'models', 'realesrgan-ncnn-vulkan'),
     },
     comfyArgs: Array.isArray(config.comfyArgs) && config.comfyArgs.length
       ? config.comfyArgs
@@ -83,6 +105,7 @@ export async function loadLocalRuntimeConfig() {
           '--cache-none',
           '--preview-method', 'none',
         ],
+    configReadError,
   }
 }
 
@@ -209,7 +232,8 @@ export class ComfyRuntimeManager {
     if (!(await fileExists(pythonPath)) || !(await fileExists(join(comfyRoot || '', 'main.py')))) {
       throw new Error('ComfyUI 本机路径未配置，无法按需启动')
     }
-    const logPath = join(runtimeDirectory, 'comfyui.log')
+    await mkdir(logDirectory, { recursive: true })
+    const logPath = join(logDirectory, 'comfyui.log')
     const logHandle = openSync(logPath, 'a')
     this.state = 'starting'
     this.startedAt = Date.now()

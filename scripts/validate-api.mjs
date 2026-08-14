@@ -109,6 +109,60 @@ try {
   const pixelate = imageTools.operations.find(({ id }) => id === 'pixelate')
   assert.equal(pixelate.available, true)
 
+  const diagnostics = await requestJson(bridge.baseUrl, '/api/runtime/diagnostics?refresh=1')
+  assert.equal(diagnostics.product.name, '光阴砚 AEONQUILL')
+  assert.equal(diagnostics.product.service, 'aeonquill-local-runtime')
+  assert.equal(diagnostics.storage.dataWritable, true)
+  assert.equal(diagnostics.storage.configWritable, true)
+  assert.ok(diagnostics.capabilities.image.available >= 1)
+  const diagnosticText = JSON.stringify(diagnostics)
+  assert.doesNotMatch(diagnosticText, /[A-Z]:\\\\/u)
+  assert.doesNotMatch(diagnosticText, /\\\\Users\\\\/iu)
+  assert.doesNotMatch(diagnosticText, /\/home\/|inputPath|outputPath|"pid"/iu)
+
+  const configuredPolicy = await requestJson(bridge.baseUrl, '/api/runtime/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: 'manual',
+      comfyLaunchPolicy: 'manual',
+      comfyIdleSeconds: 180,
+    }),
+  })
+  assert.equal(configuredPolicy.saved, true)
+  assert.equal(configuredPolicy.restartRequired, false)
+  assert.equal(configuredPolicy.diagnostics.configuration.launchPolicy, 'manual')
+  const externalComfy = await requestJson(bridge.baseUrl, '/api/runtime/config', {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'manual', comfyUrl: 'http://example.com:8188' }),
+  }, 400)
+  assert.equal(externalComfy.error.code, 'INVALID_COMFY_URL')
+
+  const emptyShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences')
+  assert.equal(emptyShellState.state, null)
+  const savedShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences', {
+    method: 'PUT',
+    body: JSON.stringify({
+      value: JSON.stringify({ version: 1, selectedModeId: 'pixel', balancedProjectId: 'qa-project' }),
+    }),
+  })
+  assert.equal(savedShellState.state.kind, 'shell-preferences')
+  const loadedShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences')
+  assert.equal(JSON.parse(loadedShellState.state.value).balancedProjectId, 'qa-project')
+  const unknownStateKind = await requestJson(bridge.baseUrl, '/api/client-state/..%2Fescape', {}, 404)
+  assert.equal(unknownStateKind.error.code, 'UNKNOWN_CLIENT_STATE_KIND')
+  const invalidShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences', {
+    method: 'PUT',
+    body: JSON.stringify({
+      value: JSON.stringify({
+        version: 1,
+        selectedModeId: 'pixel',
+        balancedProjectId: 'qa-project',
+        privatePath: 'C:\\Users\\private',
+      }),
+    }),
+  }, 400)
+  assert.equal(invalidShellState.error.code, 'UNKNOWN_CLIENT_STATE_FIELD')
+
   const source = await readFile(sourcePath)
   const embeddedSource = `data:image/png;base64,${source.toString('base64')}`
   const projectDocument = {
@@ -289,7 +343,7 @@ try {
 
   const missing = await requestJson(bridge.baseUrl, '/api/does-not-exist', {}, 404)
   assert.equal(missing.error.code, 'NOT_FOUND')
-  console.log('✓ Isolated security, project/asset tiers/package, API, SSE, pixel job, Range, and cleanup')
+  console.log('✓ Isolated security, diagnostics/config, client state, project/asset tiers/package, API, SSE, pixel job, Range, and cleanup')
   failed = false
 } finally {
   const logs = bridge.logs()

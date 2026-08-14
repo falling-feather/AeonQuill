@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import BalancedWorkbench from './App'
-import { SurfaceState } from './components/Home'
+import { RuntimeSettingsDialog, SurfaceState } from './components/Home'
 import {
   deserializePixelDocument,
   serializePixelDocument,
@@ -8,7 +8,11 @@ import {
 } from './lib/pixel'
 import { loadLocalProject, type StoredProject } from './lib/projectApi'
 import {
+  configureRuntime,
+  fetchClientState,
+  fetchRuntimeDiagnostics,
   fetchRuntimeStatus,
+  saveClientState,
   startRuntime,
   stopRuntime,
 } from './lib/videoApi'
@@ -46,7 +50,11 @@ import {
   type ShellPreferences,
   type SmartVideoSessionSummary,
 } from './shell'
-import type { RuntimeStatus } from './types'
+import type {
+  RuntimeConfigurationRequest,
+  RuntimeDiagnostics,
+  RuntimeStatus,
+} from './types'
 import './product-app.css'
 
 type RuntimeProbe = {
@@ -54,6 +62,7 @@ type RuntimeProbe = {
   checking: boolean
   checkedAt?: number
   runtime: RuntimeStatus | null
+  diagnostics: RuntimeDiagnostics | null
   error?: string
 }
 
@@ -165,11 +174,19 @@ function runtimeHealth(probe: RuntimeProbe): RuntimeHealth {
 
 function makeRuntimeSummary(probe: RuntimeProbe): LocalRuntimeSummary {
   const runtime = probe.runtime
+  const diagnostics = probe.diagnostics
+  const imageProcessors = diagnostics?.capabilities.image.available ?? 0
+  const storageReady = diagnostics
+    ? diagnostics.storage.dataWritable && diagnostics.storage.configWritable
+    : probe.bridgeReady
   const queueCount = (runtime?.queueRunning ?? 0) + (runtime?.queuePending ?? 0)
   const lifecycle = runtime?.lifecycle
   const initialCheck = probe.checking && !probe.checkedAt
+  const comfyNeedsConfiguration = diagnostics?.capabilities.comfyui.status === 'needs-configuration'
   const comfyStatus: RuntimeHealth = initialCheck
     ? 'checking'
+    : comfyNeedsConfiguration
+      ? 'unavailable'
     : lifecycle?.state === 'starting'
       ? 'starting'
       : runtime?.connected && runtime.ready
@@ -197,11 +214,15 @@ function makeRuntimeSummary(probe: RuntimeProbe): LocalRuntimeSummary {
           ? '已就绪'
           : comfyStatus === 'starting'
             ? '启动中'
-            : comfyStatus === 'unavailable' ? '依赖不完整' : comfyStatus === 'checking' ? '检查中' : '休眠',
-      detail: runtime?.connected
+            : comfyNeedsConfiguration ? '待配置' : comfyStatus === 'unavailable' ? '依赖不完整' : comfyStatus === 'checking' ? '检查中' : '休眠',
+      detail: comfyNeedsConfiguration
+        ? '在设置中自动发现或指定本机 ComfyUI'
+        : runtime?.connected
         ? `${lifecycle?.owned ? '光阴砚托管' : '外部进程'} · ${runtime.comfyVersion ?? '版本未知'}`
         : '按需启动；规划与浏览器编辑仍可离线使用',
-      actionLabel: lifecycle?.owned && runtime?.connected ? '关闭' : !runtime?.connected && probe.bridgeReady ? '启动' : undefined,
+      actionLabel: comfyNeedsConfiguration
+        ? '配置'
+        : lifecycle?.owned && runtime?.connected ? '关闭' : !runtime?.connected && probe.bridgeReady ? '启动' : undefined,
     },
     {
       id: 'gpu',
@@ -217,23 +238,34 @@ function makeRuntimeSummary(probe: RuntimeProbe): LocalRuntimeSummary {
     },
     {
       id: 'models',
-      label: '本地模型与节点',
-      status: initialCheck ? 'checking' : runtime?.ready ? 'ready' : missingCount ? 'unavailable' : 'offline',
-      statusLabel: runtime?.ready ? '契约满足' : missingCount ? `缺少 ${missingCount}` : initialCheck ? '检查中' : '待运行',
+      label: '图像与模型依赖',
+      status: initialCheck
+        ? 'checking'
+        : imageProcessors > 0 || runtime?.ready
+          ? 'ready'
+          : missingCount || diagnostics ? 'unavailable' : 'offline',
+      statusLabel: imageProcessors > 0
+        ? `图像 ${imageProcessors} 项`
+        : runtime?.ready ? '视频契约满足' : missingCount ? `缺少 ${missingCount}` : initialCheck ? '检查中' : '待配置',
       detail: missingCount
-        ? `${runtime?.missingNodes?.length ?? 0} 个节点、${runtime?.missingModels?.length ?? 0} 个模型待处理`
-        : runtime?.ready ? '当前视频工作流依赖已通过探测' : '运行时休眠时不占用显存',
+        ? `${runtime?.missingNodes?.length ?? 0} 个节点、${runtime?.missingModels?.length ?? 0} 个模型待处理；${imageProcessors} 项图像执行器可用`
+        : imageProcessors > 0
+          ? `${imageProcessors}/${diagnostics?.capabilities.image.total ?? imageProcessors} 项本机图像执行器可用`
+          : runtime?.ready ? '当前视频工作流依赖已通过探测' : '未探测到正式图像执行器；视频运行时当前休眠',
     },
     {
       id: 'storage',
       label: '项目与资产存储',
-      status: initialCheck ? 'checking' : probe.bridgeReady ? 'ready' : 'offline',
-      statusLabel: initialCheck ? '检查中' : probe.bridgeReady ? '本机可用' : '未连接',
-      detail: probe.bridgeReady ? '不可变资产版本与项目快照由本机服务管理' : '浏览器仍保留有限离线草稿',
+      status: initialCheck ? 'checking' : storageReady ? 'ready' : probe.bridgeReady ? 'unavailable' : 'offline',
+      statusLabel: initialCheck ? '检查中' : storageReady ? '本机可写' : probe.bridgeReady ? '权限异常' : '未连接',
+      detail: storageReady ? '项目、客户端状态与不可变资产由当前用户数据目录管理' : '浏览器仍保留有限离线草稿',
     },
   ]
 
-  const status = runtimeHealth(probe)
+  const baseStatus = runtimeHealth(probe)
+  const status: RuntimeHealth = baseStatus === 'ready' && diagnostics && (!storageReady || imageProcessors === 0)
+    ? 'unavailable'
+    : baseStatus
   const feedback: ShellFeedback | undefined = initialCheck
     ? {
         status: 'loading',
@@ -259,9 +291,17 @@ function makeRuntimeSummary(probe: RuntimeProbe): LocalRuntimeSummary {
     status,
     statusLabel: status === 'checking'
       ? '正在检查'
-      : status === 'busy' ? '正在创作' : status === 'starting' ? '正在启动' : status === 'ready' ? '本机可用' : '浏览器离线模式',
+      : status === 'busy'
+        ? '正在创作'
+        : status === 'starting'
+          ? '正在启动'
+          : status === 'ready'
+            ? '本机可用'
+            : status === 'unavailable' && probe.bridgeReady ? '部分能力待配置' : '浏览器离线模式',
     detail: probe.bridgeReady
-      ? '确定性编辑可直接使用；GPU 工作流按任务启动并在空闲后释放。'
+      ? imageProcessors > 0
+        ? `${imageProcessors} 项本机图像处理可直接使用；GPU 工作流按任务启动并在空闲后释放。`
+        : '画布与像素编辑可用，但尚未探测到正式本机图像执行器；请打开设置查看诊断。'
       : '像素与画布基础编辑仍可使用，ComfyUI 与本机资产能力暂不可用。',
     lastCheckedLabel: probe.checkedAt ? relativeTime(probe.checkedAt) : undefined,
     privacyNote: '本地工作流、素材与模型默认留在此设备；只有明确配置的文本或生成 API 才会访问外部服务。',
@@ -273,6 +313,9 @@ function makeRuntimeSummary(probe: RuntimeProbe): LocalRuntimeSummary {
 function makeSmartVideoRuntime(probe: RuntimeProbe): SmartVideoRuntimeSummary {
   const runtime = probe.runtime
   const queueCount = (runtime?.queueRunning ?? 0) + (runtime?.queuePending ?? 0)
+  if (probe.diagnostics?.capabilities.comfyui.status === 'needs-configuration') {
+    return { state: 'offline', label: 'ComfyUI 待配置', detail: '先在主页设置中自动发现或指定本机运行时' }
+  }
   if (runtime?.lifecycle?.state === 'error') {
     return { state: 'error', label: 'ComfyUI 异常', detail: runtime.lifecycle.lastError ?? runtime.message }
   }
@@ -391,8 +434,13 @@ export default function ProductApp() {
     bridgeReady: false,
     checking: true,
     runtime: null,
+    diagnostics: null,
   })
   const [refreshingRuntime, setRefreshingRuntime] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState<string>()
+  const [settingsMessage, setSettingsMessage] = useState<string>()
   const [projectProbe, setProjectProbe] = useState<ProjectProbe>({
     projectId: initialPreferences.current.balancedProjectId,
     status: 'idle',
@@ -404,16 +452,38 @@ export default function ProductApp() {
   const [modeNotice, setModeNotice] = useState<ProductNotice | null>(null)
   const projectRequestRef = useRef(0)
   const announcedRecoveryRef = useRef<string | null>(null)
+  const clientStateHydratedRef = useRef(false)
+  const clientStateDirtyRef = useRef(new Set<string>())
+  const bridgeReadyRef = useRef(false)
+  const preferencesRef = useRef(preferences)
+  const videoSessionRef = useRef(videoSession)
+  const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
+  const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
   const currentRouteKey = routeKey(route)
+
+  useEffect(() => {
+    bridgeReadyRef.current = runtimeProbe.bridgeReady
+  }, [runtimeProbe.bridgeReady])
+
+  useEffect(() => {
+    preferencesRef.current = preferences
+  }, [preferences])
+
+  useEffect(() => {
+    videoSessionRef.current = videoSession
+  }, [videoSession])
 
   const updatePreferences = useCallback((patch: Partial<ShellPreferences>) => {
     setPreferences((current) => {
       const next = parseShellPreferences(serializeShellPreferences({ ...current, ...patch }))
+      const serialized = serializeShellPreferences(next)
+      clientStateDirtyRef.current.add('shell-preferences')
       try {
-        localStorage.setItem(PRODUCT_SHELL_PREFERENCES_KEY, serializeShellPreferences(next))
+        localStorage.setItem(PRODUCT_SHELL_PREFERENCES_KEY, serialized)
       } catch {
         // Preferences remain valid for the current page even if storage is unavailable.
       }
+      if (bridgeReadyRef.current) void saveClientState('shell-preferences', serialized).catch(() => undefined)
       return next
     })
   }, [])
@@ -481,20 +551,89 @@ export default function ProductApp() {
       setRuntimeProbe((current) => ({ ...current, checking: true, error: undefined }))
     }
     try {
-      const runtime = await fetchRuntimeStatus(true)
-      setRuntimeProbe({ bridgeReady: true, checking: false, checkedAt: Date.now(), runtime })
+      const [runtime, diagnostics] = await Promise.all([
+        fetchRuntimeStatus(true),
+        fetchRuntimeDiagnostics(true),
+      ])
+      setRuntimeProbe({ bridgeReady: true, checking: false, checkedAt: Date.now(), runtime, diagnostics })
     } catch (error) {
       setRuntimeProbe({
         bridgeReady: false,
         checking: false,
         checkedAt: Date.now(),
         runtime: null,
+        diagnostics: null,
         error: error instanceof Error ? error.message : '无法连接本机服务',
       })
     } finally {
       if (!background) setRefreshingRuntime(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (!runtimeProbe.bridgeReady || clientStateHydratedRef.current) return
+    clientStateHydratedRef.current = true
+    let disposed = false
+
+    void Promise.allSettled([
+      fetchClientState('shell-preferences'),
+      fetchClientState('pixel-document'),
+      fetchClientState('smart-video-session'),
+    ]).then(([shellResult, pixelResult, videoResult]) => {
+      if (disposed) return
+
+      if (shellResult.status === 'fulfilled') {
+        const state = shellResult.value
+        if (state && !clientStateDirtyRef.current.has('shell-preferences')) {
+          const restored = parseShellPreferences(state.value)
+          setPreferences(restored)
+          if (route.modeId === 'home') setSelectedModeId(restored.selectedModeId)
+          try { localStorage.setItem(PRODUCT_SHELL_PREFERENCES_KEY, state.value) } catch { /* bridge remains canonical */ }
+        } else if (clientStateDirtyRef.current.has('shell-preferences')) {
+          void saveClientState('shell-preferences', serializeShellPreferences(preferencesRef.current)).catch(() => undefined)
+        } else if (!state) {
+          void saveClientState('shell-preferences', serializeShellPreferences(initialPreferences.current)).catch(() => undefined)
+        }
+      }
+
+      if (pixelResult.status === 'fulfilled') {
+        const state = pixelResult.value
+        if (state && !clientStateDirtyRef.current.has('pixel-document')) {
+          try {
+            const document = deserializePixelDocument(state.value)
+            setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty' })
+            try { localStorage.setItem(PIXEL_STORAGE_KEY, state.value) } catch { /* large state remains bridge-backed */ }
+          } catch {
+            // Keep the already validated browser fallback if a newer client cannot read this state.
+          }
+        } else if (clientStateDirtyRef.current.has('pixel-document') && pixelBridgeSaveRef.current) {
+          void saveClientState('pixel-document', pixelBridgeSaveRef.current).catch(() => undefined)
+        } else if (!state && initialPixelDraft.current.status === 'ready' && initialPixelDraft.current.document) {
+          void saveClientState('pixel-document', serializePixelDocument(initialPixelDraft.current.document)).catch(() => undefined)
+        }
+      }
+
+      if (videoResult.status === 'fulfilled') {
+        const state = videoResult.value
+        if (state && !clientStateDirtyRef.current.has('smart-video-session')) {
+          const session = parseSmartVideoSession(state.value)
+          if (session) {
+            setVideoSession({ status: 'ready', session })
+            try { sessionStorage.setItem(SMART_VIDEO_SESSION_KEY, state.value) } catch { /* bridge remains canonical */ }
+          }
+        } else if (
+          clientStateDirtyRef.current.has('smart-video-session')
+          && videoSessionRef.current.session
+        ) {
+          void saveClientState('smart-video-session', serializeSmartVideoSession(videoSessionRef.current.session)).catch(() => undefined)
+        } else if (!state && initialVideoSession.current.status === 'ready' && initialVideoSession.current.session) {
+          void saveClientState('smart-video-session', serializeSmartVideoSession(initialVideoSession.current.session)).catch(() => undefined)
+        }
+      }
+    })
+
+    return () => { disposed = true }
+  }, [runtimeProbe.bridgeReady])
 
   useEffect(() => {
     if (route.modeId === 'balanced') return
@@ -544,15 +683,58 @@ export default function ProductApp() {
     void refreshProject(preferences.balancedProjectId)
   }, [preferences.balancedProjectId, refreshProject])
 
+  const openRuntimeSettings = useCallback(() => {
+    setSettingsOpen(true)
+    setSettingsError(undefined)
+    setSettingsMessage(undefined)
+    void refreshRuntime()
+  }, [refreshRuntime])
+
+  const handleRuntimeConfigure = useCallback(async (request: RuntimeConfigurationRequest) => {
+    if (settingsSaving) return
+    setSettingsSaving(true)
+    setSettingsError(undefined)
+    setSettingsMessage(undefined)
+    try {
+      const result = await configureRuntime(request)
+      setRuntimeProbe((current) => ({
+        ...current,
+        bridgeReady: true,
+        diagnostics: result.diagnostics,
+        checkedAt: result.diagnostics.checkedAt,
+        error: undefined,
+      }))
+      setSettingsMessage(result.message)
+      if (!result.restartRequired) void refreshRuntime(true)
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '本机设置保存失败')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }, [refreshRuntime, settingsSaving])
+
   const handleRuntimeAction = useCallback(async (item: RuntimeSurfaceSummary) => {
     if (item.id !== 'comfyui' || refreshingRuntime) return
+    if (item.actionLabel === '配置') {
+      openRuntimeSettings()
+      return
+    }
     setRefreshingRuntime(true)
     setRuntimeProbe((current) => ({ ...current, error: undefined }))
     try {
       const runtime = runtimeProbe.runtime?.connected && runtimeProbe.runtime.lifecycle?.owned
         ? await stopRuntime()
         : await startRuntime()
-      setRuntimeProbe({ bridgeReady: true, checking: false, checkedAt: Date.now(), runtime })
+      setRuntimeProbe((current) => ({
+        ...current,
+        bridgeReady: true,
+        checking: false,
+        checkedAt: Date.now(),
+        runtime,
+      }))
+      void fetchRuntimeDiagnostics(true).then((diagnostics) => {
+        setRuntimeProbe((current) => ({ ...current, diagnostics }))
+      }).catch(() => undefined)
     } catch (error) {
       setRuntimeProbe((current) => ({
         ...current,
@@ -563,13 +745,15 @@ export default function ProductApp() {
     } finally {
       setRefreshingRuntime(false)
     }
-  }, [refreshingRuntime, runtimeProbe.runtime])
+  }, [openRuntimeSettings, refreshingRuntime, runtimeProbe.runtime])
 
   const runtimeSummary = useMemo(() => makeRuntimeSummary(runtimeProbe), [runtimeProbe])
   const smartVideoRuntime = useMemo(() => makeSmartVideoRuntime(runtimeProbe), [runtimeProbe])
   const modeAvailability = useMemo<Partial<Record<ProductModeId, ModeAvailabilitySummary>>>(() => ({
-    balanced: runtimeProbe.bridgeReady
-      ? { status: 'available', label: '本机增强已连接' }
+    balanced: runtimeProbe.bridgeReady && (runtimeProbe.diagnostics?.capabilities.image.available ?? 0) > 0
+      ? { status: 'available', label: `本机增强 ${runtimeProbe.diagnostics?.capabilities.image.available} 项` }
+      : runtimeProbe.bridgeReady
+        ? { status: 'degraded', label: '画布可用', reason: '未探测到正式本机图像处理器，请在设置中检查依赖' }
       : { status: 'degraded', label: '浏览器模式', reason: '本机任务与资产服务暂未连接' },
     pixel: { status: 'available', label: '确定性内核可用' },
     'smart-video': runtimeProbe.runtime?.connected && runtimeProbe.runtime.ready
@@ -603,7 +787,7 @@ export default function ProductApp() {
         title: videoSession.session.title,
         modeId: 'smart-video',
         updatedLabel: relativeTime(videoSession.session.updatedAt),
-        description: `${videoSession.session.sceneCount} 个场景 · ${videoSession.session.taskCount} 个受控任务 · 当前标签页会话`,
+        description: `${videoSession.session.sceneCount} 个场景 · ${videoSession.session.taskCount} 个受控任务 · 本机会话摘要`,
       })
     }
     return projects.sort((left, right) => left.modeId === 'balanced' ? -1 : right.modeId === 'balanced' ? 1 : 0)
@@ -644,33 +828,68 @@ export default function ProductApp() {
     return {
       status: 'recovered',
       title: `已恢复 ${recoveredCount} 条本机创作上下文`,
-      detail: '均衡项目来自 ProjectStore；像素草稿来自其独立存储；智能视频仅恢复当前标签页的剧本输入。',
+      detail: '均衡项目来自 ProjectStore；像素草稿与智能视频会话由当前用户数据目录和浏览器回退共同恢复。',
     }
   }, [pixelDraft.error, projectProbe.error, projectProbe.status, recentProjects.length, videoSession.error])
 
+  const queuePixelBridgeSave = useCallback((serialized: string) => {
+    pixelBridgeSaveRef.current = serialized
+    if (pixelBridgeSaveTimerRef.current !== undefined) window.clearTimeout(pixelBridgeSaveTimerRef.current)
+    pixelBridgeSaveTimerRef.current = window.setTimeout(() => {
+      pixelBridgeSaveTimerRef.current = undefined
+      const value = pixelBridgeSaveRef.current
+      if (!value || !bridgeReadyRef.current) return
+      void saveClientState('pixel-document', value).then(() => {
+        if (pixelBridgeSaveRef.current === value) pixelBridgeSaveRef.current = undefined
+      }).catch(() => {
+        setPixelDraft((current) => current.document
+          ? { ...current, status: 'error', error: '像素草稿仍在当前页面，但本机持久化失败；刷新前请先导出。' }
+          : current)
+        setModeNotice({ tone: 'error', message: '像素草稿未能写入本机用户数据；刷新前请先导出。' })
+      })
+    }, 300)
+  }, [])
+
+  useEffect(() => () => {
+    if (pixelBridgeSaveTimerRef.current !== undefined) window.clearTimeout(pixelBridgeSaveTimerRef.current)
+    const value = pixelBridgeSaveRef.current
+    if (value && bridgeReadyRef.current) void saveClientState('pixel-document', value).catch(() => undefined)
+  }, [])
+
   const handlePixelChange = useCallback((next: PixelDocument) => {
     if (!isMeaningfulPixelDraft(next)) {
+      const serialized = serializePixelDocument(next)
+      clientStateDirtyRef.current.add('pixel-document')
+      try { localStorage.setItem(PIXEL_STORAGE_KEY, serialized) } catch { /* bridge remains canonical */ }
+      queuePixelBridgeSave(serialized)
       setPixelDraft({ status: 'empty', document: next })
       return
     }
+    const serialized = serializePixelDocument(next)
+    clientStateDirtyRef.current.add('pixel-document')
+    let browserStored = true
     try {
-      localStorage.setItem(PIXEL_STORAGE_KEY, serializePixelDocument(next))
-      setPixelDraft({ status: 'ready', document: next })
-      if (route.modeId === 'pixel' && route.projectId !== next.id) {
-        replaceModeProjectReference('pixel', next.id)
-      }
+      localStorage.setItem(PIXEL_STORAGE_KEY, serialized)
     } catch {
-      setPixelDraft({
-        status: 'error',
-        document: next,
-        error: '像素草稿仍在当前页面，但浏览器存储失败；刷新页面前请先导出。',
-      })
-      if (route.modeId === 'pixel' && route.projectId !== next.id) {
-        replaceModeProjectReference('pixel', next.id)
-      }
-      setModeNotice({ tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
+      browserStored = false
     }
-  }, [replaceModeProjectReference, route.modeId, route.projectId])
+    queuePixelBridgeSave(serialized)
+    setPixelDraft(bridgeReadyRef.current || browserStored
+      ? { status: 'ready', document: next }
+      : {
+          status: 'error',
+          document: next,
+          error: '像素草稿仍在当前页面，但浏览器存储失败且本机桥接离线；刷新前请先导出。',
+        })
+    if (route.modeId === 'pixel' && route.projectId !== next.id) {
+      replaceModeProjectReference('pixel', next.id)
+    }
+    if (!browserStored) {
+      setModeNotice(bridgeReadyRef.current
+        ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到本机用户数据。' }
+        : { tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
+    }
+  }, [queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
 
   const handleVideoPlanReady = useCallback((result: SmartVideoPlanResult) => {
     const session: SmartVideoSessionSummary = {
@@ -683,20 +902,31 @@ export default function ProductApp() {
       sceneCount: result.project.scenes.length,
       taskCount: result.plan.tasks.length,
     }
+    const serialized = serializeSmartVideoSession(session)
+    clientStateDirtyRef.current.add('smart-video-session')
+    let browserStored = true
     try {
-      sessionStorage.setItem(SMART_VIDEO_SESSION_KEY, serializeSmartVideoSession(session))
-      setVideoSession({ status: 'ready', session })
-      if (route.modeId === 'smart-video' && route.projectId !== session.projectId) {
-        replaceModeProjectReference('smart-video', session.projectId)
-      }
-      setModeNotice({ tone: 'success', message: '剧本输入与计划摘要已保存到当前标签页会话。' })
+      sessionStorage.setItem(SMART_VIDEO_SESSION_KEY, serialized)
     } catch {
-      setVideoSession({
-        status: 'error',
-        session,
-        error: '智能视频计划仍在当前页面，但会话存储失败；刷新后无法恢复。',
+      browserStored = false
+    }
+    setVideoSession(bridgeReadyRef.current || browserStored
+      ? { status: 'ready', session }
+      : {
+          status: 'error',
+          session,
+          error: '智能视频计划仍在当前页面，但浏览器存储失败且本机桥接离线；刷新后无法恢复。',
+        })
+    if (route.modeId === 'smart-video' && route.projectId !== session.projectId) {
+      replaceModeProjectReference('smart-video', session.projectId)
+    }
+    setModeNotice(bridgeReadyRef.current || browserStored
+      ? { tone: 'success', message: '剧本输入与计划摘要已保存到本机创作会话。' }
+      : { tone: 'error', message: '当前计划未能持久化；刷新后无法恢复。' })
+    if (bridgeReadyRef.current) {
+      void saveClientState('smart-video-session', serialized).catch(() => {
+        setModeNotice({ tone: 'error', message: '智能视频会话未能写入本机用户数据；当前页面内容仍保留。' })
       })
-      setModeNotice({ tone: 'error', message: '当前计划未能写入会话存储；刷新后无法恢复。' })
     }
   }, [replaceModeProjectReference, route.modeId, route.projectId])
 
@@ -735,7 +965,7 @@ export default function ProductApp() {
       videoSession.status === 'ready' &&
       videoSession.session &&
       (!route.projectId || route.projectId === videoSession.session.projectId)
-    ) message = `已恢复当前标签页中的剧本输入“${videoSession.session.title}”。`
+    ) message = `已恢复本机剧本输入“${videoSession.session.title}”。`
     if (!message) return
     announcedRecoveryRef.current = currentRouteKey
     setModeNotice({ tone: 'info', message })
@@ -916,7 +1146,7 @@ export default function ProductApp() {
           feedback={{
             status: 'error',
             title: videoSession.status === 'error' ? '智能视频会话无法读取' : '找不到此智能视频会话',
-            detail: videoSession.error ?? '智能视频当前只保存标签页会话摘要；它尚未冒充正式 ProjectStore 项目。',
+            detail: videoSession.error ?? '智能视频只保存本机会话摘要；它尚未冒充正式 ProjectStore 项目。',
             actionLabel: '重试读取',
             secondaryActionLabel: '返回主页',
           }}
@@ -950,7 +1180,7 @@ export default function ProductApp() {
           feedback={{
             status: 'empty',
             title: '尚无可恢复的智能视频会话',
-            detail: '开始后，只有主动编译过的剧本输入和计划摘要会保留在当前标签页；完整计划尚未写入正式项目。',
+            detail: '开始后，主动编译过的剧本输入和计划摘要会保存到本机用户数据；完整计划尚未写入正式项目。',
             actionLabel: '开始新故事',
             secondaryActionLabel: '返回主页',
           }}
@@ -974,21 +1204,34 @@ export default function ProductApp() {
   }
 
   return (
-    <AeonQuillShell
-      selectedModeId={selectedModeId}
-      modeAvailability={modeAvailability}
-      runtime={runtimeSummary}
-      recentProjects={recentProjects}
-      recentProjectsFeedback={recentProjectsFeedback}
-      refreshingRuntime={refreshingRuntime}
-      onModeSelect={chooseMode}
-      onModeOpen={openMode}
-      onCreateProject={openMode}
-      onOpenProject={(projectId, modeId) => navigate({ modeId, projectId })}
-      onRetryProjects={retryLocalContexts}
-      onOpenSettings={() => document.getElementById('aq-runtime-title')?.scrollIntoView({ behavior: 'smooth' })}
-      onRefreshRuntime={() => void refreshRuntime()}
-      onRuntimeItemAction={(item) => void handleRuntimeAction(item)}
-    />
+    <>
+      <AeonQuillShell
+        selectedModeId={selectedModeId}
+        modeAvailability={modeAvailability}
+        runtime={runtimeSummary}
+        recentProjects={recentProjects}
+        recentProjectsFeedback={recentProjectsFeedback}
+        refreshingRuntime={refreshingRuntime}
+        onModeSelect={chooseMode}
+        onModeOpen={openMode}
+        onCreateProject={openMode}
+        onOpenProject={(projectId, modeId) => navigate({ modeId, projectId })}
+        onRetryProjects={retryLocalContexts}
+        onOpenSettings={openRuntimeSettings}
+        onRefreshRuntime={() => void refreshRuntime()}
+        onRuntimeItemAction={(item) => void handleRuntimeAction(item)}
+      />
+      <RuntimeSettingsDialog
+        open={settingsOpen}
+        diagnostics={runtimeProbe.diagnostics}
+        loading={refreshingRuntime}
+        saving={settingsSaving}
+        error={settingsError}
+        message={settingsMessage}
+        onClose={() => setSettingsOpen(false)}
+        onRefresh={() => void refreshRuntime()}
+        onConfigure={(request) => void handleRuntimeConfigure(request)}
+      />
+    </>
   )
 }

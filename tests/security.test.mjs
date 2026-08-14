@@ -40,6 +40,12 @@ test('public error and job data redact credentials and local paths recursively',
   assert.doesNotMatch(JSON.stringify(payload), /super-secret|C:\\\\Users|abc\.def/)
 })
 
+test('public redaction preserves loopback HTTP URLs while still removing drive paths', () => {
+  assert.equal(redactSensitiveText('http://127.0.0.1:8188'), 'http://127.0.0.1:8188')
+  assert.equal(redactSensitiveText('http://localhost:8795'), 'http://localhost:8795')
+  assert.equal(redactSensitiveText('source=C:\\Users\\private\\image.png'), 'source=[local-path]')
+})
+
 test('child process environment excludes application secrets', () => {
   const previous = process.env.MIAOHUI_TEST_API_TOKEN
   process.env.MIAOHUI_TEST_API_TOKEN = 'must-not-leak'

@@ -1,4 +1,11 @@
-import type { ProcessingJob, RuntimeStatus, VideoJobRequest } from '../types'
+import type {
+  ProcessingJob,
+  RuntimeConfigurationRequest,
+  RuntimeConfigurationResult,
+  RuntimeDiagnostics,
+  RuntimeStatus,
+  VideoJobRequest,
+} from '../types'
 
 export const VIDEO_DIMENSIONS = {
   '16:9': { width: 608, height: 352 },
@@ -50,6 +57,51 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 export async function fetchRuntimeStatus(refresh = false) {
   return api<RuntimeStatus>(`/api/runtime/status${refresh ? '?refresh=1' : ''}`)
+}
+
+export type ClientStateKind = 'shell-preferences' | 'pixel-document' | 'smart-video-session'
+
+export type ClientStateRecord = {
+  kind: ClientStateKind
+  value: string
+  updatedAt: number
+}
+
+const clientStateWrites = new Map<ClientStateKind, Promise<ClientStateRecord>>()
+
+export async function fetchClientState(kind: ClientStateKind) {
+  const payload = await api<{ state: ClientStateRecord | null }>(`/api/client-state/${encodeURIComponent(kind)}`)
+  return payload.state
+}
+
+export function saveClientState(kind: ClientStateKind, value: string) {
+  const previous = clientStateWrites.get(kind)
+  const request = (previous ? previous.catch(() => undefined) : Promise.resolve())
+    .then(async () => {
+      const payload = await api<{ state: ClientStateRecord }>(`/api/client-state/${encodeURIComponent(kind)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value }),
+      })
+      return payload.state
+    })
+  clientStateWrites.set(kind, request)
+  void request.finally(() => {
+    if (clientStateWrites.get(kind) === request) clientStateWrites.delete(kind)
+  }).catch(() => undefined)
+  return request
+}
+
+export async function fetchRuntimeDiagnostics(refresh = false) {
+  return api<RuntimeDiagnostics>(`/api/runtime/diagnostics${refresh ? '?refresh=1' : ''}`)
+}
+
+export async function configureRuntime(request: RuntimeConfigurationRequest) {
+  return api<RuntimeConfigurationResult>('/api/runtime/config', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  })
 }
 
 export async function startRuntime() {

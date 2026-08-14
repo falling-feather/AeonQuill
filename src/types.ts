@@ -381,6 +381,108 @@ export type RuntimeStatus = {
   }
 }
 
+export type RuntimeDiagnosticIssue = {
+  code: string
+  severity: 'info' | 'warning' | 'error'
+  message: string
+  action: string
+}
+
+export type RuntimeDiagnostics = {
+  schemaVersion: 1
+  checkedAt: number
+  product: {
+    name: string
+    service: 'aeonquill-local-runtime'
+    platform: string
+    architecture: string
+    node: string
+  }
+  storage: {
+    scope: 'development' | 'user-data' | 'legacy-user-data' | 'custom'
+    runtimeWritable: boolean
+    dataWritable: boolean
+    cacheWritable: boolean
+    logsWritable: boolean
+    configWritable: boolean
+    runtimeLabel: string
+    configLabel?: string
+    projectsManaged: boolean
+    uninstallPreservesUserData: boolean
+    legacyDataLayout: boolean
+  }
+  configuration: {
+    fileValid: boolean
+    rootConfigured: boolean
+    pythonConfigured: boolean
+    rootValid: boolean
+    pythonValid: boolean
+    rootLabel?: string
+    pythonLabel?: string
+    comfyUrl: string
+    launchPolicy: 'persistent' | 'idle' | 'manual'
+    idleSeconds: number
+    restartRequired: boolean
+    legacyEnvironment: boolean
+  }
+  capabilities: {
+    bridge: { status: 'ready'; label: string }
+    image: {
+      status: 'ready' | 'unavailable'
+      available: number
+      total: number
+      operations: Array<{
+        id: ImageOperationId
+        label: string
+        provider: string
+        available: boolean
+        unavailableReason?: string
+      }>
+    }
+    comfyui: {
+      status: 'ready' | 'incomplete' | 'sleeping' | 'needs-configuration'
+      configured: boolean
+      connected: boolean
+      ready: boolean
+      lifecycle: string
+      device?: string
+      vramTotal: number
+      missingNodes: number
+      missingModels: number
+    }
+    semantic: {
+      installed: number
+      total: number
+      ready: number
+    }
+  }
+  logs: {
+    managed: boolean
+    label: string
+    comfyLogAvailable: boolean
+  }
+  issues: RuntimeDiagnosticIssue[]
+}
+
+export type RuntimeConfigurationRequest =
+  | { mode: 'auto-discover' }
+  | {
+      mode: 'manual'
+      comfyRoot?: string | null
+      pythonPath?: string | null
+      comfyUrl?: string
+      comfyLaunchPolicy?: 'persistent' | 'idle' | 'manual'
+      comfyIdleSeconds?: number
+    }
+
+export type RuntimeConfigurationResult = {
+  saved: true
+  restartRequired: boolean
+  message: string
+  recoveredInvalidConfig?: boolean
+  diagnostics: RuntimeDiagnostics
+}
+
 export type PixelDraft = {
   width: number
   height: number

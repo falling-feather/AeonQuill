@@ -6,6 +6,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { ComfyClient, findVideoOutput } from './comfy-client.mjs'
 import { AssetPreviewService } from './asset-preview-service.mjs'
+import { ClientStateStore } from './client-state-store.mjs'
 import { IMAGE_TOOLS_VERSION, ImageProcessor, validateImageRequest } from './image-processor.mjs'
 import {
   assertStorageCapacity,
@@ -16,7 +17,19 @@ import {
 import { JobStore } from './job-store.mjs'
 import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store.mjs'
 import { ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
-import { projectRoot, runtimeDirectory } from './runtime-paths.mjs'
+import {
+  cacheDirectory,
+  dataDirectory,
+  logDirectory,
+  projectRoot,
+  runtimeDirectory,
+} from './runtime-paths.mjs'
+import {
+  buildRuntimeDiagnostics,
+  normalizeLoopbackComfyUrl,
+  persistRuntimeSettings,
+  readLocalConfigFile,
+} from './runtime-settings.mjs'
 import {
   probeSemanticWorkflowCatalog,
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
@@ -44,10 +57,10 @@ import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 
 const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
-const assetDirectory = join(runtimeDirectory, 'assets')
+const assetDirectory = join(dataDirectory, 'assets')
 const localRuntimeConfig = await loadLocalRuntimeConfig()
-const port = Number(process.env.MIAOHUI_PORT || localRuntimeConfig.bridgePort || 8787)
-const host = process.env.MIAOHUI_HOST || '127.0.0.1'
+const port = Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || localRuntimeConfig.bridgePort || 8787)
+const host = process.env.AEONQUILL_HOST || process.env.MIAOHUI_HOST || '127.0.0.1'
 const security = new LocalBridgeSecurity({ host, port, allowedOrigins: localRuntimeConfig.allowedOrigins })
 const ffmpegPath = process.env.FFMPEG_PATH || localRuntimeConfig.imageTools?.ffmpegPath || 'ffmpeg'
 const runtimeManager = new ComfyRuntimeManager(localRuntimeConfig)
@@ -61,10 +74,11 @@ const imageProcessor = new ImageProcessor({
   realEsrganPath: localRuntimeConfig.imageTools?.realEsrganPath,
   realEsrganModelsPath: localRuntimeConfig.imageTools?.realEsrganModelsPath,
 })
-const store = new JobStore(join(runtimeDirectory, 'jobs.json'))
-const projectStore = new ProjectStore(join(runtimeDirectory, 'projects'))
+const store = new JobStore(join(dataDirectory, 'jobs.json'))
+const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
+const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'))
 const assetPreviewService = new AssetPreviewService({
-  rootDirectory: join(runtimeDirectory, 'projects', 'previews'),
+  rootDirectory: join(cacheDirectory, 'previews'),
   ffmpegPath,
 })
 let hardwareHint = null
@@ -86,13 +100,18 @@ function scheduleHardwareHint() {
 await Promise.all([
   mkdir(inputDirectory, { recursive: true }),
   mkdir(assetDirectory, { recursive: true }),
+  mkdir(cacheDirectory, { recursive: true }),
+  mkdir(logDirectory, { recursive: true }),
   store.load(),
   projectStore.open(),
+  clientStateStore.open(),
   assetPreviewService.open(),
 ])
 
 const sseClients = new Set()
-const requestedImageConcurrency = Number(process.env.MIAOHUI_IMAGE_CONCURRENCY || 1)
+const requestedImageConcurrency = Number(
+  process.env.AEONQUILL_IMAGE_CONCURRENCY || process.env.MIAOHUI_IMAGE_CONCURRENCY || 1,
+)
 const imageJobConcurrency = Number.isFinite(requestedImageConcurrency)
   ? Math.max(1, Math.min(2, Math.round(requestedImageConcurrency)))
   : 1
@@ -366,6 +385,37 @@ async function inspectSemanticWorkflows(force = false) {
     comfyRoot: localRuntimeConfig.comfyRoot,
     objectInfo,
     runtime,
+  })
+}
+
+async function inspectRuntimeDiagnostics(force = false, persistedConfig) {
+  const [runtime, imageManifest] = await Promise.all([
+    inspectRuntime(force),
+    imageProcessor.probe(force),
+  ])
+  const semanticManifest = await inspectSemanticWorkflows(force)
+  const lifecycle = runtimeManager.status()
+  let storedConfig = persistedConfig
+  let configError = localRuntimeConfig.configReadError
+  if (!storedConfig) {
+    try {
+      storedConfig = await readLocalConfigFile()
+    } catch (error) {
+      storedConfig = {}
+      configError = { code: error.code || 'INVALID_LOCAL_CONFIG', message: error.message }
+    }
+  }
+  return buildRuntimeDiagnostics({
+    activeConfig: {
+      ...localRuntimeConfig,
+      launchPolicy: lifecycle.policy,
+      idleTimeoutMs: lifecycle.idleTimeoutMs,
+    },
+    persistedConfig: storedConfig,
+    runtime,
+    imageManifest,
+    semanticManifest,
+    configError,
   })
 }
 
@@ -1599,6 +1649,43 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/runtime/status') {
       return sendJson(response, 200, await inspectRuntime(url.searchParams.get('refresh') === '1'))
     }
+    if (request.method === 'GET' && pathname === '/api/runtime/diagnostics') {
+      return sendJson(response, 200, await inspectRuntimeDiagnostics(url.searchParams.get('refresh') === '1'))
+    }
+    if (request.method === 'POST' && pathname === '/api/runtime/config') {
+      const body = await readJsonBody(request, 16 * 1024)
+      const { config, patch, recoveredInvalidConfig } = await persistRuntimeSettings(body)
+      if (recoveredInvalidConfig) {
+        localRuntimeConfig.configReadError = undefined
+      } else if (localRuntimeConfig.configReadError?.code === 'INVALID_COMFY_URL') {
+        try {
+          normalizeLoopbackComfyUrl(config.comfyUrl || 'http://127.0.0.1:8188')
+          localRuntimeConfig.configReadError = undefined
+        } catch {
+          // Preserve the startup validation error until the persisted URL is repaired.
+        }
+      }
+      if (patch.comfyLaunchPolicy !== undefined || patch.comfyIdleSeconds !== undefined) {
+        await runtimeManager.setPolicy(
+          patch.comfyLaunchPolicy ?? runtimeManager.status().policy,
+          patch.comfyIdleSeconds,
+        )
+      }
+      runtimeCache = null
+      const diagnostics = await inspectRuntimeDiagnostics(true, config)
+      const restartRequired = diagnostics.configuration.restartRequired
+      return sendJson(response, 200, {
+        saved: true,
+        restartRequired,
+        recoveredInvalidConfig,
+        message: recoveredInvalidConfig
+          ? '损坏的旧配置已备份，并已写入有效设置；建议重新打开 AEONQUILL。'
+          : restartRequired
+          ? '配置已安全保存；退出并重新打开 AEONQUILL 后生效。'
+          : '运行策略已保存并立即生效。',
+        diagnostics,
+      })
+    }
     if (request.method === 'POST' && pathname === '/api/runtime/start') {
       const gpuSchedule = scheduler.snapshot().resources.gpu
       const imageGpuBusy = [...gpuSchedule.activeJobs, ...gpuSchedule.queuedJobs]
@@ -1622,6 +1709,19 @@ const server = createServer(async (request, response) => {
       await scheduleRuntimeIdleStop()
       runtimeCache = null
       return sendJson(response, 200, await inspectRuntime(true))
+    }
+    const clientStateMatch = /^\/api\/client-state\/([^/]+)$/u.exec(pathname)
+    if (request.method === 'GET' && clientStateMatch) {
+      const state = await clientStateStore.get(decodeURIComponent(clientStateMatch[1]))
+      return sendJson(response, 200, { state })
+    }
+    if (request.method === 'PUT' && clientStateMatch) {
+      const body = await readJsonBody(request, 34 * 1024 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'value')) {
+        return sendError(response, 400, 'INVALID_CLIENT_STATE_REQUEST', '客户端状态请求只允许 value 字段')
+      }
+      const state = await clientStateStore.put(decodeURIComponent(clientStateMatch[1]), body.value)
+      return sendJson(response, 200, { state })
     }
     if (request.method === 'GET' && pathname === '/api/workflows') {
       return sendJson(response, 200, workflowCatalog())
