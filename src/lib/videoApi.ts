@@ -6,7 +6,7 @@ export const VIDEO_DIMENSIONS = {
   '1:1': { width: 448, height: 448 },
 } as const
 
-type JobEvent =
+export type JobEvent =
   | { type: 'jobs.snapshot'; jobs: ProcessingJob[] }
   | { type: 'job.updated'; job: ProcessingJob }
   | { type: 'jobs.cleared'; ids: string[] }
@@ -76,13 +76,21 @@ export async function fetchVideoJobs() {
   return payload.jobs
 }
 
-export async function createVideoJob(request: VideoJobRequest) {
+export type CreateVideoJobOptions = {
+  idempotencyKey?: string
+  priority?: number
+}
+
+export async function createVideoJob(request: VideoJobRequest, options: CreateVideoJobOptions = {}) {
+  const idempotencyKey = options.idempotencyKey ?? `video-${crypto.randomUUID()}`
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'idempotency-key': idempotencyKey,
+  }
+  if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/video', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'idempotency-key': `video-${crypto.randomUUID()}`,
-    },
+    headers,
     body: JSON.stringify(request),
   })
   return payload.job
