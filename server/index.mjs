@@ -1071,11 +1071,11 @@ async function runVideoJob(jobId, { signal }) {
     let lastFrameImageName
     if (job.request.mode === 'image-to-video') {
       await store.update(jobId, { progress: 7, detail: '上传规范化首帧' })
-      inputImageName = await comfy.uploadImage(job.inputPath, `miaohui-${job.id}.png`, signal)
+      inputImageName = await comfy.uploadImage(job.inputPath, `aeonquill-${job.id}.png`, signal)
       await store.log(jobId, 'success', `首帧已上传：${inputImageName}`)
       if (job.lastFramePath) {
         await store.update(jobId, { progress: 8, detail: '上传可选末帧约束' })
-        lastFrameImageName = await comfy.uploadImage(job.lastFramePath, `miaohui-${job.id}-last.png`, signal)
+        lastFrameImageName = await comfy.uploadImage(job.lastFramePath, `aeonquill-${job.id}-last.png`, signal)
         await store.log(jobId, 'success', `末帧已上传：${lastFrameImageName}`)
       }
     }
@@ -1088,7 +1088,7 @@ async function runVideoJob(jobId, { signal }) {
     })
     assertAllowedWorkflow(workflow)
     await store.update(jobId, { workflowMetadata: metadata, progress: 9, detail: '提交受控 H3 工作流' })
-    const clientId = `miaohui-${randomUUID()}`
+    const clientId = `aeonquill-${randomUUID()}`
     tracker = await comfy.openExecutionTracker(clientId, (message) => reportComfyEvent(jobId, message))
     const queued = await comfy.queuePrompt(workflow, clientId, signal)
     await store.update(jobId, {
@@ -1907,7 +1907,7 @@ async function shutdown() {
 process.on('SIGINT', () => void shutdown())
 process.on('SIGTERM', () => void shutdown())
 
-if (process.env.MIAOHUI_PARENT_CONTROL === 'stdio') {
+if ((process.env.AEONQUILL_PARENT_CONTROL || process.env.MIAOHUI_PARENT_CONTROL) === 'stdio') {
   process.stdin.setEncoding('utf8')
   let parentControlBuffer = ''
   process.stdin.on('data', (chunk) => {

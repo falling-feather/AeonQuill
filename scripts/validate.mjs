@@ -90,9 +90,9 @@ try {
   }
 
   await writeReport('passed')
-  console.log(`\n✓ MiaoHui ${profile} validation passed (${results.length} checks)`)
+  console.log(`\n✓ AEONQUILL ${profile} validation passed (${results.length} checks)`)
 } catch (error) {
   await writeReport('failed', error)
-  console.error(`\n✗ MiaoHui ${profile} validation failed: ${error.message}`)
+  console.error(`\n✗ AEONQUILL ${profile} validation failed: ${error.message}`)
   process.exitCode = 1
 }

@@ -15,6 +15,10 @@ bridgeProcess = spawn(process.execPath, ['server/index.mjs'], {
   stdio: 'inherit',
   env: createRestrictedChildEnvironment({
     COMFY_URL: comfyUrl,
+    COMFY_ROOT: process.env.COMFY_ROOT,
+    COMFY_PYTHON: process.env.COMFY_PYTHON,
+    FFMPEG_PATH: process.env.FFMPEG_PATH,
+    FFPROBE_PATH: process.env.FFPROBE_PATH,
     AEONQUILL_PORT: bridgePort,
     AEONQUILL_RUNTIME_DIR: process.env.AEONQUILL_RUNTIME_DIR || process.env.MIAOHUI_RUNTIME_DIR,
     AEONQUILL_DATA_DIR: process.env.AEONQUILL_DATA_DIR || process.env.MIAOHUI_DATA_DIR,
@@ -26,6 +30,14 @@ bridgeProcess = spawn(process.execPath, ['server/index.mjs'], {
     AEONQUILL_COMFY_POLICY: process.env.AEONQUILL_COMFY_POLICY || process.env.MIAOHUI_COMFY_POLICY,
     AEONQUILL_COMFY_IDLE_SECONDS:
       process.env.AEONQUILL_COMFY_IDLE_SECONDS || process.env.MIAOHUI_COMFY_IDLE_SECONDS,
+    AEONQUILL_IMAGE_CONCURRENCY:
+      process.env.AEONQUILL_IMAGE_CONCURRENCY || process.env.MIAOHUI_IMAGE_CONCURRENCY,
+    AEONQUILL_REMBG_PATH: process.env.AEONQUILL_REMBG_PATH || process.env.MIAOHUI_REMBG_PATH,
+    AEONQUILL_REMBG_MODELS: process.env.AEONQUILL_REMBG_MODELS || process.env.MIAOHUI_REMBG_MODELS,
+    AEONQUILL_REALESRGAN_PATH:
+      process.env.AEONQUILL_REALESRGAN_PATH || process.env.MIAOHUI_REALESRGAN_PATH,
+    AEONQUILL_REALESRGAN_MODELS:
+      process.env.AEONQUILL_REALESRGAN_MODELS || process.env.MIAOHUI_REALESRGAN_MODELS,
     MIAOHUI_PORT: bridgePort,
     MIAOHUI_RUNTIME_DIR: process.env.AEONQUILL_RUNTIME_DIR || process.env.MIAOHUI_RUNTIME_DIR,
     MIAOHUI_DATA_DIR: process.env.AEONQUILL_DATA_DIR || process.env.MIAOHUI_DATA_DIR,
@@ -37,6 +49,14 @@ bridgeProcess = spawn(process.execPath, ['server/index.mjs'], {
     MIAOHUI_COMFY_POLICY: process.env.AEONQUILL_COMFY_POLICY || process.env.MIAOHUI_COMFY_POLICY,
     MIAOHUI_COMFY_IDLE_SECONDS:
       process.env.AEONQUILL_COMFY_IDLE_SECONDS || process.env.MIAOHUI_COMFY_IDLE_SECONDS,
+    MIAOHUI_IMAGE_CONCURRENCY:
+      process.env.AEONQUILL_IMAGE_CONCURRENCY || process.env.MIAOHUI_IMAGE_CONCURRENCY,
+    MIAOHUI_REMBG_PATH: process.env.AEONQUILL_REMBG_PATH || process.env.MIAOHUI_REMBG_PATH,
+    MIAOHUI_REMBG_MODELS: process.env.AEONQUILL_REMBG_MODELS || process.env.MIAOHUI_REMBG_MODELS,
+    MIAOHUI_REALESRGAN_PATH:
+      process.env.AEONQUILL_REALESRGAN_PATH || process.env.MIAOHUI_REALESRGAN_PATH,
+    MIAOHUI_REALESRGAN_MODELS:
+      process.env.AEONQUILL_REALESRGAN_MODELS || process.env.MIAOHUI_REALESRGAN_MODELS,
   }),
 })
 

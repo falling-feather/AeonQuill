@@ -678,7 +678,7 @@ export class ProjectStore {
     try {
       decoded = await gunzipAsync(bundle, { maxOutputLength: MAX_PACKAGE_BYTES })
     } catch {
-      fail('INVALID_PROJECT_PACKAGE', 'Project package is not a valid MiaoHui archive', 400)
+      fail('INVALID_PROJECT_PACKAGE', 'Project package is not a valid AEONQUILL archive', 400)
     }
     let payload
     try {

@@ -155,7 +155,7 @@ async function readTemplate(mode) {
 
 function safeOutputPrefix(jobId, mode) {
   const safeId = jobId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
-  return `MiaoHui/${mode === 'image-to-video' ? 'I2V' : 'T2V'}_${safeId}`
+  return `AEONQUILL/${mode === 'image-to-video' ? 'I2V' : 'T2V'}_${safeId}`
 }
 
 export async function buildVideoWorkflow({

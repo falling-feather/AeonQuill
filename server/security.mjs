@@ -27,7 +27,7 @@ function normalizeHostname(value) {
 
 export function assertLoopbackBindHost(host) {
   if (!LOOPBACK_HOSTS.has(normalizeHostname(host))) {
-    throw securityError(500, 'NON_LOOPBACK_BIND_FORBIDDEN', 'MiaoHui local bridge must bind to a loopback host')
+    throw securityError(500, 'NON_LOOPBACK_BIND_FORBIDDEN', 'AEONQUILL local bridge must bind to a loopback host')
   }
 }
 

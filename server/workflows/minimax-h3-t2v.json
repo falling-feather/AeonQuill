@@ -117,7 +117,7 @@
     "class_type": "SaveVideo",
     "inputs": {
       "video": ["14", 0],
-      "filename_prefix": "MiaoHui/H3_T2V",
+      "filename_prefix": "AEONQUILL/H3_T2V",
       "format": "auto",
       "codec": "auto"
     },

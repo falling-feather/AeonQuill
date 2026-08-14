@@ -391,17 +391,23 @@ fn configured_child_environment(
 ) -> HashMap<OsString, OsString> {
     let mut environment = safe_child_environment();
     let forwarded_keys = [
+        "AEONQUILL_ALLOWED_ORIGINS",
         "MIAOHUI_ALLOWED_ORIGINS",
         "AEONQUILL_COMFY_POLICY",
         "AEONQUILL_COMFY_IDLE_SECONDS",
         "MIAOHUI_COMFY_POLICY",
         "MIAOHUI_COMFY_IDLE_SECONDS",
+        "AEONQUILL_IMAGE_CONCURRENCY",
         "MIAOHUI_IMAGE_CONCURRENCY",
         "COMFY_URL",
         "COMFY_ROOT",
         "COMFY_PYTHON",
         "FFMPEG_PATH",
         "FFPROBE_PATH",
+        "AEONQUILL_REMBG_PATH",
+        "AEONQUILL_REMBG_MODELS",
+        "AEONQUILL_REALESRGAN_PATH",
+        "AEONQUILL_REALESRGAN_MODELS",
         "MIAOHUI_REMBG_PATH",
         "MIAOHUI_REMBG_MODELS",
         "MIAOHUI_REALESRGAN_PATH",
@@ -428,6 +434,7 @@ fn configured_child_environment(
     );
     environment.insert("AEONQUILL_LOG_DIR".into(), log_directory.as_os_str().into());
     environment.insert("AEONQUILL_CONFIG".into(), config_path.as_os_str().into());
+    environment.insert("AEONQUILL_PARENT_CONTROL".into(), "stdio".into());
 
     // Mirror the original bridge contract until server-side migration is complete.
     environment.insert("MIAOHUI_PORT".into(), port.to_string().into());

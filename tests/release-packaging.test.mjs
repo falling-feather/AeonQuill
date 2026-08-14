@@ -45,6 +45,10 @@ test('desktop release identity and version mirrors resolve from package.json', a
     'AEONQUILL_CACHE_DIR',
     'AEONQUILL_LOG_DIR',
     'AEONQUILL_CONFIG',
+    'AEONQUILL_REMBG_PATH',
+    'AEONQUILL_REMBG_MODELS',
+    'AEONQUILL_REALESRGAN_PATH',
+    'AEONQUILL_REALESRGAN_MODELS',
   ]) {
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
@@ -122,6 +126,28 @@ test('packaging scripts contain no legacy MiaoHui artifact identities', async ()
     assert.doesNotMatch(combined, legacyPattern)
   }
   assert.match(combined, /MIAOHUI_RUNTIME_DIR/, 'Legacy MIAOHUI_* compatibility input must remain available')
+})
+
+test('new user-visible jobs and diagnostics use AEONQUILL while legacy protocols remain readable', async () => {
+  const [workflowBuilder, t2vTemplate, i2vTemplate, imageProcessor, projectStore, security, validator] = await Promise.all([
+    readFile(join(projectRoot, 'server', 'workflow-builder.mjs'), 'utf8'),
+    readFile(join(projectRoot, 'server', 'workflows', 'minimax-h3-t2v.json'), 'utf8'),
+    readFile(join(projectRoot, 'server', 'workflows', 'minimax-h3-i2v.json'), 'utf8'),
+    readFile(join(projectRoot, 'server', 'image-processor.mjs'), 'utf8'),
+    readFile(join(projectRoot, 'server', 'project-store.mjs'), 'utf8'),
+    readFile(join(projectRoot, 'server', 'security.mjs'), 'utf8'),
+    readFile(join(projectRoot, 'scripts', 'validate.mjs'), 'utf8'),
+  ])
+  for (const source of [workflowBuilder, t2vTemplate, i2vTemplate]) {
+    assert.doesNotMatch(source, /MiaoHui\/(?:T2V|I2V|H3_)/)
+    assert.match(source, /AEONQUILL\//)
+  }
+  assert.match(imageProcessor, /AEONQUILL_REMBG_MODELS/)
+  assert.doesNotMatch(imageProcessor, /请配置 MIAOHUI_REMBG_MODELS/)
+  assert.match(projectStore, /valid AEONQUILL archive/)
+  assert.match(security, /AEONQUILL local bridge/)
+  assert.match(validator, /AEONQUILL \$\{profile\} validation/)
+  assert.match(security, /miaohui_session/, 'Legacy session cookie remains a compatibility protocol')
 })
 
 test('Electron fallback package carries every server dependency that crosses into src', async () => {

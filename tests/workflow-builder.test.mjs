@@ -45,7 +45,7 @@ test('builds every supported mode, preset, duration, and aspect ratio offline', 
           assert.equal(metadata.frames, VIDEO_DURATIONS[duration])
           assert.equal(metadata.steps, VIDEO_PRESETS[preset].steps)
           assert.ok(metadata.dimensions.width > 0 && metadata.dimensions.height > 0)
-          assert.ok(workflow['15'].inputs.filename_prefix.startsWith('MiaoHui/'))
+          assert.ok(workflow['15'].inputs.filename_prefix.startsWith('AEONQUILL/'))
         }
       }
     }

@@ -489,7 +489,7 @@ export class ImageProcessor {
         // Fall back to a configured standalone CLI.
       }
     }
-    const explicit = process.env.MIAOHUI_REMBG_PATH || this.rembgPath
+    const explicit = process.env.AEONQUILL_REMBG_PATH || process.env.MIAOHUI_REMBG_PATH || this.rembgPath
     const command = !executableAdapter && explicit && await isFile(explicit)
       ? resolve(explicit)
       : !executableAdapter ? await findOnPath(['rembg.exe', 'rembg']) : null
@@ -502,20 +502,23 @@ export class ImageProcessor {
       }
     }
     if (!executableAdapter) return null
-    const modelDirectory = process.env.MIAOHUI_REMBG_MODELS
+    const modelDirectory = process.env.AEONQUILL_REMBG_MODELS
+      || process.env.MIAOHUI_REMBG_MODELS
       || this.rembgModelsPath
       || process.env.U2NET_HOME
       || join(homedir(), '.u2net')
     const models = await listRembgModels(modelDirectory)
     if (!models.length) {
-      this.rembgProbeReason = '已检测到 rembg，但离线目录中没有受支持的 ONNX 模型；请配置 MIAOHUI_REMBG_MODELS'
+      this.rembgProbeReason = '已检测到 rembg，但离线目录中没有受支持的 ONNX 模型；请在设置中选择模型目录，或配置 AEONQUILL_REMBG_MODELS'
       return null
     }
     return { ...executableAdapter, modelDirectory, models }
   }
 
   async probeRealEsrgan() {
-    const explicit = process.env.MIAOHUI_REALESRGAN_PATH || this.realEsrganPath
+    const explicit = process.env.AEONQUILL_REALESRGAN_PATH
+      || process.env.MIAOHUI_REALESRGAN_PATH
+      || this.realEsrganPath
     const command = explicit && await isFile(explicit)
       ? resolve(explicit)
       : await findOnPath(['realesrgan-ncnn-vulkan.exe', 'realesrgan-ncnn-vulkan'])
@@ -525,7 +528,8 @@ export class ImageProcessor {
     } catch {
       return null
     }
-    const modelDirectory = process.env.MIAOHUI_REALESRGAN_MODELS
+    const modelDirectory = process.env.AEONQUILL_REALESRGAN_MODELS
+      || process.env.MIAOHUI_REALESRGAN_MODELS
       || this.realEsrganModelsPath
       || join(dirname(command), 'models')
     const models = await listRealEsrganModels(modelDirectory)

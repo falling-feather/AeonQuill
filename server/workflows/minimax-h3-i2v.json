@@ -118,7 +118,7 @@
     "class_type": "SaveVideo",
     "inputs": {
       "video": ["14", 0],
-      "filename_prefix": "MiaoHui/H3_I2V",
+      "filename_prefix": "AEONQUILL/H3_I2V",
       "format": "auto",
       "codec": "auto"
     },
@@ -126,7 +126,7 @@
   },
   "16": {
     "class_type": "LoadImage",
-    "inputs": { "image": "miaohui-input.png" },
+    "inputs": { "image": "aeonquill-input.png" },
     "_meta": { "title": "规范化首帧" }
   }
 }

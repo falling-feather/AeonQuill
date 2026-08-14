@@ -14,7 +14,7 @@ MODEL_MD5 = {
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="MiaoHui controlled rembg runner")
+    parser = argparse.ArgumentParser(description="AEONQUILL controlled rembg runner")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model", required=True, choices=("u2netp", "u2net"))
