@@ -47,3 +47,12 @@ export function resolveCollectionState(input: {
   itemCount: number
   recoveredCount: number
 }): CollectionState
+export function resolvePixelDraftEntry(input: {
+  requestedProjectId?: string
+  status: 'empty' | 'ready' | 'error'
+  documentId?: string
+}): {
+  hasMemoryDocument: boolean
+  requestedDraftMissing: boolean
+  unreadable: boolean
+}

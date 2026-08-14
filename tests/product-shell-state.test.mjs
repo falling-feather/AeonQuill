@@ -7,6 +7,7 @@ import {
   parseShellPreferences,
   parseSmartVideoSession,
   resolveCollectionState,
+  resolvePixelDraftEntry,
   serializeShellPreferences,
   serializeSmartVideoSession,
 } from '../src/shell/productShellState.mjs'
@@ -78,4 +79,25 @@ test('collection state distinguishes loading, error, empty, recovered and stable
   assert.equal(resolveCollectionState({ loading: false, error: false, itemCount: 0, recoveredCount: 0 }), 'empty')
   assert.equal(resolveCollectionState({ loading: false, error: false, itemCount: 2, recoveredCount: 2 }), 'recovered')
   assert.equal(resolveCollectionState({ loading: false, error: false, itemCount: 2, recoveredCount: 0 }), 'ready')
+})
+
+test('pixel draft entry keeps a matching in-memory document usable after persistence failure', () => {
+  assert.deepEqual(resolvePixelDraftEntry({
+    requestedProjectId: 'large-draft',
+    status: 'error',
+    documentId: 'large-draft',
+  }), {
+    hasMemoryDocument: true,
+    requestedDraftMissing: false,
+    unreadable: false,
+  })
+  assert.equal(resolvePixelDraftEntry({
+    requestedProjectId: 'old-draft',
+    status: 'error',
+    documentId: 'large-draft',
+  }).requestedDraftMissing, true)
+  assert.equal(resolvePixelDraftEntry({
+    requestedProjectId: 'missing-draft',
+    status: 'error',
+  }).unreadable, true)
 })

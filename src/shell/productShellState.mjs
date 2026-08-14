@@ -148,3 +148,14 @@ export function resolveCollectionState({ loading, error, itemCount, recoveredCou
   if (recoveredCount > 0) return 'recovered'
   return 'ready'
 }
+
+export function resolvePixelDraftEntry({ requestedProjectId, status, documentId }) {
+  const requested = normalizeProjectReference(requestedProjectId)
+  const currentDocumentId = normalizeProjectReference(documentId)
+  const hasMemoryDocument = Boolean(currentDocumentId)
+  return {
+    hasMemoryDocument,
+    requestedDraftMissing: Boolean(requested && requested !== currentDocumentId),
+    unreadable: status === 'error' && !hasMemoryDocument,
+  }
+}

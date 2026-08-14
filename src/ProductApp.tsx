@@ -31,6 +31,7 @@ import {
   parseSmartVideoSession,
   PRODUCT_SHELL_PREFERENCES_KEY,
   resolveCollectionState,
+  resolvePixelDraftEntry,
   serializeShellPreferences,
   serializeSmartVideoSession,
   SMART_VIDEO_SESSION_KEY,
@@ -664,6 +665,9 @@ export default function ProductApp() {
         document: next,
         error: '像素草稿仍在当前页面，但浏览器存储失败；刷新页面前请先导出。',
       })
+      if (route.modeId === 'pixel' && route.projectId !== next.id) {
+        replaceModeProjectReference('pixel', next.id)
+      }
       setModeNotice({ tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
     }
   }, [replaceModeProjectReference, route.modeId, route.projectId])
@@ -831,9 +835,12 @@ export default function ProductApp() {
 
   if (route.modeId === 'pixel') {
     const requestedProjectId = route.projectId
-    const requestedDraftMissing = requestedProjectId && (
-      !pixelDraft.document || pixelDraft.document.id !== requestedProjectId
-    )
+    const pixelEntry = resolvePixelDraftEntry({
+      requestedProjectId,
+      status: pixelDraft.status,
+      documentId: pixelDraft.document?.id,
+    })
+    const requestedDraftMissing = pixelEntry.requestedDraftMissing
     if (requestedDraftMissing && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
@@ -851,7 +858,7 @@ export default function ProductApp() {
         />
       )
     }
-    if (pixelDraft.status === 'error' && !pixelDraft.document && entryIntentKey !== currentRouteKey) {
+    if (pixelEntry.unreadable && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="像素模式"
@@ -888,7 +895,7 @@ export default function ProductApp() {
     return (
       <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
         <PixelModeWorkbench
-          initialDocument={pixelDraft.document}
+          initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
           onBack={goHome}
           onDocumentChange={handlePixelChange}
           onSpriteSheetReady={handleSpriteSheetExport}

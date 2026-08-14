@@ -31,6 +31,7 @@ export {
   parseSmartVideoSession,
   PRODUCT_SHELL_PREFERENCES_KEY,
   resolveCollectionState,
+  resolvePixelDraftEntry,
   serializeShellPreferences,
   serializeSmartVideoSession,
   SMART_VIDEO_SESSION_KEY,
