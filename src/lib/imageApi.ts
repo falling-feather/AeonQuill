@@ -2,6 +2,8 @@ import type {
   ImageJobRequest,
   ImageToolManifest,
   ProcessingJob,
+  SemanticElementExtractRequest,
+  SemanticWorkflowManifest,
 } from '../types'
 import { ensureLocalSession } from './videoApi'
 
@@ -17,6 +19,10 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function fetchImageTools(refresh = false) {
   return api<ImageToolManifest>(`/api/image-tools${refresh ? '?refresh=1' : ''}`)
+}
+
+export function fetchSemanticWorkflows(refresh = false) {
+  return api<SemanticWorkflowManifest>(`/api/semantic-workflows${refresh ? '?refresh=1' : ''}`)
 }
 
 export async function normalizeImageSource(source: string) {
@@ -39,6 +45,18 @@ export async function createImageJob(request: ImageJobRequest) {
     headers: {
       'content-type': 'application/json',
       'idempotency-key': `image-${crypto.randomUUID()}`,
+    },
+    body: JSON.stringify(request),
+  })
+  return payload.job
+}
+
+export async function createSemanticElementJob(request: SemanticElementExtractRequest) {
+  const payload = await api<{ job: ProcessingJob }>('/api/jobs/semantic-image', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'idempotency-key': `semantic-image-${crypto.randomUUID()}`,
     },
     body: JSON.stringify(request),
   })

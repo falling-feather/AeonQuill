@@ -105,6 +105,46 @@ export class ComfyClient {
     return result.subfolder ? `${result.subfolder}/${result.name}` : result.name
   }
 
+  async prepareSamImage(imageReference, signal) {
+    const normalized = String(imageReference || '').replace(/\\/g, '/')
+    const segments = normalized.split('/').filter(Boolean)
+    const filename = segments.pop()
+    if (
+      !filename
+      || ![...segments, filename].every((segment) => /^[a-zA-Z0-9._-]+$/.test(segment) && segment !== '.' && segment !== '..')
+    ) {
+      throw Object.assign(new Error('Invalid managed image reference for SAM'), {
+        code: 'INVALID_COMFY_IMAGE_REFERENCE',
+      })
+    }
+    const response = await this.request('/sam/prepare', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sam_model_name: 'sam_vit_b_01ec64.pth',
+        filename,
+        type: 'input',
+        subfolder: segments.join('/'),
+      }),
+      signal,
+    }, 30_000)
+    await response.arrayBuffer()
+  }
+
+  async detectSamMask({ positivePoints, negativePoints, threshold }, signal) {
+    const response = await this.request('/sam/detect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ positive_points: positivePoints, negative_points: negativePoints, threshold }),
+      signal,
+    }, 180_000)
+    return Buffer.from(await response.arrayBuffer())
+  }
+
+  async releaseSam() {
+    await this.request('/sam/release', { method: 'POST' }, 10_000).catch(() => {})
+  }
+
   async queuePrompt(prompt, clientId, signal) {
     const response = await this.request('/prompt', {
       method: 'POST',

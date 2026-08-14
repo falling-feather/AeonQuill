@@ -14,6 +14,7 @@ export type ImageToolId =
   | 'adjust'
   | 'crop'
   | 'remove-background'
+  | 'element-extract'
   | 'mask-refine'
   | 'pixelate'
   | 'upscale'
@@ -98,6 +99,7 @@ export type ImageOperationId =
   | 'alpha-cleanup'
   | 'remove-background'
   | 'upscale-realesrgan'
+  | 'semantic-element-extract'
 
 export type ImageToolCapability = {
   id: ImageOperationId
@@ -120,6 +122,66 @@ export type ImageToolManifest = {
     maxOutputPixels: number
   }
   operations: ImageToolCapability[]
+}
+
+export type SemanticPoint = {
+  x: number
+  y: number
+}
+
+export type SemanticWorkflowStatus =
+  | 'ready'
+  | 'runtime-stopped'
+  | 'missing-dependency'
+  | 'node-mismatch'
+  | 'template-pending'
+
+export type SemanticWorkflowCapability = {
+  id: 'element-extract' | 'region-edit' | 'point-edit' | 'portrait-adjust'
+  operation?: ImageOperationId
+  version: string
+  label: string
+  description: string
+  maturity: 'preview' | 'experimental' | 'planned'
+  implemented: boolean
+  available: boolean
+  installed: boolean
+  status: SemanticWorkflowStatus
+  message: string
+  missingExtensions: string[]
+  missingArtifacts: string[]
+  missingNodes: string[]
+  resources: {
+    class: 'cpu' | 'gpu'
+    minVramGb: number
+    recommendedVramGb: number
+    timeoutSeconds: number
+  }
+  inputs: Record<string, unknown>
+  outputs: string[]
+}
+
+export type SemanticWorkflowManifest = {
+  version: string
+  checkedAt: number
+  runtime: {
+    connected: boolean
+    lifecycle: string
+    device?: string
+    vramTotal: number
+  }
+  workflows: SemanticWorkflowCapability[]
+}
+
+export type SemanticElementExtractRequest = {
+  workflowId: 'element-extract'
+  sourceImageDataUrl: string
+  sourceElementId?: string
+  params: {
+    positivePoints: SemanticPoint[]
+    negativePoints: SemanticPoint[]
+    threshold: number
+  }
 }
 
 export type ImageJobRequest = {
@@ -236,14 +298,21 @@ export type ProcessingJob = {
   retryOf?: string
   scheduling?: ProcessingJobScheduling
   costEvents?: ProcessingJobCostEvent[]
-  workflowMetadata?: {
-    dimensions: { width: number; height: number }
-    frames: number
-    fps: number
-    steps: number
-    lowVram: boolean
-    audio: boolean
-  }
+  workflowMetadata?:
+    | {
+        dimensions: { width: number; height: number }
+        frames: number
+        fps: number
+        steps: number
+        lowVram: boolean
+        audio: boolean
+      }
+    | {
+        version: string
+        positivePoints: number
+        negativePoints: number
+        threshold: number
+      }
   request?:
     | (Omit<VideoJobRequest, 'sourceImageDataUrl' | 'lastFrameImageDataUrl'> & { hasLastFrame?: boolean })
     | StoredImageJobRequest
@@ -252,10 +321,12 @@ export type ProcessingJob = {
   sampleStep?: number
   sampleSteps?: number
   outputUrl?: string
+  maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
   output?:
     | {
         filename: string
+        maskFilename?: string
         width: number
         height: number
         mimeType: string

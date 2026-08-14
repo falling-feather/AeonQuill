@@ -9,10 +9,17 @@ import {
   SlidersHorizontal,
   Sparkles,
   RefreshCw,
+  ScanSearch,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createImageJob, fetchImageTools, normalizeImageSource } from '../lib/imageApi'
+import {
+  createImageJob,
+  createSemanticElementJob,
+  fetchImageTools,
+  fetchSemanticWorkflows,
+  normalizeImageSource,
+} from '../lib/imageApi'
 import {
   createBackgroundPreview,
   createCropPreview,
@@ -34,8 +41,11 @@ import type {
   ProcessingJob,
   MaskDraft,
   MaskRecipe,
+  SemanticPoint,
+  SemanticWorkflowManifest,
 } from '../types'
 import { MaskEditor } from './MaskEditor'
+import { SemanticPointEditor } from './SemanticPointEditor'
 
 export type ImageLabResult =
   | {
@@ -75,6 +85,7 @@ const modeDefinitions: Array<{
   { id: 'crop', label: '裁剪', icon: Crop },
   { id: 'pixelate', label: '像素化', icon: Grid3X3 },
   { id: 'remove-background', label: '去背景', icon: Eraser },
+  { id: 'element-extract', label: '元素提取', icon: ScanSearch },
   { id: 'mask-refine', label: '蒙版修边', icon: Paintbrush },
   { id: 'upscale', label: '放大', icon: ImageUp },
   { id: 'sharpen', label: '锐化', icon: Sparkles },
@@ -105,6 +116,11 @@ const modeCopy: Record<ImageLabMode, {
     jobLabel: '背景移除草稿',
     previewLabel: '透明背景草稿',
     chains: ['背景估计', 'Alpha 草稿', '边缘柔化'],
+  },
+  'element-extract': {
+    jobLabel: 'SAM 元素提取',
+    previewLabel: '点击选择元素',
+    chains: ['点击提示与坐标校验', 'SAM 语义分割', '透明元素与蒙版入库'],
   },
   'mask-refine': {
     jobLabel: '蒙版边缘修正',
@@ -145,6 +161,7 @@ function capabilityHint(capability?: ImageToolCapability) {
       : `${capability.provider} · 本机模型处理`
   }
   if (capability.id === 'remove-background') return '未检测到 rembg；可先使用浅色背景浏览器草稿'
+  if (capability.id === 'semantic-element-extract') return capability.unavailableReason ?? '未检测到 Impact SAM 工作流'
   if (capability.id === 'upscale-realesrgan') return '未检测到 Real-ESRGAN 可执行文件与模型'
   return capability.unavailableReason ?? '当前处理器不可用'
 }
@@ -254,6 +271,12 @@ export function ImageLab({
   const [upscaleProcessor, setUpscaleProcessor] = useState<ImageOperationId>('upscale-realesrgan')
   const [executionMode, setExecutionMode] = useState<'local' | 'server'>('local')
   const [toolManifest, setToolManifest] = useState<ImageToolManifest | null>(null)
+  const [semanticManifest, setSemanticManifest] = useState<SemanticWorkflowManifest | null>(null)
+  const [semanticPoints, setSemanticPoints] = useState<{
+    positivePoints: SemanticPoint[]
+    negativePoints: SemanticPoint[]
+  }>({ positivePoints: [], negativePoints: [] })
+  const [semanticThreshold, setSemanticThreshold] = useState(90)
   const [capabilityLoading, setCapabilityLoading] = useState(true)
   const [capabilityError, setCapabilityError] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -270,15 +293,46 @@ export function ImageLab({
     () => new Map(toolManifest?.operations.map((capability) => [capability.id, capability]) ?? []),
     [toolManifest],
   )
+  const semanticWorkflow = useMemo(
+    () => semanticManifest?.workflows.find((workflow) => workflow.id === 'element-extract'),
+    [semanticManifest],
+  )
+  const semanticCapability = useMemo<ImageToolCapability | undefined>(() => {
+    if (!semanticWorkflow) return undefined
+    const runnableOnDemand = semanticWorkflow.implemented
+      && semanticWorkflow.installed
+      && ['ready', 'runtime-stopped'].includes(semanticWorkflow.status)
+    return {
+      id: 'semantic-element-extract',
+      label: semanticWorkflow.label,
+      category: 'segmentation',
+      provider: 'comfy-impact-sam',
+      deterministic: false,
+      available: runnableOnDemand,
+      unavailableReason: semanticWorkflow.message,
+      models: semanticWorkflow.missingArtifacts.length ? [] : ['sam-vit-b'],
+      params: semanticWorkflow.inputs,
+    }
+  }, [semanticWorkflow])
   const remoteOperation: ImageOperationId | null = mode === 'upscale'
     ? upscaleProcessor
+    : mode === 'element-extract'
+      ? 'semantic-element-extract'
     : mode === 'pixelate' || mode === 'remove-background' || mode === 'sharpen' || mode === 'alpha-cleanup'
       ? mode
       : null
-  const activeCapability = remoteOperation ? capabilities.get(remoteOperation) : undefined
+  const activeCapability = remoteOperation === 'semantic-element-extract'
+    ? semanticCapability
+    : remoteOperation
+      ? capabilities.get(remoteOperation)
+      : undefined
   const hasLocalPreview = localPreviewModes.has(mode)
-  const canRunRemote = Boolean(activeCapability?.available)
   const isMaskEditor = mode === 'mask-refine'
+  const isSemanticEditor = mode === 'element-extract'
+  const canRunRemote = Boolean(
+    activeCapability?.available
+    && (!isSemanticEditor || semanticPoints.positivePoints.length > 0),
+  )
 
   const handleMaskChange = useCallback((draft: MaskDraft | null) => {
     setMaskDraft(draft)
@@ -290,13 +344,18 @@ export function ImageLab({
     setCapabilityLoading(true)
     setCapabilityError(null)
     try {
-      const manifest = await fetchImageTools(refresh)
+      const [manifest, semantic] = await Promise.all([
+        fetchImageTools(refresh),
+        fetchSemanticWorkflows(refresh),
+      ])
       setToolManifest(manifest)
+      setSemanticManifest(semantic)
       const realEsrgan = manifest.operations.find((item) => item.id === 'upscale-realesrgan')
       const lanczos = manifest.operations.find((item) => item.id === 'upscale-lanczos')
       if (!realEsrgan?.available && lanczos?.available) setUpscaleProcessor('upscale-lanczos')
     } catch (reason) {
       setToolManifest(null)
+      setSemanticManifest(null)
       setCapabilityError(reason instanceof Error ? reason.message : '无法读取本地图像能力')
     } finally {
       setCapabilityLoading(false)
@@ -312,12 +371,20 @@ export function ImageLab({
       setExecutionMode('local')
       return
     }
+    if (mode === 'element-extract') {
+      setExecutionMode('server')
+      return
+    }
     if (activeCapability?.available) {
       setExecutionMode('server')
     } else if (hasLocalPreview) {
       setExecutionMode('local')
     }
   }, [activeCapability?.available, hasLocalPreview, mode, remoteOperation])
+
+  useEffect(() => {
+    setSemanticPoints({ positivePoints: [], negativePoints: [] })
+  }, [source])
 
   useEffect(() => {
     setPreviewUrl(null)
@@ -416,7 +483,7 @@ export function ImageLab({
   }
 
   const submitRemoteJob = async () => {
-    if (!source || isGenerating || !remoteOperation || !activeCapability?.available) return
+    if (!source || isGenerating || !remoteOperation || !canRunRemote) return
     setIsGenerating(true)
     setProgress(8)
     setError(null)
@@ -437,7 +504,7 @@ export function ImageLab({
           : remoteOperation === 'upscale-realesrgan'
             ? {
                 scale: upscaleSettings.scale,
-                model: activeCapability.models?.[0],
+                model: activeCapability?.models?.[0],
                 tileSize: upscaleSettings.tileSize,
               }
             : remoteOperation === 'sharpen'
@@ -453,12 +520,23 @@ export function ImageLab({
       setProgress(24)
       const sourceImageDataUrl = await normalizeImageSource(source)
       setProgress(52)
-      const job = await createImageJob({
-        operation: remoteOperation,
-        sourceImageDataUrl,
-        sourceElementId: element.id,
-        params,
-      })
+      const job = remoteOperation === 'semantic-element-extract'
+        ? await createSemanticElementJob({
+            workflowId: 'element-extract',
+            sourceImageDataUrl,
+            sourceElementId: element.id,
+            params: {
+              positivePoints: semanticPoints.positivePoints,
+              negativePoints: semanticPoints.negativePoints,
+              threshold: semanticThreshold / 100,
+            },
+          })
+        : await createImageJob({
+            operation: remoteOperation,
+            sourceImageDataUrl,
+            sourceElementId: element.id,
+            params,
+          })
       onJobUpdate(job)
       setProgress(100)
       onClose()
@@ -614,6 +692,15 @@ export function ImageLab({
                     label={element.name}
                     disabled={isGenerating}
                     onChange={handleMaskChange}
+                  />
+                ) : isSemanticEditor ? (
+                  <SemanticPointEditor
+                    source={source}
+                    label={element.name}
+                    positivePoints={semanticPoints.positivePoints}
+                    negativePoints={semanticPoints.negativePoints}
+                    disabled={isGenerating}
+                    onChange={setSemanticPoints}
                   />
                 ) : previewSource ? (
                   <img
@@ -906,6 +993,34 @@ export function ImageLab({
                       softness,
                     }))}
                   />
+                </div>
+              ) : null}
+
+              {mode === 'element-extract' ? (
+                <div className="lab-setting-group">
+                  <div className="lab-info-callout">
+                    <ScanSearch size={16} />
+                    <p>
+                      在元素内部添加至少一个绿色选择点；如蒙版粘连背景，可在背景区域添加红色排除点。
+                      任务会按需启动本机 ComfyUI 与 Impact SAM，原图不会发送到外部服务。
+                    </p>
+                  </div>
+                  <div className="semantic-recipe-summary">
+                    <span>元素点</span>
+                    <strong>{semanticPoints.positivePoints.length}</strong>
+                    <span>排除点</span>
+                    <strong>{semanticPoints.negativePoints.length}</strong>
+                  </div>
+                  <RangeSetting
+                    label="蒙版置信阈值"
+                    value={semanticThreshold}
+                    min={50}
+                    max={99}
+                    onChange={setSemanticThreshold}
+                  />
+                  {semanticPoints.positivePoints.length === 0 ? (
+                    <p className="semantic-point-required">请先在预览图中点击要提取的元素。</p>
+                  ) : null}
                 </div>
               ) : null}
 

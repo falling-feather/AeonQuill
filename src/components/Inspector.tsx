@@ -26,6 +26,7 @@ import {
   Unlock,
   Video,
   RotateCcw,
+  ScanSearch,
   Square,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -91,6 +92,7 @@ const imageTools: Array<{
   { id: 'adjust', label: '调整', hint: '色彩参数', icon: SlidersHorizontal },
   { id: 'crop', label: '裁剪', hint: '画幅与焦点', icon: Crop },
   { id: 'remove-background', label: '去背景', hint: '本机模型 / 草稿回退', icon: Eraser },
+  { id: 'element-extract', label: '元素提取', hint: 'ComfyUI · SAM 点击分割', icon: ScanSearch },
   { id: 'mask-refine', label: '蒙版修边', hint: '移除 / 恢复 Alpha', icon: Paintbrush },
   { id: 'pixelate', label: '像素化', hint: '量化与抖动', icon: Layers3 },
   { id: 'upscale', label: '超分放大', hint: 'Real-ESRGAN / Lanczos / 草稿', icon: ImageUp },
@@ -385,7 +387,7 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
                     {usage ? <span>{(usage.quantity / 1000).toFixed(1)}s 本机算力</span> : null}
                   </div>
                 ) : null}
-                {job.kind === 'video' && job.workflowMetadata ? (
+                {job.kind === 'video' && job.workflowMetadata && 'dimensions' in job.workflowMetadata ? (
                   <div className="job-metadata">
                     <span>{job.workflowMetadata.dimensions.width}×{job.workflowMetadata.dimensions.height}</span>
                     <span>{job.workflowMetadata.steps} 步</span>

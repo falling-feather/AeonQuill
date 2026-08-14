@@ -18,6 +18,12 @@ import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store
 import { ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
 import { projectRoot, runtimeDirectory } from './runtime-paths.mjs'
 import {
+  probeSemanticWorkflowCatalog,
+  SEMANTIC_ELEMENT_EXTRACT_OPERATION,
+  SEMANTIC_WORKFLOW_CATALOG_VERSION,
+  validateElementExtractRequest,
+} from './semantic-workflow-registry.mjs'
+import {
   createRestrictedChildEnvironment,
   LocalBridgeSecurity,
   redactSensitiveText,
@@ -90,7 +96,11 @@ const requestedImageConcurrency = Number(process.env.MIAOHUI_IMAGE_CONCURRENCY |
 const imageJobConcurrency = Number.isFinite(requestedImageConcurrency)
   ? Math.max(1, Math.min(2, Math.round(requestedImageConcurrency)))
   : 1
-const gpuImageOperations = new Set(['remove-background', 'upscale-realesrgan'])
+const gpuImageOperations = new Set([
+  'remove-background',
+  'upscale-realesrgan',
+  SEMANTIC_ELEMENT_EXTRACT_OPERATION,
+])
 const scheduler = new JobScheduler({
   store,
   resourceLimits: { cpu: imageJobConcurrency, gpu: 1 },
@@ -346,6 +356,19 @@ async function inspectRuntime(force = false) {
   return runtimeCache
 }
 
+async function inspectSemanticWorkflows(force = false) {
+  const runtime = await inspectRuntime(force)
+  let objectInfo
+  if (runtime.connected) {
+    objectInfo = await comfy.objectInfo().catch(() => undefined)
+  }
+  return probeSemanticWorkflowCatalog({
+    comfyRoot: localRuntimeConfig.comfyRoot,
+    objectInfo,
+    runtime,
+  })
+}
+
 const IDEMPOTENCY_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}$/
 
 function canonicalJson(value) {
@@ -469,6 +492,7 @@ const imageOperationLabels = {
   'alpha-cleanup': '透明边清理',
   'remove-background': 'AI 去背景',
   'upscale-realesrgan': 'Real-ESRGAN 超分',
+  [SEMANTIC_ELEMENT_EXTRACT_OPERATION]: 'SAM 元素提取',
 }
 
 function newImageJob(request, inputPath, options = {}) {
@@ -495,7 +519,11 @@ function newImageJob(request, inputPath, options = {}) {
     detail: '等待本地图像处理器',
     createdAt: now,
     updatedAt: now,
-    workflowVersion: 'image-tools-v1',
+    workflowVersion: request.workflowVersion || (
+      request.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
+        ? SEMANTIC_WORKFLOW_CATALOG_VERSION
+        : 'image-tools-v1'
+    ),
     requestHash: options.requestHash,
     retryOf: options.retryOf,
     scheduling,
@@ -545,9 +573,203 @@ function normalizeImageError(error, operation) {
   }
 }
 
+function normalizeSemanticImageError(error) {
+  const message = redactSensitiveText(String(error?.message || '未知语义图像处理错误'))
+  if (error?.code === 'SEMANTIC_WORKFLOW_UNAVAILABLE' || error?.status === 409) {
+    return {
+      code: 'SEMANTIC_WORKFLOW_UNAVAILABLE',
+      title: '语义工作流尚不可用',
+      message,
+      suggestions: ['刷新 ComfyUI 语义能力状态', '检查 Impact Pack 与本地 SAM 权重'],
+    }
+  }
+  if (/SAM did not return|semantic points|mask/i.test(message)) {
+    return {
+      code: 'SEMANTIC_MASK_NOT_FOUND',
+      title: '没有找到稳定元素蒙版',
+      message,
+      suggestions: ['把正向点放在元素内部', '在背景处增加负向点', '适当降低置信阈值'],
+    }
+  }
+  return {
+    code: 'SEMANTIC_IMAGE_FAILED',
+    title: '语义图像处理失败',
+    message,
+    suggestions: ['检查 ComfyUI 日志与节点注册', '确认显存释放后重试'],
+  }
+}
+
+async function runSemanticElementExtractJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  const normalizedInputPath = join(inputDirectory, `${job.id}-sam-source.png`)
+  const maskFilename = `${job.id}-sam-mask.png`
+  const maskPath = join(assetDirectory, maskFilename)
+  const outputFilename = `${job.id}-element.png`
+  const outputPath = join(assetDirectory, outputFilename)
+  const temporaryOutputPath = join(assetDirectory, `${job.id}-element.part.png`)
+  const managedUploadFilename = `aeonquill-${job.id}.png`
+  const managedComfyInputPath = localRuntimeConfig.comfyRoot
+    ? join(localRuntimeConfig.comfyRoot, 'input', managedUploadFilename)
+    : undefined
+  let completed = false
+  try {
+    await store.update(jobId, {
+      outputPath,
+      temporaryOutputPath,
+      status: 'running',
+      phase: 'preparing',
+      progress: 4,
+      detail: '按需启动 ComfyUI 语义运行时',
+    })
+    await store.log(jobId, 'info', '已取得共享 GPU 执行器，准备 Impact SAM')
+    await runtimeManager.ensureReady({ reason: `semantic:${jobId}` })
+    runtimeCache = null
+    const catalog = await inspectSemanticWorkflows(true)
+    const workflow = catalog.workflows.find((item) => item.id === 'element-extract')
+    if (!workflow?.available) {
+      const error = new Error(workflow?.message || 'Element extraction workflow is unavailable')
+      error.code = 'SEMANTIC_WORKFLOW_UNAVAILABLE'
+      error.status = 409
+      error.details = {
+        missingExtensions: workflow?.missingExtensions,
+        missingArtifacts: workflow?.missingArtifacts,
+        missingNodes: workflow?.missingNodes,
+      }
+      throw error
+    }
+
+    await store.update(jobId, { progress: 12, detail: '校验图片尺寸与点击坐标' })
+    const input = await imageProcessor.dimensions(job.inputPath, signal)
+    if (input.width * input.height > 40_000_000) {
+      throw Object.assign(new Error('Semantic element extraction input exceeds 40 megapixels'), { status: 400 })
+    }
+    const toPixels = (points) => points.map(({ x, y }) => [
+      Math.max(0, Math.min(input.width - 1, Math.round(x * (input.width - 1)))),
+      Math.max(0, Math.min(input.height - 1, Math.round(y * (input.height - 1)))),
+    ])
+
+    await runProcess(ffmpegPath, [
+      '-y', '-i', job.inputPath,
+      '-frames:v', '1',
+      '-vf', 'format=rgba',
+      normalizedInputPath,
+    ], 2 * 60_000, signal)
+    await store.update(jobId, { progress: 22, detail: '上传受管图片到本机 SAM' })
+    const imageReference = await comfy.uploadImage(normalizedInputPath, managedUploadFilename, signal)
+    await comfy.prepareSamImage(imageReference, signal)
+
+    await store.update(jobId, { phase: 'processing', progress: 34, detail: '加载 SAM 并计算点击提示' })
+    let maskBytes
+    let lastError
+    for (let attempt = 0; attempt < 80 && !maskBytes; attempt += 1) {
+      if (attempt > 0) await abortableDelay(750, signal)
+      try {
+        maskBytes = await comfy.detectSamMask({
+          positivePoints: toPixels(job.request.params.positivePoints),
+          negativePoints: toPixels(job.request.params.negativePoints),
+          threshold: job.request.params.threshold,
+        }, signal)
+      } catch (error) {
+        lastError = error
+        if (error?.status !== 400) throw error
+      }
+      if (attempt === 12) {
+        await store.update(jobId, { progress: 48, detail: 'SAM 首次加载仍在进行，请稍候' })
+      }
+    }
+    if (!maskBytes?.length) {
+      throw Object.assign(new Error(`SAM did not return a mask${lastError ? `: ${lastError.message}` : ''}`), {
+        code: 'SEMANTIC_MASK_NOT_FOUND',
+      })
+    }
+    await writeFile(maskPath, maskBytes, { flag: 'wx' })
+
+    await store.update(jobId, { progress: 76, detail: '合成透明元素并保留原图' })
+    await runProcess(ffmpegPath, [
+      '-y', '-i', normalizedInputPath, '-i', maskPath,
+      '-filter_complex', '[0:v]format=rgba[base];[1:v]format=gray[mask];[base][mask]alphamerge',
+      '-frames:v', '1',
+      temporaryOutputPath,
+    ], 2 * 60_000, signal)
+    await rename(temporaryOutputPath, outputPath)
+    const output = await imageProcessor.dimensions(outputPath, signal)
+    const outputInfo = await stat(outputPath)
+    const latest = store.get(jobId)
+    if (latest?.cancelRequested) return
+
+    await store.update(jobId, { phase: 'saving', progress: 94, detail: '登记蒙版与透明元素版本' })
+    const outputVersion = await describeOutputVersion(job, outputPath, 'image/png')
+    await store.log(jobId, 'success', `SAM 已提取 ${output.width}×${output.height} 透明元素`)
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: '元素提取完成，可以回填画布并继续修边',
+      outputUrl: `/api/assets/${encodeURIComponent(outputFilename)}`,
+      maskUrl: `/api/assets/${encodeURIComponent(maskFilename)}`,
+      output: {
+        filename: outputFilename,
+        maskFilename,
+        width: output.width,
+        height: output.height,
+        mimeType: 'image/png',
+        bytes: outputInfo.size,
+        provider: 'comfy-impact-sam',
+      },
+      workflowMetadata: {
+        version: job.request.workflowVersion,
+        positivePoints: job.request.params.positivePoints.length,
+        negativePoints: job.request.params.negativePoints.length,
+        threshold: job.request.params.threshold,
+      },
+      outputVersion,
+      completedAt: Date.now(),
+      temporaryOutputPath: undefined,
+    })
+    completed = true
+  } catch (error) {
+    const latest = store.get(jobId)
+    if (signal.reason?.code === 'JOB_TIMEOUT') throw error
+    if (error.name === 'AbortError' || latest?.cancelRequested || signal.reason?.code === 'JOB_CANCELLED') {
+      await store.update(jobId, {
+        status: 'cancelled',
+        phase: 'cancelled',
+        detail: '元素提取任务已取消',
+      })
+      await store.log(jobId, 'warning', 'SAM 元素提取已由用户取消')
+      return
+    }
+    const normalized = normalizeSemanticImageError(error)
+    await store.log(jobId, 'error', `${normalized.code}：${normalized.message}`)
+    await store.update(jobId, {
+      status: 'failed',
+      phase: 'failed',
+      detail: normalized.title,
+      error: normalized,
+    })
+  } finally {
+    await unlink(normalizedInputPath).catch(() => {})
+    await unlink(temporaryOutputPath).catch(() => {})
+    if (managedComfyInputPath) {
+      const comfyInputRoot = join(localRuntimeConfig.comfyRoot, 'input')
+      await unlink(assertManagedPrivatePath(managedComfyInputPath, comfyInputRoot)).catch(() => {})
+    }
+    if (!completed) {
+      await unlink(outputPath).catch(() => {})
+      await unlink(maskPath).catch(() => {})
+    }
+    await comfy.releaseSam()
+    await scheduleRuntimeIdleStop()
+  }
+}
+
 async function runImageJob(jobId, { signal }) {
   const job = store.get(jobId)
   if (!job) return
+  if (job.request.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION) {
+    return runSemanticElementExtractJob(jobId, { signal })
+  }
   const outputFilename = `${job.id}-${job.request.operation}.png`
   const outputPath = join(assetDirectory, outputFilename)
   try {
@@ -1014,6 +1236,56 @@ async function createImageJob(body, retrySource, options = {}) {
   return { job: store.publicJob(store.get(job.id)), reused: false }
 }
 
+async function createSemanticImageJob(body, retrySource, options = {}) {
+  const request = retrySource
+    ? structuredClone(retrySource.request)
+    : validateElementExtractRequest(body)
+  if (request.operation !== SEMANTIC_ELEMENT_EXTRACT_OPERATION) {
+    throw Object.assign(new Error('Stored semantic image task is not executable'), {
+      status: 409,
+      code: 'SEMANTIC_WORKFLOW_NOT_EXECUTABLE',
+    })
+  }
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('semantic-image-retry', {
+        sourceJobId: retrySource.id,
+        sourceRequestHash: retrySource.requestHash,
+        attempt,
+      })
+    : hashRequest('semantic-image', body)
+  const existing = existingIdempotentJob('image', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+
+  let inputPath = retrySource?.inputPath
+    ? assertManagedPrivatePath(retrySource.inputPath, inputDirectory)
+    : undefined
+  const decoded = inputPath ? null : decodeImageAssetDataUrl(body.sourceImageDataUrl)
+  await assertStorageCapacity(runtimeDirectory, Math.max(128 * 1024 * 1024, (decoded?.bytes.length || 0) * 12))
+  const job = newImageJob(request, inputPath, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority ?? 55,
+    attempt,
+    retryOf: retrySource?.id,
+  })
+  const createdInputPaths = []
+  if (!inputPath) {
+    inputPath = join(inputDirectory, `${job.id}.${decoded.extension}`)
+    await writeFile(inputPath, decoded.bytes, { flag: 'wx' })
+    createdInputPaths.push(inputPath)
+    job.inputPath = inputPath
+  }
+  const added = await store.addIdempotent(job)
+  if (!added.created) {
+    for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
+    return { job: store.publicJob(added.job), reused: true }
+  }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
 function queueContains(queue, promptId) {
   return (queue || []).some((entry) => Array.isArray(entry) && entry[1] === promptId)
 }
@@ -1327,6 +1599,9 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/image-tools') {
       return sendJson(response, 200, await imageProcessor.probe(url.searchParams.get('refresh') === '1'))
     }
+    if (request.method === 'GET' && pathname === '/api/semantic-workflows') {
+      return sendJson(response, 200, await inspectSemanticWorkflows(url.searchParams.get('refresh') === '1'))
+    }
     if (request.method === 'GET' && pathname === '/api/scheduler') {
       return sendJson(response, 200, scheduler.snapshot())
     }
@@ -1408,6 +1683,16 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, result.reused ? 200 : 202, result)
     }
+    if (request.method === 'POST' && pathname === '/api/jobs/semantic-image') {
+      const body = await readJsonBody(request)
+      const result = await createSemanticImageJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 55),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
     const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname)
     if (request.method === 'GET' && jobMatch) {
       const job = store.get(decodeURIComponent(jobMatch[1]))
@@ -1438,7 +1723,9 @@ const server = createServer(async (request, response) => {
           : resolvePriority(request.headers['x-miaohui-priority'], source.scheduling?.priority || 50),
       }
       const result = source.kind === 'image'
-        ? await createImageJob({}, source, options)
+        ? source.request?.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
+          ? await createSemanticImageJob({}, source, options)
+          : await createImageJob({}, source, options)
         : await createVideoJob({}, source, options)
       return sendJson(response, result.reused ? 200 : 202, result)
     }

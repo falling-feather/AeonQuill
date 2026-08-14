@@ -91,7 +91,7 @@ function loadProject(): CanvasDocument {
   }
   return createCanvasDocument({
     id: 'local-project',
-    title: '妙绘本地画布',
+    title: '光阴砚本地项目',
     elements: cloneElements(seedElements),
     camera: { ...seedCamera },
   })
@@ -109,6 +109,7 @@ const processingLabels: Record<ImageLabMode, string> = {
   adjust: '色彩调整',
   crop: '画幅裁剪',
   'remove-background': '背景移除草稿',
+  'element-extract': 'SAM 元素提取',
   'mask-refine': '蒙版修边',
   pixelate: '像素化草稿',
   upscale: '浏览器放大',
@@ -123,6 +124,7 @@ const imageOperationLabels: Record<ImageOperationId, string> = {
   'alpha-cleanup': '透明边缘清理',
   'remove-background': 'AI 去背景',
   'upscale-realesrgan': 'Real-ESRGAN 超分',
+  'semantic-element-extract': 'SAM 元素提取',
 }
 
 function App() {
