@@ -5,13 +5,18 @@ import {
   Eraser,
   Eye,
   EyeOff,
+  FileImage,
   Film,
+  FolderOpen,
   Grid3X3,
   Layers,
   Lock,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Redo2,
+  Settings2,
   Trash2,
   Undo2,
   Unlock,
@@ -27,19 +32,35 @@ import {
 } from 'react'
 import {
   PixelContractError,
+  PIXEL_PROJECT_EXTENSION,
+  PIXEL_PROJECT_MIME,
   applyPixelCommand,
+  convertRgbaToPixelDocument,
   createBlankPixelArray,
+  createPixelExportBundle,
   createPixelCommand,
   createPixelDocument,
   createSpriteSheetMetadata,
   migratePixelDocument,
   renderPixelFrameRgba,
-  renderSpriteSheetRgba,
+  safePixelFilename,
+  serializePixelProject,
   type PixelCommand,
   type PixelCommandType,
+  type PixelConversionReport,
+  type PixelDitherMode,
   type PixelDocument,
+  type PixelFitMode,
+  type RgbaImage,
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
+import {
+  PixelBrowserError,
+  decodePixelImageFile,
+  downloadPixelExportBundle,
+  downloadPixelText,
+  readPixelProjectFile,
+} from './pixelBrowser'
 import './pixel-mode.css'
 
 type PixelTool = 'pencil' | 'eraser'
@@ -60,6 +81,20 @@ type PixelStrokeContext = {
   layerOpacity: number
 }
 
+type PixelImportSettings = {
+  targetWidth: number
+  targetHeight: number
+  colorCount: number
+  dither: PixelDitherMode
+  fit: PixelFitMode
+  paletteMode: 'generated' | 'current'
+  alphaThreshold: number
+}
+
+type ImportedSource = RgbaImage & {
+  sourceName: string
+}
+
 export type PixelSpriteSheetPayload = {
   document: PixelDocument
   metadata: SpriteSheetMetadata
@@ -71,7 +106,7 @@ export type PixelModeWorkbenchProps = {
   className?: string
   onBack?: () => void
   onDocumentChange?: (document: PixelDocument) => void
-  onSpriteSheetReady?: (payload: PixelSpriteSheetPayload) => void
+  onSpriteSheetReady?: (payload: PixelSpriteSheetPayload) => void | Promise<void>
 }
 
 function makeStarterDocument() {
@@ -161,6 +196,16 @@ function putRgbaOnCanvas(
   target.restore()
 }
 
+function sourceDocumentName(filename: string) {
+  const withoutExtension = filename.replace(/\.(png|webp)$/i, '').trim()
+  return withoutExtension.slice(0, 120) || 'Imported pixel art'
+}
+
+function readablePixelError(error: unknown, fallback: string) {
+  if (error instanceof PixelContractError || error instanceof PixelBrowserError) return error.message
+  return error instanceof Error ? error.message : fallback
+}
+
 export function PixelModeWorkbench({
   initialDocument,
   className = '',
@@ -176,8 +221,24 @@ export function PixelModeWorkbench({
   const [tool, setTool] = useState<PixelTool>('pencil')
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
+  const [importSettings, setImportSettings] = useState<PixelImportSettings>({
+    targetWidth: 32,
+    targetHeight: 32,
+    colorCount: 8,
+    dither: 'none',
+    fit: 'contain',
+    paletteMode: 'generated',
+    alphaThreshold: 16,
+  })
+  const [importSourceSummary, setImportSourceSummary] = useState<{ name: string; width: number; height: number } | null>(null)
+  const [lastConversion, setLastConversion] = useState<PixelConversionReport | null>(null)
+  const [isImporting, setIsImporting] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [previewFrameId, setPreviewFrameId] = useState<string | null>(null)
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const importedSourceRef = useRef<ImportedSource | null>(null)
   const paintingRef = useRef(false)
   const strokeContextRef = useRef<PixelStrokeContext | null>(null)
   const strokePointsRef = useRef(new Map<string, { x: number; y: number }>())
@@ -191,7 +252,13 @@ export function PixelModeWorkbench({
     setHistory(next)
   }, [])
 
+  const stopPlayback = useCallback(() => {
+    setIsPlaying(false)
+    setPreviewFrameId(null)
+  }, [])
+
   const apply = useCallback((type: PixelCommandType, payload: Record<string, unknown>) => {
+    stopPlayback()
     const current = historyRef.current
     try {
       const command = createPixelCommand(current.document, type, payload, {
@@ -210,9 +277,10 @@ export function PixelModeWorkbench({
       setStatus(error instanceof PixelContractError ? error.message : '像素命令执行失败')
       return false
     }
-  }, [replaceHistory])
+  }, [replaceHistory, stopPlayback])
 
   const undo = useCallback(() => {
+    stopPlayback()
     const current = historyRef.current
     const inverse = current.undo.at(-1)
     if (!inverse) return
@@ -227,9 +295,10 @@ export function PixelModeWorkbench({
     } catch (error) {
       setStatus(error instanceof PixelContractError ? error.message : '撤销失败')
     }
-  }, [replaceHistory])
+  }, [replaceHistory, stopPlayback])
 
   const redo = useCallback(() => {
+    stopPlayback()
     const current = historyRef.current
     const command = current.redo.at(-1)
     if (!command) return
@@ -244,11 +313,103 @@ export function PixelModeWorkbench({
     } catch (error) {
       setStatus(error instanceof PixelContractError ? error.message : '重做失败')
     }
-  }, [replaceHistory])
+  }, [replaceHistory, stopPlayback])
+
+  const installDocument = useCallback((nextDocument: PixelDocument, message: string) => {
+    stopPlayback()
+    replaceHistory({ document: nextDocument, undo: [], redo: [] })
+    setActiveColorId(nextDocument.palette[0].id)
+    setStatus(message)
+  }, [replaceHistory, stopPlayback])
+
+  const loadImageSource = useCallback(async (file: File) => {
+    setIsImporting(true)
+    setStatus('正在解码 PNG / WebP…')
+    try {
+      const source = await decodePixelImageFile(file)
+      importedSourceRef.current = source
+      setImportSourceSummary({ name: source.sourceName, width: source.width, height: source.height })
+      setLastConversion(null)
+      setStatus(`已载入 ${source.sourceName}，调整参数后执行确定性转换`)
+    } catch (error) {
+      setStatus(readablePixelError(error, '图像导入失败'))
+    } finally {
+      setIsImporting(false)
+    }
+  }, [])
+
+  const convertImportedSource = useCallback(async () => {
+    const source = importedSourceRef.current
+    if (!source) {
+      setStatus('请先选择 PNG 或 WebP 图像')
+      return
+    }
+    setIsImporting(true)
+    setStatus('正在执行确定性缩放、量化与抖动…')
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    try {
+      const { paletteMode, ...conversionSettings } = importSettings
+      const { sourceName, ...rgbaSource } = source
+      const result = convertRgbaToPixelDocument(rgbaSource, {
+        ...conversionSettings,
+        palette: paletteMode === 'current' ? historyRef.current.document.palette : undefined,
+        documentId: `import-${commandSequenceRef.current++}`,
+        documentName: sourceDocumentName(sourceName),
+      })
+      installDocument(
+        result.document,
+        `转换完成：${result.report.targetWidth} × ${result.report.targetHeight} · ${result.report.paletteSize} 色 · ${result.report.dither}`,
+      )
+      setLastConversion(result.report)
+    } catch (error) {
+      setStatus(readablePixelError(error, '像素转换失败'))
+    } finally {
+      setIsImporting(false)
+    }
+  }, [importSettings, installDocument])
+
+  const loadProject = useCallback(async (file: File) => {
+    setIsImporting(true)
+    setStatus('正在校验像素项目 schemaVersion…')
+    try {
+      const nextDocument = await readPixelProjectFile(file)
+      importedSourceRef.current = null
+      setImportSourceSummary(null)
+      setLastConversion(null)
+      installDocument(nextDocument, `项目已重新打开：${nextDocument.name} · schema v${nextDocument.schemaVersion}`)
+    } catch (error) {
+      setStatus(readablePixelError(error, '项目导入失败'))
+    } finally {
+      setIsImporting(false)
+    }
+  }, [installDocument])
 
   useEffect(() => {
     onDocumentChange?.(document)
   }, [document, onDocumentChange])
+
+  useEffect(() => {
+    if (!isPlaying) return undefined
+    const currentId = previewFrameId && document.frames.some((frame) => frame.id === previewFrameId)
+      ? previewFrameId
+      : document.activeFrameId
+    if (previewFrameId !== currentId) {
+      setPreviewFrameId(currentId)
+      return undefined
+    }
+    const currentIndex = document.frames.findIndex((frame) => frame.id === currentId)
+    const currentFrame = document.frames[currentIndex]
+    if (!currentFrame) return undefined
+    const timer = window.setTimeout(() => {
+      const nextFrame = document.frames[(currentIndex + 1) % document.frames.length]
+      setPreviewFrameId(nextFrame.id)
+    }, currentFrame.durationMs)
+    return () => window.clearTimeout(timer)
+  }, [document.activeFrameId, document.frames, isPlaying, previewFrameId])
+
+  const displayedFrameId = isPlaying && previewFrameId && document.frames.some((frame) => frame.id === previewFrameId)
+    ? previewFrameId
+    : document.activeFrameId
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -260,8 +421,8 @@ export function PixelModeWorkbench({
     context.clearRect(0, 0, document.width, document.height)
     context.imageSmoothingEnabled = false
 
-    const activeIndex = document.frames.findIndex((frame) => frame.id === document.activeFrameId)
-    if (document.onionSkin.enabled) {
+    const activeIndex = document.frames.findIndex((frame) => frame.id === displayedFrameId)
+    if (!isPlaying && document.onionSkin.enabled) {
       for (let distance = document.onionSkin.previousFrames; distance >= 1; distance -= 1) {
         const frame = document.frames[activeIndex - distance]
         if (!frame) continue
@@ -289,11 +450,11 @@ export function PixelModeWorkbench({
     }
     putRgbaOnCanvas(
       context,
-      renderPixelFrameRgba(document, document.activeFrameId),
+      renderPixelFrameRgba(document, displayedFrameId),
       document.width,
       document.height,
     )
-  }, [document, strokePreviewRevision])
+  }, [displayedFrameId, document, isPlaying, strokePreviewRevision])
 
   const stagePixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const stroke = strokeContextRef.current
@@ -320,6 +481,7 @@ export function PixelModeWorkbench({
   }, [])
 
   const beginStroke = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    stopPlayback()
     const current = historyRef.current.document
     const activeLayer = current.layers.find((layer) => layer.id === current.activeLayerId)
     if (!activeLayer || activeLayer.locked) {
@@ -339,7 +501,7 @@ export function PixelModeWorkbench({
     paintingRef.current = true
     event.currentTarget.setPointerCapture(event.pointerId)
     stagePixelAtPointer(event)
-  }, [activeColorId, stagePixelAtPointer, tool])
+  }, [activeColorId, stagePixelAtPointer, stopPlayback, tool])
 
   const finishStroke = useCallback(() => {
     const stroke = strokeContextRef.current
@@ -374,15 +536,41 @@ export function PixelModeWorkbench({
     [document],
   )
 
-  const exportSpriteSheet = () => {
-    const output = renderSpriteSheetRgba(document, {
-      columns: Math.min(4, document.frames.length),
-      padding: 1,
-      spacing: 1,
-    })
-    onSpriteSheetReady?.({ document, metadata: output.metadata, pixels: output.pixels })
-    setStatus(onSpriteSheetReady ? 'Sprite Sheet 已交给宿主导出层' : 'Sprite Sheet RGBA 与元数据已在内存中生成')
-  }
+  const exportPixelProject = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const current = historyRef.current.document
+      const filename = `${safePixelFilename(current.name)}${PIXEL_PROJECT_EXTENSION}`
+      downloadPixelText(serializePixelProject(current), filename, PIXEL_PROJECT_MIME)
+      setStatus(`项目已导出：${filename} · ${PIXEL_PROJECT_MIME}`)
+    } catch (error) {
+      setStatus(readablePixelError(error, '项目导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [])
+
+  const exportPixelBundle = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const current = historyRef.current.document
+      const bundle = createPixelExportBundle(current, {
+        columns: Math.min(4, current.frames.length),
+        padding: 1,
+        spacing: 1,
+      })
+      await downloadPixelExportBundle(bundle, {
+        includeSprite: !onSpriteSheetReady,
+        includeMetadata: !onSpriteSheetReady,
+      })
+      await onSpriteSheetReady?.({ document: current, metadata: bundle.metadata.value, pixels: bundle.sprite.pixels })
+      setStatus('成套导出完成：项目 JSON、当前帧 PNG、Sprite Sheet PNG 与 metadata')
+    } catch (error) {
+      setStatus(readablePixelError(error, '成套导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [onSpriteSheetReady])
 
   return (
     <section
@@ -423,8 +611,24 @@ export function PixelModeWorkbench({
           <button type="button" onClick={redo} disabled={history.redo.length === 0} aria-label="重做">
             <Redo2 size={17} />
           </button>
-          <button type="button" className="aq-pixel-export" onClick={exportSpriteSheet}>
-            <Download size={16} /> 导出契约
+          <label className={`aq-pixel-file-action ${isImporting ? 'is-disabled' : ''}`}>
+            <FolderOpen size={16} /> 打开项目
+            <input
+              type="file"
+              accept=".aeonpixel.json,.pixel.json,application/json"
+              disabled={isImporting}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ''
+                if (file) void loadProject(file)
+              }}
+            />
+          </label>
+          <button type="button" className="aq-pixel-project-export" onClick={() => void exportPixelProject()} disabled={isExporting} aria-label="仅导出像素项目 JSON">
+            <Download size={16} /> 项目
+          </button>
+          <button type="button" className="aq-pixel-export" onClick={() => void exportPixelBundle()} disabled={isExporting}>
+            <Download size={16} /> 成套导出
           </button>
         </div>
       </header>
@@ -448,11 +652,155 @@ export function PixelModeWorkbench({
           <span />
           洋葱皮
         </label>
+        <button
+          type="button"
+          className={`aq-pixel-play ${isPlaying ? 'is-active' : ''}`}
+          onClick={() => {
+            if (isPlaying) stopPlayback()
+            else {
+              setPreviewFrameId(document.activeFrameId)
+              setIsPlaying(true)
+            }
+          }}
+          aria-pressed={isPlaying}
+        >
+          {isPlaying ? <Pause size={15} /> : <Play size={15} />}
+          {isPlaying ? '停止预览' : '播放动画'}
+        </button>
         <span className="aq-pixel-status" role="status">{status}</span>
       </div>
 
       <div className="aq-pixel-layout">
         <aside className="aq-pixel-panel aq-pixel-palette-panel">
+          <section className="aq-pixel-import-card" aria-label="PNG 与 WebP 确定性像素转换">
+            <div className="aq-pixel-import-heading">
+              <span><Settings2 size={15} /> 图像转像素</span>
+              <small>确定性</small>
+            </div>
+            <label className={`aq-pixel-source-picker ${isImporting ? 'is-disabled' : ''}`}>
+              <FileImage size={16} />
+              <span>{importSourceSummary ? '更换 PNG / WebP' : '选择 PNG / WebP'}</span>
+              <input
+                type="file"
+                accept="image/png,image/webp,.png,.webp"
+                disabled={isImporting}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0]
+                  event.currentTarget.value = ''
+                  if (file) void loadImageSource(file)
+                }}
+              />
+            </label>
+            {importSourceSummary ? (
+              <p className="aq-pixel-source-summary">
+                <strong title={importSourceSummary.name}>{importSourceSummary.name}</strong>
+                <span>{importSourceSummary.width} × {importSourceSummary.height} RGBA · 仅保留会话内存</span>
+              </p>
+            ) : null}
+            <div className="aq-pixel-import-grid">
+              <label>
+                <span>宽</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={importSettings.targetWidth}
+                  onChange={(event) => setImportSettings((current) => ({
+                    ...current,
+                    targetWidth: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : current.targetWidth,
+                  }))}
+                />
+              </label>
+              <label>
+                <span>高</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={importSettings.targetHeight}
+                  onChange={(event) => setImportSettings((current) => ({
+                    ...current,
+                    targetHeight: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : current.targetHeight,
+                  }))}
+                />
+              </label>
+              <label>
+                <span>色数</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={256}
+                  value={importSettings.colorCount}
+                  disabled={importSettings.paletteMode === 'current'}
+                  onChange={(event) => setImportSettings((current) => ({
+                    ...current,
+                    colorCount: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : current.colorCount,
+                  }))}
+                />
+              </label>
+              <label>
+                <span>透明阈值</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={255}
+                  value={importSettings.alphaThreshold}
+                  onChange={(event) => setImportSettings((current) => ({
+                    ...current,
+                    alphaThreshold: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : current.alphaThreshold,
+                  }))}
+                />
+              </label>
+            </div>
+            <label className="aq-pixel-import-select">
+              <span>缩放</span>
+              <select
+                value={importSettings.fit}
+                onChange={(event) => setImportSettings((current) => ({ ...current, fit: event.target.value as PixelFitMode }))}
+              >
+                <option value="contain">完整留白</option>
+                <option value="cover">居中裁满</option>
+                <option value="stretch">拉伸铺满</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
+              <span>调色板</span>
+              <select
+                value={importSettings.paletteMode}
+                onChange={(event) => setImportSettings((current) => ({
+                  ...current,
+                  paletteMode: event.target.value as PixelImportSettings['paletteMode'],
+                }))}
+              >
+                <option value="generated">从图像确定性提取</option>
+                <option value="current">沿用当前 {document.palette.length} 色</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
+              <span>抖动</span>
+              <select
+                value={importSettings.dither}
+                onChange={(event) => setImportSettings((current) => ({ ...current, dither: event.target.value as PixelDitherMode }))}
+              >
+                <option value="none">无抖动</option>
+                <option value="bayer4">Bayer 4×4</option>
+                <option value="floyd-steinberg">Floyd–Steinberg</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="aq-pixel-convert"
+              disabled={!importSourceSummary || isImporting}
+              onClick={() => void convertImportedSource()}
+            >
+              {isImporting ? '处理中…' : '转换为严格 PixelDocument'}
+            </button>
+            {lastConversion ? (
+              <p className="aq-pixel-conversion-report">
+                {lastConversion.opaquePixels} 实像素 / {lastConversion.transparentPixels} 透明 · {lastConversion.paletteSize} 色
+              </p>
+            ) : null}
+          </section>
           <div className="aq-pixel-panel-heading">
             <span><Grid3X3 size={15} /> 调色板</span>
             <small>{document.palette.length} 色</small>
@@ -528,10 +876,29 @@ export function PixelModeWorkbench({
             <div className="aq-pixel-panel-heading">
               <span><Film size={15} /> 帧时间线</span>
               <div>
+                <label className="aq-pixel-duration" title="当前帧时长">
+                  <input
+                    key={`${document.activeFrameId}-${document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs}`}
+                    type="number"
+                    min={16}
+                    max={60_000}
+                    defaultValue={document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs}
+                    onBlur={(event) => {
+                      const durationMs = event.currentTarget.valueAsNumber
+                      const currentDuration = document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs
+                      if (Number.isSafeInteger(durationMs) && durationMs >= 16 && durationMs <= 60_000 && durationMs !== currentDuration) {
+                        stopPlayback()
+                        apply('frames.patch', { frameId: document.activeFrameId, patch: { durationMs } })
+                      }
+                    }}
+                  />
+                  ms
+                </label>
                 <button
                   type="button"
                   aria-label="复制当前帧"
                   onClick={() => {
+                    stopPlayback()
                     const id = uniqueId('frame', document.frames.map((frame) => frame.id), document.revision)
                     apply('frames.add', {
                       frame: { id, name: `姿态 ${document.frames.length + 1}`, durationMs: 140 },
@@ -543,6 +910,7 @@ export function PixelModeWorkbench({
                   type="button"
                   aria-label="添加空白帧"
                   onClick={() => {
+                    stopPlayback()
                     const id = uniqueId('frame', document.frames.map((frame) => frame.id), document.revision)
                     apply('frames.add', { frame: { id, name: `姿态 ${document.frames.length + 1}`, durationMs: 140 } })
                   }}
@@ -551,7 +919,10 @@ export function PixelModeWorkbench({
                   type="button"
                   aria-label="删除当前帧"
                   disabled={document.frames.length === 1}
-                  onClick={() => apply('frames.remove', { frameId: document.activeFrameId })}
+                  onClick={() => {
+                    stopPlayback()
+                    apply('frames.remove', { frameId: document.activeFrameId })
+                  }}
                 ><Trash2 size={14} /></button>
               </div>
             </div>
@@ -560,9 +931,12 @@ export function PixelModeWorkbench({
                 <button
                   type="button"
                   key={frame.id}
-                  className={frame.id === document.activeFrameId ? 'is-active' : ''}
+                  className={`${frame.id === document.activeFrameId ? 'is-active' : ''} ${isPlaying && frame.id === displayedFrameId ? 'is-previewing' : ''}`.trim()}
                   aria-pressed={frame.id === document.activeFrameId}
-                  onClick={() => apply('frames.select', { frameId: frame.id })}
+                  onClick={() => {
+                    stopPlayback()
+                    apply('frames.select', { frameId: frame.id })
+                  }}
                 >
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <strong>{frame.name}</strong>

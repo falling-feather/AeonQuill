@@ -1,0 +1,41 @@
+{
+  "kind": "aeonquill.pixel-document",
+  "schemaVersion": 1,
+  "id": "browser-round-trip-fixture",
+  "name": "Browser round-trip fixture",
+  "width": 3,
+  "height": 2,
+  "revision": 4,
+  "palette": [
+    { "id": "ink", "name": "Ink", "color": "#171821FF" },
+    { "id": "light", "name": "Light", "color": "#F4EBD7FF" },
+    { "id": "signal", "name": "Signal", "color": "#E66B4DFF" }
+  ],
+  "layers": [
+    { "id": "base", "name": "Base", "visible": true, "locked": false, "opacity": 1 },
+    { "id": "detail", "name": "Detail", "visible": true, "locked": false, "opacity": 1 }
+  ],
+  "frames": [
+    {
+      "id": "idle",
+      "name": "Idle",
+      "durationMs": 90,
+      "cels": {
+        "base": ["ink", "ink", "ink", "light", "light", "light"],
+        "detail": [null, "signal", null, null, null, null]
+      }
+    },
+    {
+      "id": "blink",
+      "name": "Blink",
+      "durationMs": 150,
+      "cels": {
+        "base": ["ink", "ink", "ink", "light", "light", "light"],
+        "detail": [null, null, null, "signal", null, "signal"]
+      }
+    }
+  ],
+  "activeLayerId": "detail",
+  "activeFrameId": "blink",
+  "onionSkin": { "enabled": true, "previousFrames": 1, "nextFrames": 1, "opacity": 0.22 }
+}

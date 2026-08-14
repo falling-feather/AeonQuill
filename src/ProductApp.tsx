@@ -702,6 +702,7 @@ export default function ProductApp() {
       setModeNotice({ tone: 'success', message: 'Sprite Sheet PNG 与元数据已导出。' })
     } catch (error) {
       setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Sprite Sheet 导出失败' })
+      throw error
     }
   }, [])
 
@@ -831,7 +832,7 @@ export default function ProductApp() {
   if (route.modeId === 'pixel') {
     const requestedProjectId = route.projectId
     const requestedDraftMissing = requestedProjectId && (
-      pixelDraft.status !== 'ready' || pixelDraft.document?.id !== requestedProjectId
+      !pixelDraft.document || pixelDraft.document.id !== requestedProjectId
     )
     if (requestedDraftMissing && entryIntentKey !== currentRouteKey) {
       return (
@@ -850,7 +851,7 @@ export default function ProductApp() {
         />
       )
     }
-    if (pixelDraft.status === 'error' && entryIntentKey !== currentRouteKey) {
+    if (pixelDraft.status === 'error' && !pixelDraft.document && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="像素模式"
@@ -887,10 +888,10 @@ export default function ProductApp() {
     return (
       <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
         <PixelModeWorkbench
-          initialDocument={pixelDraft.status === 'ready' ? pixelDraft.document : undefined}
+          initialDocument={pixelDraft.document}
           onBack={goHome}
           onDocumentChange={handlePixelChange}
-          onSpriteSheetReady={(payload) => void handleSpriteSheetExport(payload)}
+          onSpriteSheetReady={handleSpriteSheetExport}
         />
       </ProductModeHost>
     )

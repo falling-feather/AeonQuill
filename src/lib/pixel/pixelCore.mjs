@@ -908,6 +908,10 @@ export function createSpriteSheetLayout(documentInput, options = {}) {
 export function createSpriteSheetMetadata(documentInput, options = {}) {
   const document = assertPixelDocument(documentInput)
   const layout = createSpriteSheetLayout(document, options)
+  return createSpriteSheetMetadataFromLayout(document, layout)
+}
+
+function createSpriteSheetMetadataFromLayout(document, layout) {
   return {
     schemaVersion: 1,
     kind: 'aeonquill.sprite-sheet',
@@ -943,6 +947,6 @@ export function renderSpriteSheetRgba(documentInput, options = {}) {
   return {
     pixels,
     layout,
-    metadata: createSpriteSheetMetadata(document, options),
+    metadata: createSpriteSheetMetadataFromLayout(document, layout),
   }
 }

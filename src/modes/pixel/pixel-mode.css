@@ -21,7 +21,8 @@
 }
 
 .aq-pixel-mode button,
-.aq-pixel-mode input {
+.aq-pixel-mode input,
+.aq-pixel-mode select {
   font: inherit;
 }
 
@@ -30,7 +31,10 @@
 }
 
 .aq-pixel-mode button:focus-visible,
-.aq-pixel-mode input:focus-visible {
+.aq-pixel-mode input:focus-visible,
+.aq-pixel-mode select:focus-visible,
+.aq-pixel-file-action:focus-within,
+.aq-pixel-source-picker:focus-within {
   outline: 2px solid var(--aq-pixel-accent);
   outline-offset: 2px;
 }
@@ -140,6 +144,7 @@
 }
 
 .aq-pixel-history button,
+.aq-pixel-file-action,
 .aq-pixel-panel-heading button {
   min-width: 32px;
   height: 32px;
@@ -153,6 +158,30 @@
   cursor: pointer;
 }
 
+.aq-pixel-file-action {
+  position: relative;
+  min-width: 102px;
+  padding: 0 10px;
+  color: #d2ced7;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aq-pixel-file-action input,
+.aq-pixel-source-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.aq-pixel-file-action.is-disabled,
+.aq-pixel-source-picker.is-disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 .aq-pixel-history button:disabled,
 .aq-pixel-panel-heading button:disabled {
   opacity: 0.35;
@@ -160,12 +189,32 @@
 }
 
 .aq-pixel-history .aq-pixel-export {
-  min-width: 104px;
+  min-width: 112px;
   padding: 0 12px;
   border-color: rgba(240, 179, 90, 0.35);
   background: var(--aq-pixel-accent-soft);
   color: #ffd699;
   font-size: 12px;
+}
+
+.aq-pixel-play {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--aq-pixel-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #c8c4cc;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.aq-pixel-play.is-active {
+  border-color: rgba(101, 184, 201, 0.55);
+  background: rgba(101, 184, 201, 0.13);
+  color: #aee7f0;
 }
 
 .aq-pixel-toolbar {
@@ -277,8 +326,144 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: 210px minmax(360px, 1fr) 228px;
+  grid-template-columns: 264px minmax(360px, 1fr) 228px;
   overflow: hidden;
+}
+
+.aq-pixel-import-card {
+  display: grid;
+  gap: 9px;
+  margin: 0 0 18px;
+  padding: 11px;
+  border: 1px solid rgba(101, 184, 201, 0.18);
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(101, 184, 201, 0.08), rgba(122, 100, 184, 0.07));
+}
+
+.aq-pixel-import-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-pixel-import-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #d7d3dd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.aq-pixel-import-heading small {
+  color: #8bc8d4;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.aq-pixel-source-picker {
+  position: relative;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px dashed rgba(101, 184, 201, 0.36);
+  border-radius: 8px;
+  background: rgba(14, 16, 22, 0.34);
+  color: #a8dbe4;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.aq-pixel-source-picker:hover {
+  border-color: rgba(101, 184, 201, 0.7);
+  background: rgba(101, 184, 201, 0.1);
+}
+
+.aq-pixel-source-summary,
+.aq-pixel-conversion-report {
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--aq-pixel-muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.aq-pixel-source-summary strong {
+  overflow: hidden;
+  color: #d0ccd4;
+  font-size: 9px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-pixel-import-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.aq-pixel-import-grid label,
+.aq-pixel-import-select {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--aq-pixel-muted);
+  font-size: 8px;
+}
+
+.aq-pixel-import-grid input,
+.aq-pixel-import-select select,
+.aq-pixel-duration input {
+  min-width: 0;
+  height: 27px;
+  padding: 0 7px;
+  border: 1px solid var(--aq-pixel-line);
+  border-radius: 6px;
+  background: rgba(12, 13, 18, 0.62);
+  color: #d9d5de;
+  font-size: 10px;
+}
+
+.aq-pixel-import-select {
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+}
+
+.aq-pixel-import-select select {
+  width: 100%;
+}
+
+.aq-pixel-import-grid input:disabled,
+.aq-pixel-import-select select:disabled {
+  opacity: 0.45;
+}
+
+.aq-pixel-convert {
+  min-height: 32px;
+  border: 1px solid rgba(240, 179, 90, 0.4);
+  border-radius: 8px;
+  background: var(--aq-pixel-accent-soft);
+  color: #ffd699;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aq-pixel-convert:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.aq-pixel-conversion-report {
+  color: #86cbd7;
 }
 
 .aq-pixel-panel {
@@ -495,6 +680,20 @@
   margin-bottom: 8px;
 }
 
+.aq-pixel-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  color: var(--aq-pixel-muted);
+  font-size: 8px;
+}
+
+.aq-pixel-duration input {
+  width: 54px;
+  height: 25px;
+}
+
 .aq-pixel-frame-strip {
   display: flex;
   gap: 7px;
@@ -523,6 +722,11 @@
   border-color: rgba(240, 179, 90, 0.7);
   background: var(--aq-pixel-accent-soft);
   box-shadow: 0 0 0 1px rgba(240, 179, 90, 0.12);
+}
+
+.aq-pixel-frame-strip > button.is-previewing {
+  border-color: rgba(101, 184, 201, 0.75);
+  box-shadow: 0 0 0 1px rgba(101, 184, 201, 0.16), inset 0 -2px rgba(101, 184, 201, 0.8);
 }
 
 .aq-pixel-frame-strip span {
@@ -667,7 +871,7 @@
   }
 
   .aq-pixel-layout {
-    grid-template-columns: 170px minmax(340px, 1fr);
+    grid-template-columns: 240px minmax(340px, 1fr);
     overflow: visible;
   }
 
@@ -706,6 +910,10 @@
     display: none;
   }
 
+  .aq-pixel-project-export {
+    display: none !important;
+  }
+
   .aq-pixel-history .aq-pixel-export {
     min-width: 34px;
     width: 34px;
@@ -713,6 +921,20 @@
     overflow: hidden;
     color: transparent;
     gap: 0;
+  }
+
+  .aq-pixel-file-action {
+    min-width: 34px;
+    width: 34px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+    gap: 0;
+  }
+
+  .aq-pixel-file-action svg {
+    position: absolute;
+    color: #d2ced7;
   }
 
   .aq-pixel-history .aq-pixel-export svg {
