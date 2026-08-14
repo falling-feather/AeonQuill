@@ -8,6 +8,8 @@ import { createRestrictedChildEnvironment, redactSensitiveText } from './securit
 const serverDirectory = fileURLToPath(new URL('./', import.meta.url))
 const rembgRunnerPath = join(serverDirectory, 'rembg-runner.py')
 
+export const IMAGE_TOOLS_VERSION = 'image-tools-v2'
+
 const MAX_INPUT_PIXELS = 40_000_000
 const MAX_OUTPUT_PIXELS = 64_000_000
 const PROBE_TTL_MS = 30_000
@@ -15,6 +17,11 @@ const PROBE_TTL_MS = 30_000
 const PIXEL_SIZES = new Set([16, 24, 32, 48, 64, 96, 128, 256])
 const PIXEL_OUTPUT_SCALES = new Set([1, 2, 4, 8])
 const PIXEL_DITHERS = new Set(['none', 'bayer', 'floyd_steinberg', 'sierra2_4a', 'atkinson'])
+const MASKED_ADJUST_EFFECTS = new Set([
+  'selection-highlight',
+  'background-dim',
+  'background-blur',
+])
 const REAL_ESRGAN_MODELS = new Set([
   'realesrgan-x4plus',
   'realesrgan-x4plus-anime',
@@ -259,6 +266,18 @@ export function validateImageRequest(body, capabilities) {
     if (params.transparentBelow >= params.opaqueAbove) {
       throw Object.assign(new Error('transparentBelow must be lower than opaqueAbove'), { status: 400 })
     }
+  } else if (operation === 'masked-adjust') {
+    assertParamKeys(suppliedParams, ['effect', 'strength', 'feather'])
+    params = {
+      effect: enumValue(
+        suppliedParams.effect,
+        'background-dim',
+        MASKED_ADJUST_EFFECTS,
+        'effect',
+      ),
+      strength: boundedNumber(suppliedParams.strength, 0.6, 0.1, 1, 'strength'),
+      feather: Math.round(boundedNumber(suppliedParams.feather, 4, 0, 32, 'feather')),
+    }
   } else if (operation === 'remove-background') {
     assertParamKeys(suppliedParams, [
       'model',
@@ -292,6 +311,7 @@ export function validateImageRequest(body, capabilities) {
   return {
     operation,
     params,
+    ...(operation === 'masked-adjust' ? { maskProvided: true } : {}),
     sourceElementId: typeof body.sourceElementId === 'string' ? body.sourceElementId.slice(0, 200) : undefined,
   }
 }
@@ -360,7 +380,7 @@ export class ImageProcessor {
       : '未检测到 Real-ESRGAN NCNN 可执行文件或兼容模型'
 
     this.probeResult = {
-      version: 'image-tools-v1',
+      version: IMAGE_TOOLS_VERSION,
       checkedAt: Date.now(),
       limits: {
         maxInputBytes: 20 * 1024 * 1024,
@@ -412,6 +432,20 @@ export class ImageProcessor {
           available: deterministicAvailable,
           unavailableReason: deterministicReason,
           params: { transparentBelow: [0, 127], opaqueAbove: [128, 255] },
+        },
+        {
+          id: 'masked-adjust',
+          label: '蒙版区域调整',
+          category: 'masked-edit',
+          provider: 'ffmpeg',
+          deterministic: true,
+          available: deterministicAvailable,
+          unavailableReason: deterministicReason,
+          params: {
+            effect: [...MASKED_ADJUST_EFFECTS],
+            strength: [0.1, 1],
+            feather: [0, 32],
+          },
         },
         {
           id: 'remove-background',
@@ -524,7 +558,7 @@ export class ImageProcessor {
     }
   }
 
-  async process({ operation, params, inputPath, outputPath, signal }) {
+  async process({ operation, params, inputPath, maskPath, outputPath, signal }) {
     const capability = (await this.probe()).operations.find((candidate) => candidate.id === operation)
     if (!capability?.available) {
       throw Object.assign(new Error(capability?.unavailableReason || 'Image operation is unavailable'), {
@@ -586,7 +620,7 @@ export class ImageProcessor {
       if (params.tileSize > 0) args.push('-t', String(params.tileSize))
       await runCommand(this.realEsrganAdapter.command, args, { signal, timeoutMs: 20 * 60 * 1000 })
     } else {
-      await this.processWithFfmpeg(operation, params, input, inputPath, outputPath, signal)
+      await this.processWithFfmpeg(operation, params, input, inputPath, maskPath, outputPath, signal)
     }
     const output = await this.dimensions(outputPath, signal)
     this.assertOutputSize(output.width, output.height)
@@ -601,7 +635,7 @@ export class ImageProcessor {
     }
   }
 
-  async processWithFfmpeg(operation, params, input, inputPath, outputPath, signal) {
+  async processWithFfmpeg(operation, params, input, inputPath, maskPath, outputPath, signal) {
     const common = ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath]
     let args
     if (operation === 'upscale-lanczos') {
@@ -616,6 +650,52 @@ export class ImageProcessor {
     } else if (operation === 'alpha-cleanup') {
       const expression = `if(lt(val\\,${params.transparentBelow})\\,0\\,if(gt(val\\,${params.opaqueAbove})\\,255\\,val))`
       args = [...common, '-frames:v', '1', '-vf', `format=rgba,lut=a=${expression}`, '-compression_level', '6', outputPath]
+    } else if (operation === 'masked-adjust') {
+      if (!maskPath || !(await isFile(maskPath))) {
+        throw Object.assign(new Error('masked-adjust requires a managed local mask image'), {
+          status: 400,
+          code: 'IMAGE_MASK_REQUIRED',
+        })
+      }
+      const maskBlur = params.feather > 0 ? `,gblur=sigma=${params.feather}` : ''
+      const maskChain = `[1:v]scale=${input.width}:${input.height}:flags=bilinear,format=rgba,alphaextract${maskBlur}[mask]`
+      let editChain
+      if (params.effect === 'selection-highlight') {
+        const brightness = (0.12 * params.strength).toFixed(4)
+        const saturation = (1 + 0.65 * params.strength).toFixed(4)
+        editChain = [
+          '[0:v]format=rgba,split=2[base][edit]',
+          `[edit]eq=brightness=${brightness}:saturation=${saturation}[changed]`,
+          '[changed][mask]alphamerge[foreground]',
+          '[base][foreground]overlay=shortest=1:format=auto,format=rgba[out]',
+        ].join(';')
+      } else if (params.effect === 'background-blur') {
+        const sigma = (1 + 11 * params.strength).toFixed(3)
+        editChain = [
+          '[0:v]format=rgba,split=2[keep][background]',
+          `[background]gblur=sigma=${sigma}[changed]`,
+          '[keep][mask]alphamerge[foreground]',
+          '[changed][foreground]overlay=shortest=1:format=auto,format=rgba[out]',
+        ].join(';')
+      } else {
+        const brightness = (-0.24 * params.strength).toFixed(4)
+        const saturation = Math.max(0, 1 - 0.78 * params.strength).toFixed(4)
+        editChain = [
+          '[0:v]format=rgba,split=2[keep][background]',
+          `[background]eq=brightness=${brightness}:saturation=${saturation}[changed]`,
+          '[keep][mask]alphamerge[foreground]',
+          '[changed][foreground]overlay=shortest=1:format=auto,format=rgba[out]',
+        ].join(';')
+      }
+      args = [
+        ...common,
+        '-i', maskPath,
+        '-filter_complex', `${maskChain};${editChain}`,
+        '-map', '[out]',
+        '-frames:v', '1',
+        '-compression_level', '6',
+        outputPath,
+      ]
     } else if (operation === 'pixelate') {
       const landscape = input.width >= input.height
       const pixelWidth = landscape

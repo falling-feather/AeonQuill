@@ -93,6 +93,7 @@ const imageTools: Array<{
   { id: 'crop', label: '裁剪', hint: '画幅与焦点', icon: Crop },
   { id: 'remove-background', label: '去背景', hint: '本机模型 / 草稿回退', icon: Eraser },
   { id: 'element-extract', label: '元素提取', hint: 'ComfyUI · SAM 点击分割', icon: ScanSearch },
+  { id: 'region-adjust', label: '区域调整', hint: '语义蒙版 · 本机确定性合成', icon: Paintbrush },
   { id: 'mask-refine', label: '蒙版修边', hint: '移除 / 恢复 Alpha', icon: Paintbrush },
   { id: 'pixelate', label: '像素化', hint: '量化与抖动', icon: Layers3 },
   { id: 'upscale', label: '超分放大', hint: 'Real-ESRGAN / Lanczos / 草稿', icon: ImageUp },

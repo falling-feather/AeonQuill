@@ -86,6 +86,7 @@ const modeDefinitions: Array<{
   { id: 'pixelate', label: '像素化', icon: Grid3X3 },
   { id: 'remove-background', label: '去背景', icon: Eraser },
   { id: 'element-extract', label: '元素提取', icon: ScanSearch },
+  { id: 'region-adjust', label: '区域调整', icon: Paintbrush },
   { id: 'mask-refine', label: '蒙版修边', icon: Paintbrush },
   { id: 'upscale', label: '放大', icon: ImageUp },
   { id: 'sharpen', label: '锐化', icon: Sparkles },
@@ -122,6 +123,11 @@ const modeCopy: Record<ImageLabMode, {
     previewLabel: '点击选择元素',
     chains: ['点击提示与坐标校验', 'SAM 语义分割', '透明元素与蒙版入库'],
   },
+  'region-adjust': {
+    jobLabel: '语义区域调整',
+    previewLabel: '蒙版作用范围',
+    chains: ['读取原图与 Alpha 蒙版', '确定性区域合成', '派生版本与来源入库'],
+  },
   'mask-refine': {
     jobLabel: '蒙版边缘修正',
     previewLabel: '可逆蒙版',
@@ -152,6 +158,23 @@ const localPreviewModes = new Set<ImageLabMode>([
   'mask-refine',
   'upscale',
 ])
+
+const alphaMaskStepTypes = new Set<string>([
+  'element-extract',
+  'semantic-element-extract',
+  'mask-refine',
+  'remove-background',
+  'alpha-cleanup',
+])
+
+function hasAlphaMaskSource(element: CanvasElement) {
+  return Boolean(
+    element.sourceElementId
+    && element.sourceSrc
+    && element.src
+    && element.processingStack?.some((step) => alphaMaskStepTypes.has(step.type)),
+  )
+}
 
 function capabilityHint(capability?: ImageToolCapability) {
   if (!capability) return '本地服务尚未返回此处理器'
@@ -267,6 +290,11 @@ export function ImageLab({
   })
   const [sharpenSettings, setSharpenSettings] = useState({ radius: 5, amount: 0.65 })
   const [alphaSettings, setAlphaSettings] = useState({ transparentBelow: 24, opaqueAbove: 232 })
+  const [maskedAdjustSettings, setMaskedAdjustSettings] = useState({
+    effect: 'background-dim',
+    strength: 60,
+    feather: 4,
+  })
   const [alphaMatting, setAlphaMatting] = useState(true)
   const [upscaleProcessor, setUpscaleProcessor] = useState<ImageOperationId>('upscale-realesrgan')
   const [executionMode, setExecutionMode] = useState<'local' | 'server'>('local')
@@ -287,7 +315,12 @@ export function ImageLab({
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  const source = element.src ?? ''
+  const isRegionAdjust = mode === 'region-adjust'
+  const hasRegionMask = isRegionAdjust && hasAlphaMaskSource(element)
+  const source = isRegionAdjust
+    ? (hasRegionMask ? (element.sourceSrc ?? '') : (element.src ?? ''))
+    : (element.src ?? '')
+  const maskSource = hasRegionMask ? (element.src ?? '') : ''
   const definition = modeCopy[mode]
   const capabilities = useMemo(
     () => new Map(toolManifest?.operations.map((capability) => [capability.id, capability]) ?? []),
@@ -295,6 +328,10 @@ export function ImageLab({
   )
   const semanticWorkflow = useMemo(
     () => semanticManifest?.workflows.find((workflow) => workflow.id === 'element-extract'),
+    [semanticManifest],
+  )
+  const generativeRegionWorkflow = useMemo(
+    () => semanticManifest?.workflows.find((workflow) => workflow.id === 'region-edit'),
     [semanticManifest],
   )
   const semanticCapability = useMemo<ImageToolCapability | undefined>(() => {
@@ -318,6 +355,8 @@ export function ImageLab({
     ? upscaleProcessor
     : mode === 'element-extract'
       ? 'semantic-element-extract'
+      : mode === 'region-adjust'
+        ? 'masked-adjust'
     : mode === 'pixelate' || mode === 'remove-background' || mode === 'sharpen' || mode === 'alpha-cleanup'
       ? mode
       : null
@@ -331,7 +370,8 @@ export function ImageLab({
   const isSemanticEditor = mode === 'element-extract'
   const canRunRemote = Boolean(
     activeCapability?.available
-    && (!isSemanticEditor || semanticPoints.positivePoints.length > 0),
+    && (!isSemanticEditor || semanticPoints.positivePoints.length > 0)
+    && (!isRegionAdjust || hasRegionMask),
   )
 
   const handleMaskChange = useCallback((draft: MaskDraft | null) => {
@@ -371,7 +411,7 @@ export function ImageLab({
       setExecutionMode('local')
       return
     }
-    if (mode === 'element-extract') {
+    if (mode === 'element-extract' || mode === 'region-adjust') {
       setExecutionMode('server')
       return
     }
@@ -393,7 +433,7 @@ export function ImageLab({
     setPreviewDimensions({ width: 0, height: 0 })
     setError(null)
     setProgress(0)
-  }, [mode, executionMode, pixelSettings.outputSize, pixelSettings.colorCount, pixelSettings.ditherStrength, pixelSettings.edgePreserve, backgroundSettings.threshold, backgroundSettings.softness, crop.aspect, crop.zoom, crop.positionX, crop.positionY, upscaleSettings.scale, upscaleSettings.smooth])
+  }, [mode, executionMode, pixelSettings.outputSize, pixelSettings.colorCount, pixelSettings.ditherStrength, pixelSettings.edgePreserve, backgroundSettings.threshold, backgroundSettings.softness, crop.aspect, crop.zoom, crop.positionX, crop.positionY, upscaleSettings.scale, upscaleSettings.smooth, maskedAdjustSettings.effect, maskedAdjustSettings.strength, maskedAdjustSettings.feather])
 
   const previewSource = useMemo(() => {
     if (mode === 'adjust') return source
@@ -511,6 +551,12 @@ export function ImageLab({
               ? sharpenSettings
               : remoteOperation === 'alpha-cleanup'
                 ? alphaSettings
+                : remoteOperation === 'masked-adjust'
+                  ? {
+                      effect: maskedAdjustSettings.effect,
+                      strength: maskedAdjustSettings.strength / 100,
+                      feather: maskedAdjustSettings.feather,
+                    }
                 : {
                     alphaMatting,
                     foregroundThreshold: backgroundSettings.threshold,
@@ -519,6 +565,9 @@ export function ImageLab({
                   }
       setProgress(24)
       const sourceImageDataUrl = await normalizeImageSource(source)
+      const maskImageDataUrl = remoteOperation === 'masked-adjust'
+        ? await normalizeImageSource(maskSource)
+        : undefined
       setProgress(52)
       const job = remoteOperation === 'semantic-element-extract'
         ? await createSemanticElementJob({
@@ -534,6 +583,7 @@ export function ImageLab({
         : await createImageJob({
             operation: remoteOperation,
             sourceImageDataUrl,
+            maskImageDataUrl,
             sourceElementId: element.id,
             params,
           })
@@ -542,7 +592,9 @@ export function ImageLab({
       onClose()
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '图像任务提交失败'
-      setError(`${message}。可刷新能力状态，或切换到浏览器草稿。`)
+      setError(mode === 'region-adjust'
+        ? `${message}。请先完成元素提取或蒙版修边，并选择带来源的派生图。`
+        : `${message}。可刷新能力状态，或切换到浏览器草稿。`)
       setProgress(0)
     } finally {
       setIsGenerating(false)
@@ -675,7 +727,7 @@ export function ImageLab({
             <figure className="image-preview-frame">
               <figcaption>原图</figcaption>
               <div className="image-preview-stage">
-                <img src={source} alt={`${element.name}原图`} />
+                <img src={source || element.src} alt={`${element.name}原图`} />
               </div>
             </figure>
 
@@ -702,6 +754,11 @@ export function ImageLab({
                     disabled={isGenerating}
                     onChange={setSemanticPoints}
                   />
+                ) : isRegionAdjust && source && maskSource ? (
+                  <div className="region-mask-preview" aria-label="语义蒙版作用范围预览">
+                    <img src={source} alt={`${element.name}来源图`} />
+                    <img className="region-mask-preview__mask" src={maskSource} alt="选中的语义区域" />
+                  </div>
                 ) : previewSource ? (
                   <img
                     src={previewSource}
@@ -1021,6 +1078,58 @@ export function ImageLab({
                   {semanticPoints.positivePoints.length === 0 ? (
                     <p className="semantic-point-required">请先在预览图中点击要提取的元素。</p>
                   ) : null}
+                </div>
+              ) : null}
+
+              {mode === 'region-adjust' ? (
+                <div className="lab-setting-group">
+                  <div className="lab-info-callout">
+                    <Paintbrush size={16} />
+                    <p>
+                      使用派生图的 Alpha 作为语义蒙版，在 FFmpeg 中确定性合成；原图与蒙版都只进入本机桥接，结果创建新版本。
+                    </p>
+                  </div>
+                  {!hasRegionMask ? (
+                    <p className="semantic-point-required" role="alert">
+                      当前图片不是可用的 Alpha 蒙版派生图。请先运行“元素提取”“去背景”或“蒙版修边”，再选择生成的派生图执行区域调整。
+                    </p>
+                  ) : null}
+                  <label className="lab-select-setting">
+                    <span>区域效果</span>
+                    <select
+                      value={maskedAdjustSettings.effect}
+                      onChange={(event) => setMaskedAdjustSettings((current) => ({
+                        ...current,
+                        effect: event.target.value,
+                      }))}
+                    >
+                      <option value="background-dim">突出主体 · 压暗背景</option>
+                      <option value="background-blur">突出主体 · 虚化背景</option>
+                      <option value="selection-highlight">提亮并增强选区</option>
+                    </select>
+                  </label>
+                  <RangeSetting
+                    label="处理强度"
+                    value={maskedAdjustSettings.strength}
+                    min={10}
+                    max={100}
+                    onChange={(strength) => setMaskedAdjustSettings((current) => ({ ...current, strength }))}
+                  />
+                  <RangeSetting
+                    label="蒙版羽化"
+                    value={maskedAdjustSettings.feather}
+                    min={0}
+                    max={32}
+                    suffix=" px"
+                    onChange={(feather) => setMaskedAdjustSettings((current) => ({ ...current, feather }))}
+                  />
+                  <div className="lab-info-callout is-muted">
+                    <Info size={16} />
+                    <p>
+                      生成式局部重绘：{generativeRegionWorkflow?.message ?? '尚未取得本机能力状态'}。
+                      本周期不会在模板或模型未就绪时伪开放该功能。
+                    </p>
+                  </div>
                 </div>
               ) : null}
 

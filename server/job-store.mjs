@@ -128,6 +128,7 @@ export class JobStore {
     if (!job) return null
     const {
       inputPath: _inputPath,
+      maskPath: _maskPath,
       lastFramePath: _lastFramePath,
       outputPath: _outputPath,
       temporaryOutputPath: _temporaryOutputPath,

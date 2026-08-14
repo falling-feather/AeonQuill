@@ -6,7 +6,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { ComfyClient, findVideoOutput } from './comfy-client.mjs'
 import { AssetPreviewService } from './asset-preview-service.mjs'
-import { ImageProcessor, validateImageRequest } from './image-processor.mjs'
+import { IMAGE_TOOLS_VERSION, ImageProcessor, validateImageRequest } from './image-processor.mjs'
 import {
   assertStorageCapacity,
   createEstimateCostEvent,
@@ -490,6 +490,7 @@ const imageOperationLabels = {
   pixelate: '像素化与调色',
   sharpen: '细节锐化',
   'alpha-cleanup': '透明边清理',
+  'masked-adjust': '蒙版区域调整',
   'remove-background': 'AI 去背景',
   'upscale-realesrgan': 'Real-ESRGAN 超分',
   [SEMANTIC_ELEMENT_EXTRACT_OPERATION]: 'SAM 元素提取',
@@ -522,7 +523,7 @@ function newImageJob(request, inputPath, options = {}) {
     workflowVersion: request.workflowVersion || (
       request.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
         ? SEMANTIC_WORKFLOW_CATALOG_VERSION
-        : 'image-tools-v1'
+        : IMAGE_TOOLS_VERSION
     ),
     requestHash: options.requestHash,
     retryOf: options.retryOf,
@@ -531,6 +532,7 @@ function newImageJob(request, inputPath, options = {}) {
     request,
     sourceElementId: request.sourceElementId,
     inputPath,
+    maskPath: options.maskPath,
     logs: [{ at: now, level: 'info', message: '图片任务已创建' }],
   }
 }
@@ -552,6 +554,14 @@ function normalizeImageError(error, operation) {
       title: '本地处理器尚不可用',
       message,
       suggestions: ['在能力面板检查本机依赖', '安装对应命令行工具或选择确定性本地处理'],
+    }
+  }
+  if (error?.code === 'IMAGE_MASK_REQUIRED') {
+    return {
+      code: 'IMAGE_MASK_REQUIRED',
+      title: '蒙版输入不可用',
+      message: '区域调整需要由元素提取或蒙版修边产生的透明蒙版。',
+      suggestions: ['先运行元素提取并选择派生结果', '确认蒙版资产仍可读取后重试'],
     }
   }
   if (/exceeds .* pixels|invalid dimensions|invalid data|Invalid data/i.test(message)) {
@@ -819,6 +829,7 @@ async function runImageJob(jobId, { signal }) {
       operation: job.request.operation,
       params: job.request.params,
       inputPath: job.inputPath,
+      maskPath: job.maskPath,
       outputPath,
       signal,
     })
@@ -1211,29 +1222,48 @@ async function createImageJob(body, retrySource, options = {}) {
   const existing = existingIdempotentJob('image', idempotencyKey, requestHashValue)
   if (existing) return { job: store.publicJob(existing), reused: true }
   let inputPath = retrySource?.inputPath ? assertManagedPrivatePath(retrySource.inputPath, inputDirectory) : undefined
+  let maskPath = retrySource?.maskPath ? assertManagedPrivatePath(retrySource.maskPath, inputDirectory) : undefined
   const decoded = inputPath ? null : decodeImageAssetDataUrl(body.sourceImageDataUrl)
-  await assertStorageCapacity(runtimeDirectory, Math.max(64 * 1024 * 1024, (decoded?.bytes.length || 0) * 8))
+  const decodedMask = request.operation === 'masked-adjust' && !maskPath
+    ? decodeImageAssetDataUrl(body.maskImageDataUrl)
+    : null
+  await assertStorageCapacity(runtimeDirectory, Math.max(
+    64 * 1024 * 1024,
+    ((decoded?.bytes.length || 0) + (decodedMask?.bytes.length || 0)) * 8,
+  ))
   const job = newImageJob(request, inputPath, {
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
     attempt,
     retryOf: retrySource?.id,
+    maskPath,
   })
   const createdInputPaths = []
-  if (!inputPath) {
-    inputPath = join(inputDirectory, `${job.id}.${decoded.extension}`)
-    await writeFile(inputPath, decoded.bytes, { flag: 'wx' })
-    createdInputPaths.push(inputPath)
-    job.inputPath = inputPath
-  }
-  const added = await store.addIdempotent(job)
-  if (!added.created) {
+  try {
+    if (!inputPath) {
+      inputPath = join(inputDirectory, `${job.id}.${decoded.extension}`)
+      await writeFile(inputPath, decoded.bytes, { flag: 'wx' })
+      createdInputPaths.push(inputPath)
+      job.inputPath = inputPath
+    }
+    if (!maskPath && decodedMask) {
+      maskPath = join(inputDirectory, `${job.id}-mask.${decodedMask.extension}`)
+      await writeFile(maskPath, decodedMask.bytes, { flag: 'wx' })
+      createdInputPaths.push(maskPath)
+      job.maskPath = maskPath
+    }
+    const added = await store.addIdempotent(job)
+    if (!added.created) {
+      for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
+      return { job: store.publicJob(added.job), reused: true }
+    }
+    await scheduler.enqueue(job.id)
+    return { job: store.publicJob(store.get(job.id)), reused: false }
+  } catch (error) {
     for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
-    return { job: store.publicJob(added.job), reused: true }
+    throw error
   }
-  await scheduler.enqueue(job.id)
-  return { job: store.publicJob(store.get(job.id)), reused: false }
 }
 
 async function createSemanticImageJob(body, retrySource, options = {}) {
@@ -1317,7 +1347,7 @@ async function cancelJob(job) {
 
 async function cleanupTerminalJobInputs(jobs) {
   for (const job of jobs) {
-    for (const candidate of [job.inputPath, job.lastFramePath, job.temporaryOutputPath]) {
+    for (const candidate of [job.inputPath, job.maskPath, job.lastFramePath, job.temporaryOutputPath]) {
       if (!candidate) continue
       try {
         const root = candidate === job.temporaryOutputPath ? assetDirectory : inputDirectory

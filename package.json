@@ -19,6 +19,7 @@
     "validate:workflows": "node server/validate-workflows.mjs",
     "validate:image-tools": "node server/validate-image-tools.mjs",
     "validate:semantic-api": "node scripts/validate-semantic-api.mjs",
+    "validate:masked-edit": "node scripts/validate-masked-edit-api.mjs",
     "benchmark:image-quality": "node scripts/benchmark-image-quality.mjs",
     "benchmark:image-quality:smoke": "node scripts/benchmark-image-quality.mjs --manifest=benchmarks/image-quality/manifest.example.json --allow-incomplete",
     "desktop:electron": "npm run build && electron .",

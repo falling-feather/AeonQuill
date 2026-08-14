@@ -91,6 +91,7 @@ test('public jobs strip private paths and process handles', async (t) => {
     phase: 'queued',
     createdAt: Date.now(),
     inputPath: 'C:\\private\\input.png',
+    maskPath: 'C:\\private\\mask.png',
     lastFramePath: 'C:\\private\\last.png',
     outputPath: 'C:\\private\\output.png',
     abortController,
@@ -99,6 +100,7 @@ test('public jobs strip private paths and process handles', async (t) => {
 
   const publicJob = store.publicJob(store.get(job.id))
   assert.equal(publicJob.inputPath, undefined)
+  assert.equal(publicJob.maskPath, undefined)
   assert.equal(publicJob.lastFramePath, undefined)
   assert.equal(publicJob.outputPath, undefined)
   assert.equal(publicJob.abortController, undefined)

@@ -15,6 +15,7 @@ export type ImageToolId =
   | 'crop'
   | 'remove-background'
   | 'element-extract'
+  | 'region-adjust'
   | 'mask-refine'
   | 'pixelate'
   | 'upscale'
@@ -97,6 +98,7 @@ export type ImageOperationId =
   | 'pixelate'
   | 'sharpen'
   | 'alpha-cleanup'
+  | 'masked-adjust'
   | 'remove-background'
   | 'upscale-realesrgan'
   | 'semantic-element-extract'
@@ -104,7 +106,7 @@ export type ImageOperationId =
 export type ImageToolCapability = {
   id: ImageOperationId
   label: string
-  category: 'upscale' | 'pixel' | 'enhance' | 'cleanup' | 'segmentation'
+  category: 'upscale' | 'pixel' | 'enhance' | 'cleanup' | 'segmentation' | 'masked-edit'
   provider: string
   deterministic: boolean
   available: boolean
@@ -187,11 +189,14 @@ export type SemanticElementExtractRequest = {
 export type ImageJobRequest = {
   operation: ImageOperationId
   sourceImageDataUrl: string
+  maskImageDataUrl?: string
   sourceElementId?: string
   params: Record<string, unknown>
 }
 
-export type StoredImageJobRequest = Omit<ImageJobRequest, 'sourceImageDataUrl'>
+export type StoredImageJobRequest = Omit<ImageJobRequest, 'sourceImageDataUrl' | 'maskImageDataUrl'> & {
+  maskProvided?: boolean
+}
 
 export type VideoGenerationMode = 'text-to-video' | 'image-to-video'
 

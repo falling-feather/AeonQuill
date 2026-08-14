@@ -34,14 +34,16 @@ try {
     ['pixelate', { targetSize: 32, colors: 12, outputScale: 4, dither: 'bayer', alphaThreshold: 96 }],
     ['sharpen', { radius: 5, amount: 0.65 }],
     ['alpha-cleanup', { transparentBelow: 24, opaqueAbove: 232 }],
+    ['masked-adjust', { effect: 'background-dim', strength: 0.6, feather: 4 }, sourcePath],
   ]
 
-  for (const [operation, rawParams] of cases) {
+  for (const [operation, rawParams, maskPath] of cases) {
     const request = validateImageRequest({ operation, params: rawParams }, capabilities)
     const outputPath = join(validationDirectory, `${operation}.png`)
     const output = await processor.process({
       ...request,
       inputPath: sourcePath,
+      maskPath,
       outputPath,
       signal: new AbortController().signal,
     })

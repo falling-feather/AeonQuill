@@ -8,6 +8,7 @@ const capabilities = {
     { id: 'pixelate', available: true },
     { id: 'sharpen', available: true },
     { id: 'alpha-cleanup', available: true },
+    { id: 'masked-adjust', available: true },
     { id: 'remove-background', available: false, unavailableReason: 'model missing' },
     { id: 'upscale-realesrgan', available: true, models: ['realesr-animevideov3'] },
   ],
@@ -74,4 +75,31 @@ test('enforces alpha cleanup bounds and accepts the tight valid boundary', () =>
     model: 'realesr-animevideov3',
     tileSize: 192,
   })
+})
+
+test('masked adjustment accepts only controlled deterministic effects', () => {
+  assert.deepEqual(validateImageRequest({
+    operation: 'masked-adjust',
+    sourceElementId: 'semantic-result-1',
+    params: { effect: 'background-blur', strength: 0.75, feather: 12 },
+  }, capabilities), {
+    operation: 'masked-adjust',
+    sourceElementId: 'semantic-result-1',
+    maskProvided: true,
+    params: { effect: 'background-blur', strength: 0.75, feather: 12 },
+  })
+  assert.throws(
+    () => validateImageRequest({
+      operation: 'masked-adjust',
+      params: { effect: 'arbitrary-comfy-graph', strength: 0.5, feather: 4 },
+    }, capabilities),
+    (error) => error.status === 400,
+  )
+  assert.throws(
+    () => validateImageRequest({
+      operation: 'masked-adjust',
+      params: { effect: 'background-dim', instruction: 'run anything' },
+    }, capabilities),
+    (error) => error.status === 400,
+  )
 })
