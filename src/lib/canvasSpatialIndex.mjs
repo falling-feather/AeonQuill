@@ -1,0 +1,112 @@
+const DEFAULT_CELL_SIZE = 512
+const MAX_CELLS_PER_ELEMENT = 1_024
+const MAX_QUERY_CELLS = 16_384
+
+function finite(value, fallback = 0) {
+  return Number.isFinite(value) ? value : fallback
+}
+
+export function elementWorldBounds(element) {
+  const x = finite(element.x)
+  const y = finite(element.y)
+  const width = Math.max(0, finite(element.width))
+  const height = Math.max(0, finite(element.height))
+  const rotation = finite(element.rotation) * Math.PI / 180
+  if (!rotation) return { left: x, top: y, right: x + width, bottom: y + height }
+  const centerX = x + width / 2
+  const centerY = y + height / 2
+  const cosine = Math.abs(Math.cos(rotation))
+  const sine = Math.abs(Math.sin(rotation))
+  const halfWidth = (width * cosine + height * sine) / 2
+  const halfHeight = (width * sine + height * cosine) / 2
+  return {
+    left: centerX - halfWidth,
+    top: centerY - halfHeight,
+    right: centerX + halfWidth,
+    bottom: centerY + halfHeight,
+  }
+}
+
+export function viewportWorldBounds(camera, viewportSize, overscanScreenPixels = 240) {
+  const zoom = Math.max(0.0001, finite(camera.zoom, 1))
+  const overscan = Math.max(0, finite(overscanScreenPixels)) / zoom
+  const left = -finite(camera.x) / zoom
+  const top = -finite(camera.y) / zoom
+  return {
+    left: left - overscan,
+    top: top - overscan,
+    right: left + Math.max(0, finite(viewportSize.width)) / zoom + overscan,
+    bottom: top + Math.max(0, finite(viewportSize.height)) / zoom + overscan,
+  }
+}
+
+export function boundsIntersect(a, b) {
+  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top
+}
+
+function cellRange(bounds, cellSize) {
+  return {
+    minX: Math.floor(bounds.left / cellSize),
+    minY: Math.floor(bounds.top / cellSize),
+    maxX: Math.floor(bounds.right / cellSize),
+    maxY: Math.floor(bounds.bottom / cellSize),
+  }
+}
+
+function rangeCellCount(range) {
+  return (range.maxX - range.minX + 1) * (range.maxY - range.minY + 1)
+}
+
+function cellKey(x, y) {
+  return `${x}:${y}`
+}
+
+export function createCanvasSpatialIndex(elements, cellSize = DEFAULT_CELL_SIZE) {
+  if (!Number.isFinite(cellSize) || cellSize < 64 || cellSize > 8_192) {
+    throw new Error('Spatial index cell size must be between 64 and 8192')
+  }
+  const cells = new Map()
+  const boundsById = new Map()
+  const globalIds = new Set()
+  const allIds = []
+  for (const element of elements) {
+    if (!element?.id || element.kind === 'connector') continue
+    const bounds = elementWorldBounds(element)
+    boundsById.set(element.id, bounds)
+    allIds.push(element.id)
+    const range = cellRange(bounds, cellSize)
+    if (rangeCellCount(range) > MAX_CELLS_PER_ELEMENT) {
+      globalIds.add(element.id)
+      continue
+    }
+    for (let x = range.minX; x <= range.maxX; x += 1) {
+      for (let y = range.minY; y <= range.maxY; y += 1) {
+        const key = cellKey(x, y)
+        const bucket = cells.get(key) || new Set()
+        bucket.add(element.id)
+        cells.set(key, bucket)
+      }
+    }
+  }
+  return { cellSize, cells, boundsById, globalIds, allIds }
+}
+
+export function queryCanvasSpatialIndex(index, bounds) {
+  const candidates = new Set(index.globalIds)
+  const range = cellRange(bounds, index.cellSize)
+  if (rangeCellCount(range) > MAX_QUERY_CELLS) {
+    for (const id of index.allIds) candidates.add(id)
+  } else {
+    for (let x = range.minX; x <= range.maxX; x += 1) {
+      for (let y = range.minY; y <= range.maxY; y += 1) {
+        for (const id of index.cells.get(cellKey(x, y)) || []) candidates.add(id)
+      }
+    }
+  }
+  const matches = new Set()
+  for (const id of candidates) {
+    const elementBounds = index.boundsById.get(id)
+    if (elementBounds && boundsIntersect(elementBounds, bounds)) matches.add(id)
+  }
+  return matches
+}

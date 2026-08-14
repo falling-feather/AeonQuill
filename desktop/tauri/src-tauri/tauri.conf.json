@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "MiaoHui",
+  "version": "0.1.0",
+  "identifier": "com.miaohui.desktop",
+  "build": {
+    "frontendDist": "../../../dist"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": [
+      "binaries/miaohui-bridge"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  }
+}

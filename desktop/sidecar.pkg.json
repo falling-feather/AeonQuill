@@ -1,0 +1,12 @@
+{
+  "scripts": [
+    "../server/**/*.mjs",
+    "../src/lib/canvasCore.mjs"
+  ],
+  "assets": [
+    "../dist/**/*",
+    "../server/rembg-runner.py"
+  ],
+  "compress": "GZip",
+  "fallbackToSource": true
+}

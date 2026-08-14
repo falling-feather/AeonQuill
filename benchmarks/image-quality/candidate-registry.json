@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-14",
+  "policy": {
+    "networkDuringInference": "forbidden",
+    "automaticModelDownload": "forbidden",
+    "commercialReleaseRequiresArtifactAudit": true,
+    "note": "代码许可证不能替代权重、模型文件、训练数据、二进制和示例素材的逐项审核。"
+  },
+  "candidates": [
+    {
+      "id": "rembg-u2netp",
+      "family": "background-removal",
+      "role": "current-baseline",
+      "runtime": "Python rembg + ONNX Runtime",
+      "codeLicense": "MIT (rembg)",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "benchmark-only-until-reviewed",
+      "source": "https://github.com/danielgatis/rembg",
+      "notes": "当前适配器只允许受控本地 u2netp/u2net 权重，禁止首任务静默下载。"
+    },
+    {
+      "id": "birefnet",
+      "family": "background-removal",
+      "role": "quality-candidate",
+      "runtime": "PyTorch or audited ONNX adapter",
+      "codeLicense": "MIT",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "research-only-until-reviewed",
+      "source": "https://github.com/ZhengPeng7/BiRefNet",
+      "notes": "优先评估复杂边界与半透明类别；不随应用自动下载权重。"
+    },
+    {
+      "id": "inspyrenet",
+      "family": "background-removal",
+      "role": "quality-candidate",
+      "runtime": "PyTorch or audited exported adapter",
+      "codeLicense": "MIT",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "research-only-until-reviewed",
+      "source": "https://github.com/plemeri/InSPyReNet",
+      "notes": "与 transparent-background 官方实现联合核对；先测质量和显存，再决定是否封包。"
+    },
+    {
+      "id": "sam-v1-vit-b",
+      "family": "interactive-segmentation",
+      "role": "assistive-mask-candidate",
+      "runtime": "existing local ComfyUI Impact SAM endpoints",
+      "codeLicense": "Apache-2.0",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "local-evaluation-only-until-reviewed",
+      "source": "https://github.com/facebookresearch/segment-anything",
+      "notes": "定位为点击/框选辅助蒙版，不与全自动去背景候选混成同一体验。"
+    },
+    {
+      "id": "is-net-dis",
+      "family": "background-removal",
+      "role": "quality-candidate",
+      "runtime": "PyTorch or audited exported adapter",
+      "codeLicense": "Apache-2.0",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "research-only-until-reviewed",
+      "source": "https://github.com/xuebinqin/DIS",
+      "notes": "通用高分辨率抠图候选；模型文件必须独立核验。"
+    },
+    {
+      "id": "realesrgan-ncnn-vulkan",
+      "family": "super-resolution",
+      "role": "current-optional-adapter",
+      "runtime": "NCNN Vulkan portable executable",
+      "codeLicense": "BSD-3-Clause",
+      "artifactLicenseStatus": "needs-review",
+      "commercialStatus": "benchmark-only-until-reviewed",
+      "source": "https://github.com/xinntao/Real-ESRGAN",
+      "notes": "写实、动漫/视频与像素画必须分开评测；像素画不默认使用写实超分。"
+    }
+  ]
+}

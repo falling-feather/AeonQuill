@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+*.tsbuildinfo
+.agents/
+.codex/
+.runtime/
+config/local.json
+vite.config.js
+vite.config.d.ts
+desktop/tauri/src-tauri/binaries/
+desktop/tauri/src-tauri/target/

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "contract-smoke-v1",
+  "description": "Synthetic protocol smoke fixture only; these numbers are not model-quality evidence.",
+  "evaluation": {
+    "threshold": 128,
+    "boundaryRadius": 1
+  },
+  "candidates": [
+    {
+      "id": "contract-perfect",
+      "label": "Synthetic perfect mask"
+    },
+    {
+      "id": "contract-shifted",
+      "label": "Synthetic one-pixel shift"
+    }
+  ],
+  "samples": [
+    {
+      "id": "product-contract-001",
+      "category": "product",
+      "width": 8,
+      "height": 8,
+      "groundTruthMask": "fixtures/truth.pgm",
+      "predictions": [
+        {
+          "candidateId": "contract-perfect",
+          "mask": "fixtures/truth.pgm",
+          "latencyMs": 1,
+          "peakVramMiB": 0,
+          "repairSeconds": [0]
+        },
+        {
+          "candidateId": "contract-shifted",
+          "mask": "fixtures/shifted.pgm",
+          "latencyMs": 2,
+          "peakVramMiB": 0,
+          "repairSeconds": [12]
+        }
+      ]
+    },
+    {
+      "id": "portrait-contract-001",
+      "category": "portrait",
+      "width": 8,
+      "height": 8,
+      "groundTruthMask": "fixtures/truth.pgm",
+      "predictions": [
+        {
+          "candidateId": "contract-perfect",
+          "mask": "fixtures/truth.pgm",
+          "latencyMs": 1,
+          "peakVramMiB": 0,
+          "repairSeconds": [0]
+        },
+        {
+          "candidateId": "contract-shifted",
+          "mask": "fixtures/shifted.pgm",
+          "latencyMs": 2,
+          "peakVramMiB": 0,
+          "repairSeconds": [12]
+        }
+      ]
+    },
+    {
+      "id": "illustration-contract-001",
+      "category": "illustration",
+      "width": 8,
+      "height": 8,
+      "groundTruthMask": "fixtures/truth.pgm",
+      "predictions": [
+        {
+          "candidateId": "contract-perfect",
+          "mask": "fixtures/truth.pgm",
+          "latencyMs": 1,
+          "peakVramMiB": 0,
+          "repairSeconds": [0]
+        },
+        {
+          "candidateId": "contract-shifted",
+          "mask": "fixtures/shifted.pgm",
+          "latencyMs": 2,
+          "peakVramMiB": 0,
+          "repairSeconds": [12]
+        }
+      ]
+    },
+    {
+      "id": "hair-translucent-contract-001",
+      "category": "hair-translucent",
+      "width": 8,
+      "height": 8,
+      "groundTruthMask": "fixtures/truth.pgm",
+      "predictions": [
+        {
+          "candidateId": "contract-perfect",
+          "mask": "fixtures/truth.pgm",
+          "latencyMs": 1,
+          "peakVramMiB": 0,
+          "repairSeconds": [0]
+        },
+        {
+          "candidateId": "contract-shifted",
+          "mask": "fixtures/shifted.pgm",
+          "latencyMs": 2,
+          "peakVramMiB": 0,
+          "repairSeconds": [12]
+        }
+      ]
+    }
+  ]
+}

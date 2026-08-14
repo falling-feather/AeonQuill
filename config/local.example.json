@@ -1,0 +1,32 @@
+{
+  "comfyUrl": "http://127.0.0.1:8188",
+  "comfyRoot": "D:\\path\\to\\ComfyUI",
+  "pythonPath": "D:\\path\\to\\python\\python.exe",
+  "comfyLaunchPolicy": "idle",
+  "comfyIdleSeconds": 300,
+  "bridgePort": 8787,
+  "allowedOrigins": [],
+  "imageTools": {
+    "ffmpegPath": "ffmpeg",
+    "ffprobePath": "ffprobe",
+    "rembgPath": "",
+    "rembgModelsPath": "",
+    "realEsrganPath": "",
+    "realEsrganModelsPath": ""
+  },
+  "comfyArgs": [
+    "main.py",
+    "--listen",
+    "127.0.0.1",
+    "--port",
+    "8188",
+    "--fast-disk",
+    "--lowvram",
+    "--reserve-vram",
+    "1.5",
+    "--disable-pinned-memory",
+    "--cache-none",
+    "--preview-method",
+    "none"
+  ]
+}

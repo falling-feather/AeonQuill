@@ -1,0 +1,3 @@
+Generated with the built-in image generation tool on 2026-08-13.
+Source retained at the Codex generated-images location recorded in the task transcript.
+The project copy is design/image-enhancement-center-v5.png.
