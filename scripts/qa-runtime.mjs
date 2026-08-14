@@ -68,67 +68,94 @@ export async function startIsolatedBridge(label = 'qa') {
   const baseUrl = `http://127.0.0.1:${port}`
   const stdout = []
   const stderr = []
-  const child = spawn(process.execPath, ['server/index.mjs'], {
-    cwd: projectRoot,
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      MIAOHUI_RUNTIME_DIR: runtimeDirectory,
-      MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
-      MIAOHUI_PORT: String(port),
-      MIAOHUI_HOST: '127.0.0.1',
-      MIAOHUI_COMFY_POLICY: 'manual',
-      COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
-    },
-  })
-  child.stdout.on('data', (chunk) => stdout.push(String(chunk)))
-  child.stderr.on('data', (chunk) => stderr.push(String(chunk)))
+  const bridgeEnvironment = {
+    ...process.env,
+    MIAOHUI_RUNTIME_DIR: runtimeDirectory,
+    MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
+    MIAOHUI_PORT: String(port),
+    MIAOHUI_HOST: '127.0.0.1',
+    MIAOHUI_COMFY_POLICY: 'manual',
+    COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
+  }
+  let child
+  let sessionCookie = ''
+  let stopped = false
 
-  const deadline = Date.now() + 20_000
-  let lastError
-  while (Date.now() < deadline && child.exitCode === null) {
-    try {
-      const response = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1_000) })
-      if (response.ok) {
-        const sessionCookie = cookieFromResponse(response)
-        if (!sessionCookie) throw new Error('Isolated bridge did not issue a session cookie')
-        let stopped = false
-        return {
-          baseUrl,
-          port,
-          runtimeDirectory,
-          sessionCookie,
-          request(pathname, options = {}) {
-            return fetch(`${baseUrl}${pathname}`, {
-              ...options,
-              headers: { cookie: sessionCookie, ...options.headers },
-            })
-          },
-          logs: () => ({ stdout: stdout.join('').trim(), stderr: stderr.join('').trim() }),
-          async stop({ keepRuntime = false } = {}) {
-            if (stopped) return
-            stopped = true
-            await terminateProcessTree(child)
-            if (!keepRuntime) {
-              assertSafeTemporaryDirectory(runtimeDirectory, prefix)
-              await rm(runtimeDirectory, { recursive: true, force: true })
-            }
-          },
-        }
-      }
-    } catch (error) {
-      lastError = error
-    }
-    await delay(150)
+  const spawnBridge = () => {
+    child = spawn(process.execPath, ['server/index.mjs'], {
+      cwd: projectRoot,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: bridgeEnvironment,
+    })
+    child.stdout.on('data', (chunk) => stdout.push(String(chunk)))
+    child.stderr.on('data', (chunk) => stderr.push(String(chunk)))
   }
 
-  await terminateProcessTree(child)
-  assertSafeTemporaryDirectory(runtimeDirectory, prefix)
-  await rm(runtimeDirectory, { recursive: true, force: true })
-  throw new Error([
-    `Isolated bridge did not become ready: ${lastError?.message || `exit ${child.exitCode}`}`,
-    stdout.join('').trim(),
-    stderr.join('').trim(),
-  ].filter(Boolean).join('\n'))
+  const waitUntilReady = async () => {
+    const candidate = child
+    const deadline = Date.now() + 20_000
+    let lastError
+    while (Date.now() < deadline && candidate === child && candidate?.exitCode === null) {
+      try {
+        const response = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1_000) })
+        if (response.ok) {
+          const nextCookie = cookieFromResponse(response)
+          if (!nextCookie) throw new Error('Isolated bridge did not issue a session cookie')
+          sessionCookie = nextCookie
+          return
+        }
+      } catch (error) {
+        lastError = error
+      }
+      await delay(150)
+    }
+    throw new Error([
+      `Isolated bridge did not become ready: ${lastError?.message || `exit ${candidate?.exitCode}`}`,
+      stdout.join('').trim(),
+      stderr.join('').trim(),
+    ].filter(Boolean).join('\n'))
+  }
+
+  try {
+    spawnBridge()
+    await waitUntilReady()
+  } catch (error) {
+    await terminateProcessTree(child)
+    assertSafeTemporaryDirectory(runtimeDirectory, prefix)
+    await rm(runtimeDirectory, { recursive: true, force: true })
+    throw error
+  }
+
+  return {
+    baseUrl,
+    port,
+    runtimeDirectory,
+    get sessionCookie() {
+      return sessionCookie
+    },
+    request(pathname, options = {}) {
+      return fetch(`${baseUrl}${pathname}`, {
+        ...options,
+        headers: { cookie: sessionCookie, ...options.headers },
+      })
+    },
+    logs: () => ({ stdout: stdout.join('').trim(), stderr: stderr.join('').trim() }),
+    async restart() {
+      if (stopped) throw new Error('Cannot restart a stopped isolated bridge')
+      await terminateProcessTree(child)
+      await delay(150)
+      spawnBridge()
+      await waitUntilReady()
+    },
+    async stop({ keepRuntime = false } = {}) {
+      if (stopped) return
+      stopped = true
+      await terminateProcessTree(child)
+      if (!keepRuntime) {
+        assertSafeTemporaryDirectory(runtimeDirectory, prefix)
+        await rm(runtimeDirectory, { recursive: true, force: true })
+      }
+    },
+  }
 }

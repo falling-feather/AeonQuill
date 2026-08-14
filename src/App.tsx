@@ -50,6 +50,7 @@ import {
   startRuntime,
   stopRuntime,
   subscribeVideoJobs,
+  type JobEvent,
   updateRuntimePolicy,
   VIDEO_DIMENSIONS,
 } from './lib/videoApi'
@@ -720,6 +721,18 @@ function App({ onBack }: BalancedWorkbenchProps) {
   useEffect(() => {
     let disposed = false
     let unsubscribe = () => {}
+    const handleJobEvent = (event: JobEvent) => {
+      if (disposed) return
+      if (event.type === 'jobs.snapshot') {
+        replaceVideoJobs(event.jobs)
+      } else if (event.type === 'job.updated') {
+        updateJob(event.job)
+      } else if (event.type === 'jobs.cleared') {
+        setJobs((current) => current.filter((job) => !event.ids.includes(job.id)))
+      } else if (event.type === 'runtime.updated') {
+        setRuntime(event.runtime)
+      }
+    }
     const initializeLocalBridge = async () => {
       try {
         await ensureLocalSession()
@@ -740,23 +753,20 @@ function App({ onBack }: BalancedWorkbenchProps) {
         } catch {
           // First run has no SQLite project yet; the normal autosave creates it.
         }
-        if (disposed) return
+      } catch {
+        // The managed SSE subscription below keeps retrying if the bridge starts later.
+      }
+      if (disposed) return
+      try {
         const videoJobs = await fetchVideoJobs()
         if (!disposed) replaceVideoJobs(videoJobs)
-        if (!disposed) await refreshRuntime()
-        if (disposed) return
-        const cleanup = await subscribeVideoJobs((event) => {
-          if (disposed) return
-          if (event.type === 'jobs.snapshot') {
-            replaceVideoJobs(event.jobs)
-          } else if (event.type === 'job.updated') {
-            updateJob(event.job)
-          } else if (event.type === 'jobs.cleared') {
-            setJobs((current) => current.filter((job) => !event.ids.includes(job.id)))
-          } else if (event.type === 'runtime.updated') {
-            setRuntime(event.runtime)
-          }
-        }, setStreamConnected)
+      } catch {
+        // A reconnecting stream snapshot will replace the stale list after recovery.
+      }
+      if (!disposed) await refreshRuntime()
+      if (disposed) return
+      try {
+        const cleanup = await subscribeVideoJobs(handleJobEvent, setStreamConnected)
         if (disposed) cleanup()
         else unsubscribe = cleanup
       } catch {

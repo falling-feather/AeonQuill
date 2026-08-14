@@ -119,18 +119,70 @@ export async function subscribeVideoJobs(
   onEvent: (event: JobEvent) => void,
   onConnectionChange?: (connected: boolean) => void,
 ) {
-  await ensureLocalSession()
-  const source = new EventSource('/api/jobs/events')
-  source.onopen = () => onConnectionChange?.(true)
-  source.onerror = () => onConnectionChange?.(false)
-  source.onmessage = (message) => {
+  const reconnectDelays = [250, 500, 1_000, 2_000, 4_000] as const
+  let source: EventSource | undefined
+  let reconnectTimer: number | undefined
+  let reconnectAttempt = 0
+  let connecting = false
+  let disposed = false
+
+  const scheduleReconnect = () => {
+    if (disposed || reconnectTimer !== undefined) return
+    const delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)]
+    reconnectAttempt += 1
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = undefined
+      void connect(true)
+    }, delay)
+  }
+
+  const connect = async (renewSession = false) => {
+    if (disposed || connecting || source) return
+    connecting = true
     try {
-      onEvent(JSON.parse(message.data) as JobEvent)
+      if (renewSession) sessionReady = null
+      await ensureLocalSession()
+      if (disposed) return
+
+      const nextSource = new EventSource('/api/jobs/events')
+      source = nextSource
+      nextSource.onopen = () => {
+        if (disposed || source !== nextSource) return
+        reconnectAttempt = 0
+        onConnectionChange?.(true)
+      }
+      nextSource.onerror = () => {
+        if (disposed || source !== nextSource) return
+        source = undefined
+        nextSource.close()
+        onConnectionChange?.(false)
+        scheduleReconnect()
+      }
+      nextSource.onmessage = (message) => {
+        if (disposed || source !== nextSource) return
+        try {
+          onEvent(JSON.parse(message.data) as JobEvent)
+        } catch {
+          // Ignore malformed local events and let the stream continue.
+        }
+      }
     } catch {
-      // Ignore malformed local events and let the stream continue.
+      if (!disposed) {
+        onConnectionChange?.(false)
+        scheduleReconnect()
+      }
+    } finally {
+      connecting = false
     }
   }
-  return () => source.close()
+
+  await connect()
+  return () => {
+    disposed = true
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
+    source?.close()
+    source = undefined
+  }
 }
 
 function loadImage(source: string) {

@@ -233,6 +233,65 @@ try {
       element.jobId === jobId && /^\/api\/project-assets\/[a-f0-9]{64}$/.test(element.src || ''),
     )
   }, scheduledJobId)
+
+  assert.deepEqual(desktopIssues, [])
+  await bridge.restart()
+  await desktop.waitForFunction(async () => {
+    try {
+      return (await fetch('/api/health', { credentials: 'same-origin', cache: 'no-store' })).ok
+    } catch {
+      return false
+    }
+  }, undefined, { timeout: 20_000 })
+  const recoveredJobId = await desktop.evaluate(async () => {
+    const document = JSON.parse(localStorage.getItem('miaohui-canvas:v8'))
+    const sourceElement = document.elements.find((element) => element.id === 'image-summer-character')
+    const sourceImageDataUrl = sourceElement.src.startsWith('data:')
+      ? sourceElement.src
+      : await new Promise(async (resolvePromise, rejectPromise) => {
+          const response = await fetch(sourceElement.src, { credentials: 'same-origin' })
+          if (!response.ok) return rejectPromise(new Error('Could not read restart QA source image'))
+          const reader = new FileReader()
+          reader.onload = () => resolvePromise(String(reader.result))
+          reader.onerror = () => rejectPromise(new Error('Could not encode restart QA source image'))
+          reader.readAsDataURL(await response.blob())
+        })
+    const response = await fetch('/api/jobs/image', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'browser-restart-pixel-request-001',
+        'x-miaohui-priority': '87',
+      },
+      body: JSON.stringify({
+        operation: 'pixelate',
+        sourceElementId: sourceElement.id,
+        sourceImageDataUrl,
+        params: { targetSize: 24, colors: 6, outputScale: 1, dither: 'bayer', alphaThreshold: 96 },
+      }),
+    })
+    if (!response.ok) throw new Error(`Restart QA image job failed to submit: ${response.status}`)
+    return (await response.json()).job.id
+  })
+  await desktop.waitForFunction(async (jobId) => {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { credentials: 'same-origin' })
+    const job = (await response.json()).job
+    return job.status === 'completed' && Boolean(job.outputVersion?.id)
+  }, recoveredJobId, { timeout: 45_000 })
+  await desktop.waitForFunction((jobId) => {
+    const document = JSON.parse(localStorage.getItem('miaohui-canvas:v8'))
+    return document.elements.some((element) =>
+      element.jobId === jobId && /^asset-version-[a-f0-9]{32}$/.test(element.assetVersionId || ''),
+    )
+  }, recoveredJobId, { timeout: 20_000 })
+  await desktop.getByText('优先级 87').waitFor({ state: 'visible' })
+  const expectedRestartIssues = desktopIssues.filter((issue) =>
+    /^error: Failed to load resource: net::ERR_CONNECTION_(?:RESET|REFUSED)$/.test(issue),
+  )
+  assert.equal(expectedRestartIssues.length <= 4, true)
+  assert.deepEqual(desktopIssues, expectedRestartIssues)
+  desktopIssues.length = 0
   const downloadPromise = desktop.waitForEvent('download')
   await desktop.getByRole('button', { name: '导出' }).click()
   const download = await downloadPromise
