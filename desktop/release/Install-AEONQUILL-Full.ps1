@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $packageId = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
-$productVersion = '0.4.1'
+$productVersion = '0.4.2'
 $payloadRoot = Join-Path $PSScriptRoot "runtime\$packageId"
 $runtimeManifestPath = Join-Path $payloadRoot 'runtime-manifest.json'
 $releaseManifestPath = Join-Path $PSScriptRoot 'offline-release-manifest.json'
@@ -211,7 +211,7 @@ if ($MigrateLegacyData -and (Test-Path -LiteralPath $legacyDataRoot -PathType Co
   New-Item -ItemType Directory -Force -Path $appDataRoot | Out-Null
   Write-Host "正在把旧 AEONQUILL 用户数据迁移到 $appDataRoot …"
   Invoke-Robocopy -Source $legacyDataRoot -Destination $appDataRoot -Move:$RemoveLegacyAfterMigration
-  if ($RemoveLegacyAfterMigration) {
+  if ($RemoveLegacyAfterMigration -and (Test-Path -LiteralPath $legacyDataRoot -PathType Container)) {
     $remaining = @(Get-ChildItem -LiteralPath $legacyDataRoot -Force -ErrorAction SilentlyContinue)
     if ($remaining.Count -eq 0) {
       Remove-Item -LiteralPath $legacyDataRoot -Force
