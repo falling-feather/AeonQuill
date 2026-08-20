@@ -18,7 +18,7 @@ const defaultRoot = join(
   '.runtime',
   'releases',
   'offline',
-  'AEONQUILL_0.4.2_windows_x64_full',
+  'AEONQUILL_0.4.3_windows_x64_full',
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
 )

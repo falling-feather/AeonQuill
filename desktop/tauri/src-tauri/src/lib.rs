@@ -530,11 +530,13 @@ fn setup_desktop(
         Some("MIAOHUI_CONFIG"),
         default_data_directory.join("config").join("local.json"),
     );
+    let webview_data_directory = default_data_directory.join("EBWebView");
     for directory in [
         &runtime_directory,
         &data_directory,
         &cache_directory,
         &log_directory,
+        &webview_data_directory,
     ] {
         fs::create_dir_all(directory)?;
     }
@@ -628,6 +630,7 @@ fn setup_desktop(
     let title_runtime = Arc::clone(runtime);
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(base_url.parse()?))
         .title("光阴砚 AEONQUILL")
+        .data_directory(webview_data_directory)
         .inner_size(1480.0, 940.0)
         .min_inner_size(960.0, 640.0)
         .resizable(true)

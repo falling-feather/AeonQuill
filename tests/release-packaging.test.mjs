@@ -30,7 +30,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
-  assert.equal(metadata.version, '0.4.2')
+  assert.equal(metadata.version, '0.4.3')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -40,7 +40,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     '../../release/THIRD-PARTY-NOTICES.md': 'release/THIRD-PARTY-NOTICES.md',
   })
   assert.match(cargoSource, /^name = "aeonquill-desktop"$/m)
-  assert.match(cargoSource, /^version = "0\.4\.2"$/m)
+  assert.match(cargoSource, /^version = "0\.4\.3"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
@@ -48,6 +48,8 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(tauriSource, /tauri::RunEvent::WindowEvent/)
   assert.match(tauriSource, /tauri::WindowEvent::CloseRequested/)
   assert.match(tauriSource, /app_handle\.exit\(0\)/)
+  assert.match(tauriSource, /default_data_directory\.join\("EBWebView"\)/)
+  assert.match(tauriSource, /\.data_directory\(webview_data_directory\)/)
   for (const key of [
     'AEONQUILL_RUNTIME_DIR',
     'AEONQUILL_DATA_DIR',
@@ -62,7 +64,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
   }
-  assert.equal(basename(paths.installer), 'AEONQUILL_0.4.2_x64-setup.exe')
+  assert.equal(basename(paths.installer), 'AEONQUILL_0.4.3_x64-setup.exe')
   assert.equal(basename(paths.builtApp), 'aeonquill-desktop.exe')
   assert.equal(basename(paths.bundledSidecar), 'aeonquill-bridge.exe')
 })
@@ -348,7 +350,7 @@ test('full offline installer binds the application and runtime before installati
     'aeonquill-layout.json',
     'sibling-user-data',
   ]) assert.match(installer, new RegExp(requiredToken))
-  assert.match(installer, /productVersion = '0\.4\.2'/)
+  assert.match(installer, /productVersion = '0\.4\.3'/)
   assert.match(installer, /RemoveLegacyAfterMigration -and \(Test-Path/)
   assert.match(installer, /Start-Process -FilePath \$installerPath/)
   assert.match(installer, /"\/D=\$applicationDirectory"/)

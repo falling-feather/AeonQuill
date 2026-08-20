@@ -21,12 +21,15 @@ const appRuntimeDirectory = join(userDataDirectory, 'runtime')
 const appDataDirectory = join(userDataDirectory, 'data')
 const appCacheDirectory = join(userDataDirectory, 'cache')
 const appLogDirectory = join(userDataDirectory, 'logs')
+const appWebViewDirectory = join(userDataDirectory, 'EBWebView')
 const appConfigPath = join(userDataDirectory, 'config', 'local.json')
 const userDataSentinel = join(userDataDirectory, 'projects', 'keep-after-uninstall.txt')
 const legacyRuntimeSentinel = join(appRuntimeDirectory, 'projects', 'legacy-runtime-sentinel.txt')
 const legacyRuntimeDatabase = join(appRuntimeDirectory, 'projects', 'projects.sqlite3')
 const newDataDatabase = join(appDataDirectory, 'projects', 'projects.sqlite3')
 const appReportPath = join(appRuntimeDirectory, 'reports', 'installed-app.json')
+const isolatedLocalAppDataDirectory = join(testRoot, 'LocalAppData')
+const legacyWebViewDirectory = join(isolatedLocalAppDataDirectory, metadata.identifier, 'EBWebView')
 const finalReportPath = join(runtimeRoot, 'qa', 'tauri-installer-final.json')
 const uninstallRegistryKey = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${metadata.productName}`
 const startMenuShortcut = join(
@@ -161,6 +164,7 @@ await mkdir(dirname(userDataSentinel), { recursive: true })
 await writeFile(userDataSentinel, 'AEONQUILL user data must survive uninstall.\n', 'utf8')
 await mkdir(dirname(legacyRuntimeSentinel), { recursive: true })
 await writeFile(legacyRuntimeSentinel, 'AEONQUILL legacy runtime data must remain visible.\n', 'utf8')
+await mkdir(isolatedLocalAppDataDirectory, { recursive: true })
 
 let installedAppProcess = null
 try {
@@ -206,6 +210,7 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      LOCALAPPDATA: isolatedLocalAppDataDirectory,
       AEONQUILL_DESKTOP_QA: '1',
       AEONQUILL_DESKTOP_AUTOCLOSE_MS: '600',
       AEONQUILL_DESKTOP_REPORT: appReportPath,
@@ -233,6 +238,7 @@ try {
     appDataDirectory,
     appCacheDirectory,
     appLogDirectory,
+    appWebViewDirectory,
     dirname(appConfigPath),
   ]) {
     assert.equal((await stat(directory)).isDirectory(), true)
@@ -246,6 +252,11 @@ try {
   assert.equal(
     await readFile(legacyRuntimeSentinel, 'utf8'),
     'AEONQUILL legacy runtime data must remain visible.\n',
+  )
+  assert.equal(
+    await pathExists(legacyWebViewDirectory),
+    false,
+    'Portable WebView2 data must not fall back to the legacy app-local-data directory',
   )
   assert.equal(
     await waitForBridgeClosed({ baseUrl: `http://127.0.0.1:${appReport.bridgePort}`, timeoutMs: 1_000 }),

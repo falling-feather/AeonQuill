@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $packageId = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
-$productVersion = '0.4.2'
+$productVersion = '0.4.3'
 $payloadRoot = Join-Path $PSScriptRoot "runtime\$packageId"
 $runtimeManifestPath = Join-Path $payloadRoot 'runtime-manifest.json'
 $releaseManifestPath = Join-Path $PSScriptRoot 'offline-release-manifest.json'
