@@ -15,6 +15,7 @@
   },
   "bundle": {
     "active": true,
+    "useLocalToolsDir": true,
     "targets": ["nsis"],
     "publisher": "AEONQUILL Project",
     "copyright": "Copyright © 2026 AEONQUILL contributors",

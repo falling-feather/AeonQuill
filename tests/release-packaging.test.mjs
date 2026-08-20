@@ -34,6 +34,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
+  assert.equal(tauriConfig.bundle.useLocalToolsDir, true)
   assert.deepEqual(tauriConfig.bundle.resources, {
     '../../release/INSTALL.zh-CN.md': 'release/INSTALL.zh-CN.md',
     '../../release/LIMITATIONS.zh-CN.md': 'release/LIMITATIONS.zh-CN.md',
