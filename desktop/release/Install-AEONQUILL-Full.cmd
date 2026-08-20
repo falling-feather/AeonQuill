@@ -1,6 +1,6 @@
 @echo off
 setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-AEONQUILL-Full.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-AEONQUILL-Full.ps1" -UsePayloadInPlace -MigrateLegacyData -ReplaceExistingApplication
 if errorlevel 1 (
   echo.
   echo AEONQUILL full installation failed. Review the message above.

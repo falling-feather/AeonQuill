@@ -20,6 +20,7 @@ export function selectElectronUserDataDirectory({
   defaultDirectory,
   legacyDirectory,
   explicitDirectory,
+  portableDirectory,
   storagePathsExplicit = false,
   pathExists = existsSync,
 }) {
@@ -29,6 +30,9 @@ export function selectElectronUserDataDirectory({
   }
   if (storagePathsExplicit) {
     return Object.freeze({ directory: current, layout: 'aeonquill-explicit-storage' })
+  }
+  if (portableDirectory) {
+    return Object.freeze({ directory: resolve(portableDirectory), layout: 'portable-sibling-user-data' })
   }
 
   const legacy = resolve(legacyDirectory)

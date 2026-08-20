@@ -3,12 +3,16 @@ param(
   [switch]$AcceptMiniMaxH3License,
   [switch]$UsePayloadInPlace,
   [switch]$NoLaunch,
-  [switch]$RepairRuntime
+  [switch]$RepairRuntime,
+  [string]$InstallBase,
+  [switch]$MigrateLegacyData,
+  [switch]$RemoveLegacyAfterMigration,
+  [switch]$ReplaceExistingApplication
 )
 
 $ErrorActionPreference = 'Stop'
 $packageId = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
-$productVersion = '0.4.0'
+$productVersion = '0.4.1'
 $payloadRoot = Join-Path $PSScriptRoot "runtime\$packageId"
 $runtimeManifestPath = Join-Path $payloadRoot 'runtime-manifest.json'
 $releaseManifestPath = Join-Path $PSScriptRoot 'offline-release-manifest.json'
@@ -20,6 +24,33 @@ function Assert-ChildPath {
   $childPath = [IO.Path]::GetFullPath($Child)
   if (-not $childPath.StartsWith($parentPath, [StringComparison]::OrdinalIgnoreCase)) {
     throw "路径越界：$Child"
+  }
+}
+
+function Resolve-SafeDirectory {
+  param([string]$Path, [string]$Label)
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) {
+    throw "$Label 必须是绝对目录。"
+  }
+  $resolved = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+  $driveRoot = [IO.Path]::GetPathRoot($resolved).TrimEnd('\')
+  if ($resolved -eq $driveRoot) {
+    throw "$Label 不能是磁盘根目录。"
+  }
+  return $resolved
+}
+
+function Invoke-Robocopy {
+  param([string]$Source, [string]$Destination, [switch]$Move)
+  $arguments = @(
+    "`"$Source`"",
+    "`"$Destination`"",
+    '/E', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/XJ', '/NFL', '/NDL', '/NP'
+  )
+  if ($Move) { $arguments += '/MOVE' }
+  $result = Start-Process -FilePath 'robocopy.exe' -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+  if ($result.ExitCode -gt 7) {
+    throw "文件迁移失败，Robocopy 退出码 $($result.ExitCode)。"
   }
 }
 
@@ -136,7 +167,60 @@ if (-not $AcceptMiniMaxH3License) {
 Write-Host '正在校验离线运行时关键文件（约 40.6 GiB 模型，可能需要数分钟）…'
 Test-CriticalFiles -Root $payloadRoot -Manifest $runtimeManifest
 
-$appDataRoot = Join-Path $env:LOCALAPPDATA 'com.miaohui.desktop'
+$bundleDriveRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($PSScriptRoot))
+if ([string]::IsNullOrWhiteSpace($InstallBase)) {
+  $InstallBase = Join-Path $bundleDriveRoot 'AEONQUILL'
+}
+$installationRoot = Resolve-SafeDirectory -Path $InstallBase -Label 'AEONQUILL 安装根目录'
+$applicationDirectory = Join-Path $installationRoot 'App'
+$appDataRoot = Join-Path $installationRoot 'UserData'
+Assert-ChildPath -Parent $installationRoot -Child $applicationDirectory
+Assert-ChildPath -Parent $installationRoot -Child $appDataRoot
+
+$runningApplication = @(Get-Process -Name 'aeonquill-desktop', 'aeonquill-bridge' -ErrorAction SilentlyContinue)
+if ($runningApplication.Count -gt 0) {
+  throw 'AEONQUILL 仍在运行。请先退出应用，再重新执行安装。'
+}
+
+$uninstallRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AEONQUILL'
+$existingInstallation = Get-ItemProperty -LiteralPath $uninstallRegistryPath -ErrorAction SilentlyContinue
+if ($existingInstallation) {
+  $existingDirectory = [IO.Path]::GetFullPath(([string]$existingInstallation.InstallLocation).Trim('"')).TrimEnd('\')
+  if ($existingDirectory -ne [IO.Path]::GetFullPath($applicationDirectory).TrimEnd('\')) {
+    if (-not $ReplaceExistingApplication) {
+      throw "检测到其他位置的 AEONQUILL：$existingDirectory。请使用 -ReplaceExistingApplication 完成受控替换。"
+    }
+    $existingUninstaller = Join-Path $existingDirectory 'uninstall.exe'
+    Assert-ChildPath -Parent $existingDirectory -Child $existingUninstaller
+    if (-not (Test-Path -LiteralPath $existingUninstaller -PathType Leaf)) {
+      throw '旧版 AEONQUILL 卸载器缺失，拒绝覆盖注册信息。'
+    }
+    Write-Host "正在卸载旧位置的 AEONQUILL：$existingDirectory"
+    $uninstall = Start-Process -FilePath $existingUninstaller -ArgumentList '/S' -Wait -PassThru
+    if ($uninstall.ExitCode -ne 0) {
+      throw "旧版 AEONQUILL 卸载器退出码为 $($uninstall.ExitCode)。"
+    }
+  }
+}
+
+$legacyDataRoot = Join-Path $env:LOCALAPPDATA 'com.miaohui.desktop'
+if ($MigrateLegacyData -and (Test-Path -LiteralPath $legacyDataRoot -PathType Container)) {
+  if ([IO.Path]::GetFullPath($legacyDataRoot) -eq [IO.Path]::GetFullPath($appDataRoot)) {
+    throw '旧数据目录与目标目录相同，拒绝迁移。'
+  }
+  New-Item -ItemType Directory -Force -Path $appDataRoot | Out-Null
+  Write-Host "正在把旧 AEONQUILL 用户数据迁移到 $appDataRoot …"
+  Invoke-Robocopy -Source $legacyDataRoot -Destination $appDataRoot -Move:$RemoveLegacyAfterMigration
+  if ($RemoveLegacyAfterMigration) {
+    $remaining = @(Get-ChildItem -LiteralPath $legacyDataRoot -Force -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 0) {
+      Remove-Item -LiteralPath $legacyDataRoot -Force
+    } else {
+      Write-Warning '旧数据根目录仍包含未迁移项目，已保留该目录。'
+    }
+  }
+}
+
 $runtimePackages = Join-Path $appDataRoot 'runtime\packages'
 $runtimeDestination = Join-Path $runtimePackages $packageId
 $selectedRuntime = $payloadRoot
@@ -164,14 +248,7 @@ if (-not $UsePayloadInPlace) {
       throw "目标磁盘空间不足：至少需要 $([Math]::Ceiling($required / 1GB)) GiB。"
     }
     Write-Host '正在复制完整离线运行时；请勿关闭窗口…'
-    $result = Start-Process -FilePath 'robocopy.exe' -ArgumentList @(
-      "`"$payloadRoot`"",
-      "`"$runtimeDestination`"",
-      '/E', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NP'
-    ) -Wait -PassThru -WindowStyle Hidden
-    if ($result.ExitCode -gt 7) {
-      throw "离线运行时复制失败，Robocopy 退出码 $($result.ExitCode)。"
-    }
+    Invoke-Robocopy -Source $payloadRoot -Destination $runtimeDestination
     Test-CriticalFiles -Root $runtimeDestination -Manifest $runtimeManifest
   }
   $selectedRuntime = $runtimeDestination
@@ -181,7 +258,7 @@ $configDirectory = Join-Path $appDataRoot 'config'
 $configPath = Join-Path $configDirectory 'local.json'
 New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
 if (Test-Path -LiteralPath $configPath) {
-  Copy-Item -LiteralPath $configPath -Destination "$configPath.pre-v040.bak" -Force
+  Copy-Item -LiteralPath $configPath -Destination "$configPath.pre-v041.bak" -Force
 }
 $configuration = [ordered]@{
   comfyUrl = 'http://127.0.0.1:8188'
@@ -214,16 +291,28 @@ $installerArtifact = Get-BoundArtifact -ReleaseManifest $releaseManifest -Relati
 $installerPath = Join-Path $PSScriptRoot $installerRelativePath
 Test-BoundArtifact -Root $PSScriptRoot -Artifact $installerArtifact
 Write-Host '正在安装 AEONQUILL 应用本体…'
-$install = Start-Process -FilePath $installerPath -ArgumentList '/S' -Wait -PassThru
+$install = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$applicationDirectory") -Wait -PassThru
 if ($install.ExitCode -ne 0) {
   throw "AEONQUILL 安装器退出码为 $($install.ExitCode)。"
 }
 
-$appExecutable = Join-Path $env:LOCALAPPDATA 'Programs\AEONQUILL\aeonquill-desktop.exe'
+$appExecutable = Join-Path $applicationDirectory 'aeonquill-desktop.exe'
 if (-not (Test-Path -LiteralPath $appExecutable -PathType Leaf)) {
   throw '应用安装完成后未找到 aeonquill-desktop.exe。'
 }
+$layoutPath = Join-Path $applicationDirectory 'aeonquill-layout.json'
+$layout = [ordered]@{
+  schemaVersion = 1
+  layout = 'sibling-user-data'
+  dataDirectoryName = 'UserData'
+}
+$layoutTemporary = "$layoutPath.installing"
+$layoutJson = $layout | ConvertTo-Json -Depth 3
+[IO.File]::WriteAllText($layoutTemporary, $layoutJson + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+Move-Item -LiteralPath $layoutTemporary -Destination $layoutPath -Force
 Write-Host 'AEONQUILL 完整离线阶段包安装完成。' -ForegroundColor Green
+Write-Host "应用：$applicationDirectory"
+Write-Host "用户数据：$appDataRoot"
 Write-Host "运行时：$selectedRuntime"
 if (-not $NoLaunch) {
   Start-Process -FilePath $appExecutable | Out-Null

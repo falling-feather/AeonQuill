@@ -9,6 +9,11 @@ import {
   DURABLE_USER_DATA_MARKERS,
   selectElectronUserDataDirectory,
 } from '../desktop/shared/user-data-compat.mjs'
+import {
+  parsePortableLayout,
+  PORTABLE_LAYOUT_FILENAME,
+  resolvePortableDataDirectory,
+} from '../desktop/shared/portable-layout.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 
@@ -25,7 +30,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
-  assert.equal(metadata.version, '0.4.0')
+  assert.equal(metadata.version, '0.4.1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -35,7 +40,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     '../../release/THIRD-PARTY-NOTICES.md': 'release/THIRD-PARTY-NOTICES.md',
   })
   assert.match(cargoSource, /^name = "aeonquill-desktop"$/m)
-  assert.match(cargoSource, /^version = "0\.4\.0"$/m)
+  assert.match(cargoSource, /^version = "0\.4\.1"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
@@ -57,7 +62,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
   }
-  assert.equal(basename(paths.installer), 'AEONQUILL_0.4.0_x64-setup.exe')
+  assert.equal(basename(paths.installer), 'AEONQUILL_0.4.1_x64-setup.exe')
   assert.equal(basename(paths.builtApp), 'aeonquill-desktop.exe')
   assert.equal(basename(paths.bundledSidecar), 'aeonquill-bridge.exe')
 })
@@ -100,10 +105,62 @@ test('Electron preserves legacy user data only when the AEONQUILL location is st
     selectElectronUserDataDirectory({
       defaultDirectory: current,
       legacyDirectory: legacy,
+      portableDirectory: join(projectRoot, '.test-paths', 'portable', 'UserData'),
+      pathExists,
+    }),
+    {
+      directory: join(projectRoot, '.test-paths', 'portable', 'UserData'),
+      layout: 'portable-sibling-user-data',
+    },
+  )
+  assert.deepEqual(
+    selectElectronUserDataDirectory({
+      defaultDirectory: current,
+      legacyDirectory: legacy,
       storagePathsExplicit: true,
       pathExists,
     }),
     { directory: current, layout: 'aeonquill-explicit-storage' },
+  )
+})
+
+test('portable desktop layout is strict and resolves UserData beside App', () => {
+  const applicationDirectory = join(projectRoot, '.test-paths', 'portable', 'App')
+  const markerPath = join(applicationDirectory, PORTABLE_LAYOUT_FILENAME)
+  const source = JSON.stringify({
+    schemaVersion: 1,
+    layout: 'sibling-user-data',
+    dataDirectoryName: 'UserData',
+  })
+  assert.deepEqual(parsePortableLayout(source), JSON.parse(source))
+  assert.deepEqual(
+    resolvePortableDataDirectory({
+      executableDirectory: applicationDirectory,
+      pathExists: (pathname) => pathname === markerPath,
+      readText: () => source,
+    }),
+    {
+      directory: join(projectRoot, '.test-paths', 'portable', 'UserData'),
+      layout: 'portable-sibling-user-data',
+      markerPath,
+    },
+  )
+  assert.throws(
+    () => parsePortableLayout(JSON.stringify({
+      schemaVersion: 1,
+      layout: 'sibling-user-data',
+      dataDirectoryName: '..\\private',
+    })),
+    /must be UserData/,
+  )
+  assert.throws(
+    () => parsePortableLayout(JSON.stringify({
+      schemaVersion: 1,
+      layout: 'sibling-user-data',
+      dataDirectoryName: 'UserData',
+      leakedField: true,
+    })),
+    /must contain exactly/,
   )
 })
 
@@ -270,10 +327,10 @@ test('stage package carries installation, limitation, notice and manifest-schema
 })
 
 test('full offline installer binds the application and runtime before installation', async () => {
-  const installer = await readFile(
-    join(projectRoot, 'desktop', 'release', 'Install-AEONQUILL-Full.ps1'),
-    'utf8',
-  )
+  const [installer, command] = await Promise.all([
+    readFile(join(projectRoot, 'desktop', 'release', 'Install-AEONQUILL-Full.ps1'), 'utf8'),
+    readFile(join(projectRoot, 'desktop', 'release', 'Install-AEONQUILL-Full.cmd'), 'utf8'),
+  ])
   for (const requiredToken of [
     'offline-release-manifest.json',
     'SHA256SUMS-offline.txt',
@@ -284,8 +341,18 @@ test('full offline installer binds the application and runtime before installati
     'AcceptMiniMaxH3License',
     'UsePayloadInPlace',
     'RepairRuntime',
+    'InstallBase',
+    'MigrateLegacyData',
+    'RemoveLegacyAfterMigration',
+    'ReplaceExistingApplication',
+    'aeonquill-layout.json',
+    'sibling-user-data',
   ]) assert.match(installer, new RegExp(requiredToken))
-  assert.match(installer, /productVersion = '0\.4\.0'/)
+  assert.match(installer, /productVersion = '0\.4\.1'/)
   assert.match(installer, /Start-Process -FilePath \$installerPath/)
+  assert.match(installer, /"\/D=\$applicationDirectory"/)
+  assert.match(command, /-UsePayloadInPlace/)
+  assert.match(command, /-MigrateLegacyData/)
+  assert.match(command, /-ReplaceExistingApplication/)
   assert.doesNotMatch(installer, /Get-ChildItem[^\n]+AEONQUILL_\*/)
 })

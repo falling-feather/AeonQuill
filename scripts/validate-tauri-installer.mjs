@@ -15,8 +15,8 @@ const releasePaths = resolveReleasePaths(metadata)
 const runtimeRoot = resolve(projectRoot, '.runtime')
 const installerPath = releasePaths.installer
 const testRoot = join(runtimeRoot, 'install-test', `tauri-${process.pid}`)
-const installDirectory = join(testRoot, 'app')
-const userDataDirectory = join(testRoot, 'user-data-preserve')
+const installDirectory = join(testRoot, 'App')
+const userDataDirectory = join(testRoot, 'UserData')
 const appRuntimeDirectory = join(userDataDirectory, 'runtime')
 const appDataDirectory = join(userDataDirectory, 'data')
 const appCacheDirectory = join(userDataDirectory, 'cache')
@@ -174,6 +174,7 @@ try {
 
   const installedAppPath = join(installDirectory, metadata.appExecutable)
   const installedSidecarPath = join(installDirectory, metadata.sidecarRuntimeFilename)
+  const portableLayoutPath = join(installDirectory, 'aeonquill-layout.json')
   const installedReleaseFiles = [
     join(installDirectory, 'release', 'INSTALL.zh-CN.md'),
     join(installDirectory, 'release', 'LIMITATIONS.zh-CN.md'),
@@ -188,6 +189,11 @@ try {
   for (const releaseFile of installedReleaseFiles) {
     assert.ok((await stat(releaseFile)).size > 500, `Bundled release notice is missing: ${releaseFile}`)
   }
+  await writeFile(portableLayoutPath, `${JSON.stringify({
+    schemaVersion: 1,
+    layout: 'sibling-user-data',
+    dataDirectoryName: 'UserData',
+  }, null, 2)}\n`, 'utf8')
   const uninstallEntry = (await readdir(installDirectory)).find((name) => /^uninstall.*\.exe$/i.test(name))
   assert.ok(uninstallEntry, 'NSIS uninstaller was not installed')
   const uninstallerPath = join(installDirectory, uninstallEntry)
@@ -203,11 +209,6 @@ try {
       AEONQUILL_DESKTOP_QA: '1',
       AEONQUILL_DESKTOP_AUTOCLOSE_MS: '600',
       AEONQUILL_DESKTOP_REPORT: appReportPath,
-      AEONQUILL_RUNTIME_DIR: appRuntimeDirectory,
-      AEONQUILL_DATA_DIR: appDataDirectory,
-      AEONQUILL_CACHE_DIR: appCacheDirectory,
-      AEONQUILL_LOG_DIR: appLogDirectory,
-      AEONQUILL_CONFIG: appConfigPath,
       MIAOHUI_COMFY_POLICY: 'manual',
       COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
     },
@@ -301,6 +302,7 @@ try {
       rendererSandboxed: true,
       bridgeExitedGracefully: true,
       legacyRuntimeDataFallback: true,
+      portableSiblingUserData: true,
     },
     uninstallation: {
       exitCode: uninstallResult.exitCode,

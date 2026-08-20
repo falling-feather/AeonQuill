@@ -11,6 +11,7 @@ import {
   waitForBridgeReady,
 } from '../shared/bridge-contract.mjs'
 import { selectElectronUserDataDirectory } from '../shared/user-data-compat.mjs'
+import { resolvePortableDataDirectory } from '../shared/portable-layout.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from '../../server/security.mjs'
 
 const startupStartedAt = Date.now()
@@ -18,6 +19,9 @@ const qaMode = (process.env.AEONQUILL_DESKTOP_QA || process.env.MIAOHUI_DESKTOP_
 const qaUserData = process.env.AEONQUILL_DESKTOP_USER_DATA || process.env.MIAOHUI_DESKTOP_USER_DATA
 
 app.setName('AEONQUILL')
+const portableLayout = app.isPackaged
+  ? resolvePortableDataDirectory({ executableDirectory: dirname(process.execPath) })
+  : null
 const storagePathsExplicit = [
   'AEONQUILL_RUNTIME_DIR',
   'AEONQUILL_DATA_DIR',
@@ -34,9 +38,10 @@ const userDataSelection = selectElectronUserDataDirectory({
   defaultDirectory: app.getPath('userData'),
   legacyDirectory: join(app.getPath('appData'), 'MiaoHui'),
   explicitDirectory: qaUserData,
+  portableDirectory: portableLayout?.directory,
   storagePathsExplicit,
 })
-if (userDataSelection.layout === 'explicit') {
+if (['explicit', 'portable-sibling-user-data'].includes(userDataSelection.layout)) {
   mkdirSync(userDataSelection.directory, { recursive: true })
 }
 app.setPath('userData', userDataSelection.directory)

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
@@ -23,6 +23,15 @@ const LOOPBACK_HOST: &str = "127.0.0.1";
 const BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(20);
 const BRIDGE_STOP_TIMEOUT: Duration = Duration::from_secs(8);
 const QA_TITLE_PREFIX: &str = "__AEONQUILL_QA__";
+const PORTABLE_LAYOUT_FILENAME: &str = "aeonquill-layout.json";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PortableLayout {
+    schema_version: u8,
+    layout: String,
+    data_directory_name: String,
+}
 
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +352,43 @@ fn configured_path(primary_key: &str, legacy_key: Option<&str>, fallback: PathBu
         .unwrap_or(fallback)
 }
 
+fn portable_data_directory() -> Result<Option<PathBuf>, std::io::Error> {
+    let executable = std::env::current_exe()?;
+    let application_directory = executable.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "AEONQUILL executable has no parent",
+        )
+    })?;
+    let marker_path = application_directory.join(PORTABLE_LAYOUT_FILENAME);
+    if !marker_path.is_file() {
+        return Ok(None);
+    }
+    let source = fs::read_to_string(&marker_path)?;
+    let layout: PortableLayout = serde_json::from_str(&source).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Invalid AEONQUILL portable layout: {error}"),
+        )
+    })?;
+    if layout.schema_version != 1
+        || layout.layout != "sibling-user-data"
+        || layout.data_directory_name != "UserData"
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Unsupported AEONQUILL portable layout",
+        ));
+    }
+    let installation_root = application_directory.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "AEONQUILL application directory has no installation root",
+        )
+    })?;
+    Ok(Some(installation_root.join(layout.data_directory_name)))
+}
+
 fn safe_child_environment() -> HashMap<OsString, OsString> {
     const SAFE_KEYS: &[&str] = &[
         "APPDATA",
@@ -455,7 +501,10 @@ fn setup_desktop(
     app: &mut App,
     runtime: &Arc<DesktopRuntime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let default_data_directory = app.path().app_local_data_dir()?;
+    let default_data_directory = match portable_data_directory()? {
+        Some(directory) => directory,
+        None => app.path().app_local_data_dir()?,
+    };
     let runtime_directory = configured_path(
         "AEONQUILL_RUNTIME_DIR",
         Some("MIAOHUI_RUNTIME_DIR"),

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "packageId": "aeonquill-comfyui-h3-cu129-win-x64-v1",
-  "productVersion": "0.4.0",
+  "productVersion": "0.4.1",
   "platform": "windows",
   "architecture": "x64",
   "distributionStatus": "local-stage-only",

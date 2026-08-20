@@ -1,4 +1,4 @@
-# AEONQUILL V0.4.0 完整离线阶段包
+# AEONQUILL V0.4.1 完整离线阶段包
 
 本目录同时包含 AEONQUILL Windows x64 应用安装器与固定版本的本机创作运行时。运行时包含 ComfyUI、便携 Python、PyTorch CUDA、当前产品所需自定义节点、MiniMax H3 文生/图生视频模型、SAM、FFmpeg、rembg/U2NETP 与 Real-ESRGAN。系统无需另外安装 Node.js 或 Python；仍需要兼容的 NVIDIA 显卡驱动。
 
@@ -7,15 +7,17 @@
 1. 保持本目录结构完整，不要单独移动 `runtime`、安装脚本或 EXE。
 2. 双击 `Install-AEONQUILL-Full.cmd`。
 3. 阅读 MiniMax H3 许可提示；确认位于适用地区并接受协议后输入 `ACCEPT`。
-4. 安装脚本会先校验根发布清单绑定的安装器、脚本和运行时清单，再校验关键模型/执行器；随后把 50.28 GiB 运行时复制到当前用户应用数据目录、写入受控配置、静默安装应用本体并启动 AEONQUILL。
+4. 安装脚本会先校验根发布清单绑定的安装器、脚本和运行时清单，再校验关键模型/执行器；随后在完整包所在磁盘创建 `AEONQUILL\App` 与 `AEONQUILL\UserData`，迁移旧用户数据、写入受控配置、静默替换应用本体并启动 AEONQUILL。
 
-若只想在当前目录原位使用运行时，可在 PowerShell 中运行：
+双击入口默认直接使用完整包中的 50.28 GiB 运行时，不再把模型复制到 C 盘。请把完整包放在准备长期使用的磁盘，例如 `D:\AEONQUILL-Package`，安装后不要移动或删除该目录。
+
+需要指定安装盘时，可在 PowerShell 中运行：
 
 ```powershell
-.\Install-AEONQUILL-Full.ps1 -UsePayloadInPlace
+.\Install-AEONQUILL-Full.ps1 -InstallBase 'D:\AEONQUILL' -UsePayloadInPlace -MigrateLegacyData -ReplaceExistingApplication
 ```
 
-原位模式不会复制大型模型，但移动或删除本目录会使视频与模型型图片处理失效。默认复制模式更适合稳定测试。
+若确认旧版 C 盘用户数据已经不再被其他版本使用，可额外加 `-RemoveLegacyAfterMigration`；脚本只会移动固定的 AEONQUILL 数据根，不会扫描或删除同盘其他目录。原位运行时模式不会复制大型模型，但移动或删除完整包目录会使视频与模型型图片处理失效。
 
 ## 运行边界
 
@@ -24,6 +26,7 @@
 - 应用本体、Node 22 bridge、Python、ComfyUI、H3/SAM 模型和本地图片处理器均来自包内固定清单。
 - NVIDIA 驱动属于系统级依赖，不在包内静默安装。
 - 当前包未签名，Windows 可能显示 SmartScreen 提示。
+- `App` 与 `UserData` 为同级目录，卸载程序只移除 `App`，不会删除项目、配置和任务历史。
 
 ## 许可边界
 
