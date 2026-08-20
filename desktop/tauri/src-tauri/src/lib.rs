@@ -401,6 +401,8 @@ fn configured_child_environment(
         "AEONQUILL_IMAGE_CONCURRENCY",
         "MIAOHUI_IMAGE_CONCURRENCY",
         "COMFY_URL",
+        "AEONQUILL_COMFY_ROOT",
+        "AEONQUILL_COMFY_PYTHON",
         "COMFY_ROOT",
         "COMFY_PYTHON",
         "FFMPEG_PATH",

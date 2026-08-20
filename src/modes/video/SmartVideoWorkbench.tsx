@@ -588,7 +588,7 @@ export function SmartVideoWorkbench({
         </div>
         <div className="aq-video-header-status">
           <span className={`aq-video-runtime is-${runtime.state}`}><i />{runtime.label}</span>
-          <span className="aq-video-safe-badge"><ShieldCheck size={14} /> Schema 1 · 固定 H3 工作流</span>
+          <span className="aq-video-safe-badge"><ShieldCheck size={14} /> Powered by MiniMax H3 · 固定工作流</span>
         </div>
       </header>
 

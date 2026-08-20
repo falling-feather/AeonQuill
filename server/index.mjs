@@ -16,7 +16,7 @@ import {
 } from './job-scheduler.mjs'
 import { JobStore } from './job-store.mjs'
 import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store.mjs'
-import { ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
+import { buildManagedComfyLaunch, ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
 import {
   cacheDirectory,
   dataDirectory,
@@ -51,6 +51,7 @@ import {
   VIDEO_DURATIONS,
   VIDEO_PRESETS,
   WORKFLOW_VERSION,
+  validateBundledWorkflowTemplates,
   workflowCatalog,
 } from './workflow-builder.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
@@ -98,6 +99,7 @@ function scheduleHardwareHint() {
 }
 
 await Promise.all([
+  validateBundledWorkflowTemplates(),
   mkdir(inputDirectory, { recursive: true }),
   mkdir(assetDirectory, { recursive: true }),
   mkdir(cacheDirectory, { recursive: true }),
@@ -669,9 +671,8 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
   const outputPath = join(assetDirectory, outputFilename)
   const temporaryOutputPath = join(assetDirectory, `${job.id}-element.part.png`)
   const managedUploadFilename = `aeonquill-${job.id}.png`
-  const managedComfyInputPath = localRuntimeConfig.comfyRoot
-    ? join(localRuntimeConfig.comfyRoot, 'input', managedUploadFilename)
-    : undefined
+  const managedComfyInputRoot = buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs }).directories.input
+  const managedComfyInputPath = join(managedComfyInputRoot, managedUploadFilename)
   let completed = false
   try {
     await store.update(jobId, {
@@ -811,10 +812,7 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
   } finally {
     await unlink(normalizedInputPath).catch(() => {})
     await unlink(temporaryOutputPath).catch(() => {})
-    if (managedComfyInputPath) {
-      const comfyInputRoot = join(localRuntimeConfig.comfyRoot, 'input')
-      await unlink(assertManagedPrivatePath(managedComfyInputPath, comfyInputRoot)).catch(() => {})
-    }
+    await unlink(assertManagedPrivatePath(managedComfyInputPath, managedComfyInputRoot)).catch(() => {})
     if (!completed) {
       await unlink(outputPath).catch(() => {})
       await unlink(maskPath).catch(() => {})

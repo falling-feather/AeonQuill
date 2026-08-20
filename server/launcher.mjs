@@ -15,6 +15,8 @@ bridgeProcess = spawn(process.execPath, ['server/index.mjs'], {
   stdio: 'inherit',
   env: createRestrictedChildEnvironment({
     COMFY_URL: comfyUrl,
+    AEONQUILL_COMFY_ROOT: process.env.AEONQUILL_COMFY_ROOT,
+    AEONQUILL_COMFY_PYTHON: process.env.AEONQUILL_COMFY_PYTHON,
     COMFY_ROOT: process.env.COMFY_ROOT,
     COMFY_PYTHON: process.env.COMFY_PYTHON,
     FFMPEG_PATH: process.env.FFMPEG_PATH,

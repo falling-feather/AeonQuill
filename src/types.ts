@@ -419,6 +419,7 @@ export type RuntimeDiagnostics = {
     pythonValid: boolean
     rootLabel?: string
     pythonLabel?: string
+    offlineRuntimePackageId: string | null
     comfyUrl: string
     launchPolicy: 'persistent' | 'idle' | 'manual'
     idleSeconds: number

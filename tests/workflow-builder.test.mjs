@@ -7,6 +7,7 @@ import {
   VIDEO_DURATIONS,
   VIDEO_PRESETS,
   WORKFLOW_VERSION,
+  validateBundledWorkflowTemplates,
   workflowCatalog,
 } from '../server/workflow-builder.mjs'
 
@@ -98,4 +99,14 @@ test('catalog exposes the same workflow contract as the builder', () => {
   assert.deepEqual(catalog.aspectRatios.map(({ id }) => id), Object.keys(VIDEO_DIMENSIONS))
   assert.deepEqual(catalog.durations.map(({ seconds }) => seconds), Object.keys(VIDEO_DURATIONS).map(Number))
   assert.deepEqual(catalog.presets.map(({ id }) => id), Object.keys(VIDEO_PRESETS))
+})
+
+test('validates both bundled workflow templates before the bridge starts', async () => {
+  assert.deepEqual(await validateBundledWorkflowTemplates(), {
+    version: WORKFLOW_VERSION,
+    templates: [
+      { mode: 'text-to-video', filename: 'minimax-h3-t2v.json', nodes: 15 },
+      { mode: 'image-to-video', filename: 'minimax-h3-i2v.json', nodes: 16 },
+    ],
+  })
 })

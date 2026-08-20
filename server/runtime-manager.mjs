@@ -2,11 +2,36 @@ import { openSync } from 'node:fs'
 import { mkdir, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { dataDirectory, logDirectory, runtimeDirectory } from './runtime-paths.mjs'
+import { cacheDirectory, dataDirectory, logDirectory, runtimeDirectory } from './runtime-paths.mjs'
+import { probeOfflineRuntimePackage } from './offline-runtime.mjs'
 import { normalizeLoopbackComfyUrl, readLocalConfigFile } from './runtime-settings.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from './security.mjs'
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const START_TIMEOUT_MS = 4 * 60 * 1000
+
+export function buildManagedComfyLaunch({
+  args = [],
+  dataRoot = dataDirectory,
+  cacheRoot = cacheDirectory,
+} = {}) {
+  const directories = {
+    input: join(dataRoot, 'comfyui', 'input'),
+    output: join(dataRoot, 'comfyui', 'output'),
+    user: join(dataRoot, 'comfyui', 'user'),
+    userDefault: join(dataRoot, 'comfyui', 'user', 'default'),
+    temp: join(cacheRoot, 'comfyui', 'temp'),
+  }
+  const nextArgs = Array.isArray(args) ? [...args] : []
+  for (const [flag, pathname] of [
+    ['--input-directory', directories.input],
+    ['--output-directory', directories.output],
+    ['--user-directory', directories.user],
+    ['--temp-directory', directories.temp],
+  ]) {
+    if (!nextArgs.includes(flag)) nextArgs.push(flag, pathname)
+  }
+  return { args: nextArgs, directories }
+}
 
 async function fileExists(pathname) {
   if (!pathname) return false
@@ -29,6 +54,7 @@ function normalizeIdleTimeout(value) {
 
 export async function loadLocalRuntimeConfig() {
   await mkdir(runtimeDirectory, { recursive: true })
+  const offlineRuntime = await probeOfflineRuntimePackage().catch(() => null)
   let config = {}
   let configReadError
   try {
@@ -51,11 +77,11 @@ export async function loadLocalRuntimeConfig() {
   const imageTools = config.imageTools && typeof config.imageTools === 'object' ? config.imageTools : {}
   return {
     comfyUrl,
-    comfyRoot: typeof (process.env.COMFY_ROOT || config.comfyRoot) === 'string'
-      ? process.env.COMFY_ROOT || config.comfyRoot
+    comfyRoot: typeof (process.env.AEONQUILL_COMFY_ROOT || process.env.COMFY_ROOT || config.comfyRoot || offlineRuntime?.comfyRoot) === 'string'
+      ? process.env.AEONQUILL_COMFY_ROOT || process.env.COMFY_ROOT || config.comfyRoot || offlineRuntime?.comfyRoot
       : undefined,
-    pythonPath: typeof (process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath) === 'string'
-      ? process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath
+    pythonPath: typeof (process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath) === 'string'
+      ? process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath
       : undefined,
     bridgePort: Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || config.bridgePort || 8787),
     allowedOrigins: [
@@ -71,16 +97,18 @@ export async function loadLocalRuntimeConfig() {
         || config.comfyIdleSeconds,
     ),
     imageTools: {
-      ffmpegPath: process.env.FFMPEG_PATH || imageTools.ffmpegPath || 'ffmpeg',
-      ffprobePath: process.env.FFPROBE_PATH || imageTools.ffprobePath,
+      ffmpegPath: process.env.FFMPEG_PATH || imageTools.ffmpegPath || offlineRuntime?.ffmpegPath || 'ffmpeg',
+      ffprobePath: process.env.FFPROBE_PATH || imageTools.ffprobePath || offlineRuntime?.ffprobePath,
       rembgPath: process.env.AEONQUILL_REMBG_PATH || process.env.MIAOHUI_REMBG_PATH || imageTools.rembgPath,
       rembgModelsPath: process.env.AEONQUILL_REMBG_MODELS
         || process.env.MIAOHUI_REMBG_MODELS
         || imageTools.rembgModelsPath
+        || offlineRuntime?.rembgModelsPath
         || join(dataDirectory, 'models', 'rembg'),
       realEsrganPath: process.env.AEONQUILL_REALESRGAN_PATH
         || process.env.MIAOHUI_REALESRGAN_PATH
         || imageTools.realEsrganPath
+        || offlineRuntime?.realEsrganPath
         || join(
           dataDirectory,
           'tools',
@@ -90,8 +118,10 @@ export async function loadLocalRuntimeConfig() {
       realEsrganModelsPath: process.env.AEONQUILL_REALESRGAN_MODELS
         || process.env.MIAOHUI_REALESRGAN_MODELS
         || imageTools.realEsrganModelsPath
+        || offlineRuntime?.realEsrganModelsPath
         || join(dataDirectory, 'models', 'realesrgan-ncnn-vulkan'),
     },
+    offlineRuntimePackageId: offlineRuntime?.packageId,
     comfyArgs: Array.isArray(config.comfyArgs) && config.comfyArgs.length
       ? config.comfyArgs
       : [
@@ -232,14 +262,18 @@ export class ComfyRuntimeManager {
     if (!(await fileExists(pythonPath)) || !(await fileExists(join(comfyRoot || '', 'main.py')))) {
       throw new Error('ComfyUI 本机路径未配置，无法按需启动')
     }
-    await mkdir(logDirectory, { recursive: true })
+    const launch = buildManagedComfyLaunch({ args: comfyArgs })
+    await Promise.all([
+      mkdir(logDirectory, { recursive: true }),
+      ...Object.values(launch.directories).map((pathname) => mkdir(pathname, { recursive: true })),
+    ])
     const logPath = join(logDirectory, 'comfyui.log')
     const logHandle = openSync(logPath, 'a')
     this.state = 'starting'
     this.startedAt = Date.now()
     this.lastError = null
     this.emit()
-    this.process = spawn(pythonPath, comfyArgs, {
+    this.process = spawn(pythonPath, launch.args, {
       cwd: comfyRoot,
       windowsHide: true,
       stdio: ['ignore', logHandle, logHandle],

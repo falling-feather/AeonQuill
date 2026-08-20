@@ -153,6 +153,23 @@ async function readTemplate(mode) {
   return structuredClone(templateCache.get(mode))
 }
 
+export async function validateBundledWorkflowTemplates() {
+  const checks = []
+  for (const mode of Object.keys(WORKFLOW_FILES)) {
+    const template = await readTemplate(mode)
+    assertAllowedWorkflow(template)
+    checks.push({
+      mode,
+      filename: WORKFLOW_FILES[mode],
+      nodes: Object.keys(template).length,
+    })
+  }
+  return {
+    version: WORKFLOW_VERSION,
+    templates: checks,
+  }
+}
+
 function safeOutputPrefix(jobId, mode) {
   const safeId = jobId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
   return `AEONQUILL/${mode === 'image-to-video' ? 'I2V' : 'T2V'}_${safeId}`

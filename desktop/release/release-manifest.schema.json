@@ -90,7 +90,7 @@
         "nodeVersion": { "type": "string" },
         "tauriCliVersion": { "type": "string" },
         "electronFallbackVersion": { "type": "string" },
-        "webview2Mode": { "const": "embedBootstrapper" }
+        "webview2Mode": { "const": "offlineInstaller" }
       }
     },
     "artifacts": {

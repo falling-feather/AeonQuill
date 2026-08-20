@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
@@ -33,7 +33,9 @@ async function inspectAuthenticodeSignature(pathname) {
   if (process.platform !== 'win32') {
     return { signed: false, valid: false, status: 'unsupported-platform', subject: null }
   }
-  const escapedPath = pathname.replaceAll("'", "''")
+  // Keep non-ASCII workspace paths out of the Windows PowerShell command text.
+  // Node passes cwd as a native wide string; the release filename itself is ASCII.
+  const escapedPath = basename(pathname).replaceAll("'", "''")
   const script = [
     `$signature = Get-AuthenticodeSignature -LiteralPath '${escapedPath}';`,
     '[pscustomobject]@{',
@@ -41,17 +43,23 @@ async function inspectAuthenticodeSignature(pathname) {
     'Subject = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Subject }',
     '} | ConvertTo-Json -Compress',
   ].join(' ')
-  const { stdout } = await execFileAsync('powershell.exe', [
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows'
+  const { stdout, stderr } = await execFileAsync('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
     '-Command',
     script,
   ], {
-    cwd: projectRoot,
+    cwd: dirname(pathname),
     windowsHide: true,
     encoding: 'utf8',
+    env: {
+      ...process.env,
+      PSModulePath: join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+    },
   })
   const parsed = JSON.parse(stdout.trim())
+  assert.ok(parsed.Status, `Authenticode inspection returned no status: ${stderr.trim() || 'unknown error'}`)
   const subject = parsed.Subject || null
   return {
     signed: Boolean(subject),
@@ -153,7 +161,7 @@ const manifest = {
     },
   },
   externalDependencies: [
-    { name: 'WebView2 Runtime', bundled: 'bootstrapper', required: true, discovery: 'tauri-installer' },
+    { name: 'WebView2 Runtime', bundled: 'offline-installer', required: true, discovery: 'tauri-installer' },
     { name: 'ComfyUI', bundled: false, required: false, discovery: 'user-confirmed-loopback-runtime' },
     { name: 'H3 models and custom nodes', bundled: false, required: false, discovery: 'fixed-workflow-capability-probe' },
     { name: 'FFmpeg/rembg/Real-ESRGAN', bundled: false, required: false, discovery: 'local-processor-capability-probe' },

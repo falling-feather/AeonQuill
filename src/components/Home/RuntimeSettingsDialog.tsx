@@ -210,7 +210,9 @@ export function RuntimeSettingsDialog({
                 <span>
                   {comfy?.connected
                     ? `${comfy.device ?? '设备待识别'} · 缺 ${comfy.missingNodes + comfy.missingModels} 项`
-                    : diagnostics?.configuration.rootLabel ?? '尚未配置托管路径'}
+                    : diagnostics?.configuration.offlineRuntimePackageId
+                      ? `内置离线运行时 · ${diagnostics.configuration.rootLabel ?? '已受管'}`
+                      : diagnostics?.configuration.rootLabel ?? '尚未配置托管路径'}
                 </span>
               </div>
               <em className={`is-${comfyHealth.tone}`}>{comfyHealth.label}</em>
@@ -269,7 +271,7 @@ export function RuntimeSettingsDialog({
             <div className="aq-runtime-settings__discovery">
               <div>
                 <strong>自动发现常见安装</strong>
-                <span>检查已配置位置、用户目录及 C/D 盘浅层 ComfyUI 目录，不递归扫描整块磁盘。</span>
+                <span>优先使用完整包内置运行时；否则检查已配置位置、用户目录及 C/D 盘浅层目录。</span>
               </div>
               <button
                 type="button"

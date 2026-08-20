@@ -285,7 +285,7 @@ try {
       bytes: installerStats.size,
       sha256: await sha256(installerPath),
       signed: false,
-      webview2Mode: 'embedBootstrapper',
+      webview2Mode: 'offlineInstaller',
     },
     installation: {
       mode: 'currentUser-silent-isolated-directory',

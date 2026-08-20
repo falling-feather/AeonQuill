@@ -381,10 +381,12 @@ export async function buildRuntimeDiagnostics({
 } = {}) {
   const stored = persistedConfig ?? await readLocalConfigFile()
   const trustedStored = configError ? {} : stored
-  const rootConfigured = typeof trustedStored.comfyRoot === 'string' && Boolean(trustedStored.comfyRoot)
-  const pythonConfigured = typeof trustedStored.pythonPath === 'string' && Boolean(trustedStored.pythonPath)
-  const rootValid = rootConfigured && await isFile(join(trustedStored.comfyRoot, 'main.py'))
-  const pythonValid = pythonConfigured && await isFile(trustedStored.pythonPath)
+  const effectiveRoot = trustedStored.comfyRoot || activeConfig?.comfyRoot
+  const effectivePython = trustedStored.pythonPath || activeConfig?.pythonPath
+  const rootConfigured = typeof effectiveRoot === 'string' && Boolean(effectiveRoot)
+  const pythonConfigured = typeof effectivePython === 'string' && Boolean(effectivePython)
+  const rootValid = rootConfigured && await isFile(join(effectiveRoot, 'main.py'))
+  const pythonValid = pythonConfigured && await isFile(effectivePython)
   const imageOperations = imageManifest?.operations ?? []
   const availableImageOperations = imageOperations.filter((operation) => operation.available)
   const semanticWorkflows = semanticManifest?.workflows ?? []
@@ -490,8 +492,9 @@ export async function buildRuntimeDiagnostics({
       pythonConfigured,
       rootValid,
       pythonValid,
-      rootLabel: safePathLabel(trustedStored.comfyRoot),
-      pythonLabel: safePathLabel(trustedStored.pythonPath),
+      rootLabel: safePathLabel(effectiveRoot),
+      pythonLabel: safePathLabel(effectivePython),
+      offlineRuntimePackageId: activeConfig?.offlineRuntimePackageId ?? null,
       comfyUrl: String(trustedStored.comfyUrl || activeConfig?.comfyUrl || DEFAULT_COMFY_URL),
       launchPolicy: trustedStored.comfyLaunchPolicy || activeConfig?.launchPolicy || 'idle',
       idleSeconds: Number(trustedStored.comfyIdleSeconds || Math.round((activeConfig?.idleTimeoutMs || 300_000) / 1_000)),

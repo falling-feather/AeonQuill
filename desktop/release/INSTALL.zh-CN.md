@@ -1,4 +1,4 @@
-# 光阴砚 AEONQUILL 阶段测试包安装说明
+# 光阴砚 AEONQUILL V0.4 阶段测试包安装说明
 
 本包是面向 Windows x64 的**未签名阶段测试包**，用于验证本地安装、图像处理与受控视频工作流；它不是已经具备代码签名、自动更新和商店信誉的正式商业发行版。
 
@@ -7,11 +7,13 @@
 1. 对照同目录的 `release-manifest.json` 与 `SHA256SUMS.txt` 核验安装包哈希。
 2. 运行 `AEONQUILL_<版本>_x64-setup.exe`。安装器只为当前 Windows 用户安装，不要求管理员权限。
 3. Windows 可能因安装包未签名显示信誉警告。只有在哈希与发布清单一致、且文件来源可信时才继续。
-4. 从开始菜单的 `AEONQUILL` 快捷方式启动。应用自带 Node.js 22 桥接，不要求系统另装 Node.js。
+4. 从开始菜单的 `AEONQUILL` 快捷方式启动。应用自带 Node.js 22 桥接与 WebView2 离线安装器，不要求系统另装 Node.js。
+
+主 NSIS 安装器只包含应用本体。需要免配置的本机图像与视频能力时，请取得同版本的“完整离线阶段包”，保持其目录结构不变并运行 `Install-AEONQUILL-Full.cmd`。该脚本会先核验根发布清单、安装器和运行时关键文件，再安装应用并写入受控运行时配置；详细边界见 `OFFLINE-FULL-INSTALL.zh-CN.md`。
 
 ## 外部能力
 
-- ComfyUI、Python、Custom Nodes 与模型权重不在主安装包中，也不会被静默下载。
+- ComfyUI、Python、Custom Nodes 与模型权重不在 0.4.0 主 NSIS 中，也不会被主程序静默下载；它们仅存在于明确取得、接受许可并校验通过的配套完整离线目录。
 - FFmpeg、rembg、Real-ESRGAN 与 H3 等能力必须通过应用诊断入口显示为可用后才能执行；缺失时应保持禁用并给出恢复建议。
 - ComfyUI 只允许回环地址，视频工作流只接受产品登记的固定模板与参数白名单。
 

@@ -25,7 +25,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
-  assert.equal(metadata.version, '0.3.0')
+  assert.equal(metadata.version, '0.4.0')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -35,7 +35,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     '../../release/THIRD-PARTY-NOTICES.md': 'release/THIRD-PARTY-NOTICES.md',
   })
   assert.match(cargoSource, /^name = "aeonquill-desktop"$/m)
-  assert.match(cargoSource, /^version = "0\.3\.0"$/m)
+  assert.match(cargoSource, /^version = "0\.4\.0"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
@@ -57,7 +57,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
   }
-  assert.equal(basename(paths.installer), 'AEONQUILL_0.3.0_x64-setup.exe')
+  assert.equal(basename(paths.installer), 'AEONQUILL_0.4.0_x64-setup.exe')
   assert.equal(basename(paths.builtApp), 'aeonquill-desktop.exe')
   assert.equal(basename(paths.bundledSidecar), 'aeonquill-bridge.exe')
 })
@@ -189,7 +189,7 @@ test('release manifest contract is strict, path-safe and stage-only', async () =
       nodeVersion: 'v22.18.0',
       tauriCliVersion: '2.8.1',
       electronFallbackVersion: '43.4.0',
-      webview2Mode: 'embedBootstrapper',
+      webview2Mode: 'offlineInstaller',
     },
     artifacts: [{
       role: 'windows-x64-nsis-installer',
@@ -267,4 +267,25 @@ test('stage package carries installation, limitation, notice and manifest-schema
   assert.equal(schema.additionalProperties, false)
   assert.equal(schema.$defs.component.additionalProperties, false)
   assert.equal(schema.$defs.sidecarComponent.additionalProperties, false)
+})
+
+test('full offline installer binds the application and runtime before installation', async () => {
+  const installer = await readFile(
+    join(projectRoot, 'desktop', 'release', 'Install-AEONQUILL-Full.ps1'),
+    'utf8',
+  )
+  for (const requiredToken of [
+    'offline-release-manifest.json',
+    'SHA256SUMS-offline.txt',
+    'aggregateSha256',
+    'Test-BoundArtifact',
+    'Test-CriticalFiles',
+    'unsigned-local-stage-only',
+    'AcceptMiniMaxH3License',
+    'UsePayloadInPlace',
+    'RepairRuntime',
+  ]) assert.match(installer, new RegExp(requiredToken))
+  assert.match(installer, /productVersion = '0\.4\.0'/)
+  assert.match(installer, /Start-Process -FilePath \$installerPath/)
+  assert.doesNotMatch(installer, /Get-ChildItem[^\n]+AEONQUILL_\*/)
 })

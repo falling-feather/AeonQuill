@@ -5,7 +5,8 @@
   ],
   "assets": [
     "../dist/**/*",
-    "../server/rembg-runner.py"
+    "../server/rembg-runner.py",
+    "../server/workflows/*.json"
   ],
   "compress": "GZip",
   "fallbackToSource": true

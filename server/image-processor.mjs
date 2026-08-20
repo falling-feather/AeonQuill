@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process'
-import { readdir, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runtimeDirectory } from './runtime-paths.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from './security.mjs'
 
 const serverDirectory = fileURLToPath(new URL('./', import.meta.url))
-const rembgRunnerPath = join(serverDirectory, 'rembg-runner.py')
+const rembgRunnerSourcePath = join(serverDirectory, 'rembg-runner.py')
+let rembgRunnerMaterializationPromise = null
 
 export const IMAGE_TOOLS_VERSION = 'image-tools-v2'
 
@@ -66,6 +68,30 @@ async function isFile(pathname) {
   } catch {
     return false
   }
+}
+
+async function materializeRembgRunner() {
+  if (rembgRunnerMaterializationPromise) return rembgRunnerMaterializationPromise
+  rembgRunnerMaterializationPromise = (async () => {
+    const source = await readFile(rembgRunnerSourcePath)
+    const targetDirectory = join(runtimeDirectory, 'tools')
+    const target = join(targetDirectory, 'rembg-runner.py')
+    await mkdir(targetDirectory, { recursive: true })
+    try {
+      if ((await readFile(target)).equals(source)) return target
+    } catch {
+      // The controlled runtime copy is absent or stale and will be replaced below.
+    }
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
+    await writeFile(temporary, source, { mode: 0o600 })
+    await rm(target, { force: true })
+    await rename(temporary, target)
+    return target
+  })().catch((error) => {
+    rembgRunnerMaterializationPromise = null
+    throw error
+  })
+  return rembgRunnerMaterializationPromise
 }
 
 function runCommand(command, args, { signal, timeoutMs = 120_000, acceptNonZero = false, env } = {}) {
@@ -512,6 +538,14 @@ export class ImageProcessor {
       this.rembgProbeReason = '已检测到 rembg，但离线目录中没有受支持的 ONNX 模型；请在设置中选择模型目录，或配置 AEONQUILL_REMBG_MODELS'
       return null
     }
+    if (executableAdapter.type === 'python-api') {
+      try {
+        executableAdapter.runnerPath = await materializeRembgRunner()
+      } catch {
+        this.rembgProbeReason = 'rembg 已安装，但无法准备受控的本机执行脚本'
+        return null
+      }
+    }
     return { ...executableAdapter, modelDirectory, models }
   }
 
@@ -581,7 +615,7 @@ export class ImageProcessor {
       }
       const args = this.rembgAdapter.type === 'python-api'
         ? [
-            rembgRunnerPath,
+            this.rembgAdapter.runnerPath,
             '--input', inputPath,
             '--output', outputPath,
             '--model', params.model,

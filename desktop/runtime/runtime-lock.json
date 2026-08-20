@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "packageId": "aeonquill-comfyui-h3-cu129-win-x64-v1",
+  "productVersion": "0.4.0",
+  "platform": "windows",
+  "architecture": "x64",
+  "distributionStatus": "local-stage-only",
+  "minimumFreeBytes": 59000000000,
+  "entrypoints": {
+    "comfyRoot": "ComfyUI",
+    "python": "python/python.exe",
+    "ffmpeg": "tools/ffmpeg/bin/ffmpeg.exe",
+    "ffprobe": "tools/ffmpeg/bin/ffprobe.exe",
+    "rembgModels": "models/rembg",
+    "realEsrgan": "tools/realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe",
+    "realEsrganModels": "tools/realesrgan-ncnn-vulkan/models"
+  },
+  "runtime": {
+    "comfyuiVersion": "0.30.2",
+    "comfyuiCommit": "959b8c4333010d2b2b5d8d715104937de2151388",
+    "comfyuiRepository": "https://github.com/comfy-org/ComfyUI",
+    "comfyuiLicense": "GPL-3.0-only",
+    "pythonVersion": "3.12.10",
+    "torchVersion": "2.8.0+cu129",
+    "cudaRuntime": "12.9",
+    "gpuFamily": "NVIDIA",
+    "minimumVramGb": 8
+  },
+  "customNodes": [
+    {
+      "directory": "ComfyUI-MiniMax-H3-Turbo",
+      "repository": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo",
+      "commit": "55fee864dd7b2976b1c4ce3c3d5f7968f181409f",
+      "license": "Apache-2.0"
+    },
+    {
+      "directory": "ComfyUI-Impact-Pack",
+      "repository": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+      "commit": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+      "license": "GPL-3.0-only"
+    }
+  ],
+  "models": [
+    {
+      "path": "ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+      "bytes": 20958205608,
+      "sha256": "12944c1f7791637e7de12208aef04da82bd26b95271b1b47d817364315ade993",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "license": "MiniMax-H3-Community-License"
+    },
+    {
+      "path": "ComfyUI/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "bytes": 15687142551,
+      "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "license": "MiniMax-H3-Community-License-and-Apache-2.0-encoder-note"
+    },
+    {
+      "path": "ComfyUI/models/vae/minimax_h3_video_vae_fp16.safetensors",
+      "bytes": 5207808496,
+      "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "license": "MiniMax-H3-Community-License"
+    },
+    {
+      "path": "ComfyUI/models/vae/minimax_h3_audio_vae_fp32.safetensors",
+      "bytes": 605254808,
+      "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "license": "MiniMax-H3-Community-License"
+    },
+    {
+      "path": "ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema.safetensors",
+      "bytes": 779849816,
+      "sha256": "5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3",
+      "source": "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ComfyUI/models/sams/sam_vit_b_01ec64.pth",
+      "bytes": 375042383,
+      "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+      "source": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "models/rembg/u2netp.onnx",
+      "bytes": 4574861,
+      "sha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
+      "license": "Apache-2.0"
+    }
+  ],
+  "tools": [
+    {
+      "id": "ffmpeg",
+      "version": "8.0.1-essentials_build-www.gyan.dev",
+      "license": "GPL-3.0",
+      "source": "https://github.com/FFmpeg/FFmpeg/commit/894da5ca7d"
+    },
+    {
+      "id": "realesrgan-ncnn-vulkan",
+      "version": "0.2.5.0-20220424",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0",
+      "archiveSha256": "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d"
+    },
+    {
+      "id": "rembg",
+      "version": "2.0.66",
+      "license": "MIT",
+      "source": "https://github.com/danielgatis/rembg"
+    }
+  ],
+  "excluded": [
+    "ComfyUI/.git",
+    "ComfyUI/.github",
+    "ComfyUI/.ci",
+    "ComfyUI/input",
+    "ComfyUI/output",
+    "ComfyUI/temp",
+    "ComfyUI/user",
+    "ComfyUI/alembic_db",
+    "ComfyUI/tests",
+    "ComfyUI/tests-unit",
+    "all unlisted custom_nodes",
+    "all unlisted model weights",
+    "launcher executables and launcher state",
+    "download caches, API keys and personal media"
+  ],
+  "licensing": {
+    "h3ApplicableTerritory": "worldwide excluding EU, UK, Republic of Korea and USA",
+    "h3UiAttributionRequired": true,
+    "h3UserTermsRequired": true,
+    "h3NoticeRequired": true,
+    "publicCommercialReleaseReady": false
+  }
+}
