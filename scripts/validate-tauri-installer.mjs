@@ -114,6 +114,21 @@ async function runProcess(command, args, { cwd, env = process.env, timeoutMs = 1
   return { child, exitCode, stdout: stdout.join('').trim(), stderr: stderr.join('').trim() }
 }
 
+async function resolveDesktopShortcut() {
+  if (process.platform !== 'win32') {
+    return join(process.env.HOME || '', 'Desktop', `${metadata.productName}.lnk`)
+  }
+  const result = await runProcess('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    '[Environment]::GetFolderPath([Environment+SpecialFolder]::Desktop)',
+  ], { timeoutMs: 10_000 })
+  assert.equal(result.exitCode, 0, `Could not resolve the Windows desktop directory: ${result.stderr}`)
+  assert.ok(isAbsolute(result.stdout), `Windows desktop directory is not absolute: ${result.stdout}`)
+  return join(result.stdout, `${metadata.productName}.lnk`)
+}
+
 async function sha256(pathname) {
   const hash = createHash('sha256')
   for await (const chunk of createReadStream(pathname)) hash.update(chunk)
@@ -156,8 +171,10 @@ async function waitUntilRegistryMissing(timeoutMs) {
 
 for (const target of [testRoot, installDirectory, appRuntimeDirectory]) assertRuntimeTarget(target)
 const installerStats = await stat(installerPath)
+const desktopShortcut = await resolveDesktopShortcut()
 assert.ok(installerStats.isFile() && installerStats.size > 10 * 1024 * 1024, 'NSIS installer is missing')
 assert.equal(await pathExists(startMenuShortcut), false, 'Refusing to overwrite an existing AEONQUILL shortcut')
+assert.equal(await pathExists(desktopShortcut), false, 'Refusing to overwrite an existing AEONQUILL desktop shortcut')
 const registryBefore = await runProcess('reg.exe', ['query', uninstallRegistryKey], { timeoutMs: 10_000 })
 assert.equal(registryBefore.exitCode, 1, 'Refusing to overwrite an existing AEONQUILL uninstall registration')
 await mkdir(dirname(userDataSentinel), { recursive: true })
@@ -272,6 +289,7 @@ try {
   assert.equal(await waitUntilMissing(installedAppPath, 15_000), true, 'Installed executable remained after uninstall')
   assert.equal(await waitUntilRegistryMissing(15_000), true, 'Uninstall registration remained after uninstall')
   assert.equal(await waitUntilMissing(startMenuShortcut, 15_000), true, 'Start menu shortcut remained after uninstall')
+  assert.equal(await waitUntilMissing(desktopShortcut, 15_000), true, 'Desktop shortcut remained after uninstall')
   assert.equal(
     await readFile(userDataSentinel, 'utf8'),
     'AEONQUILL user data must survive uninstall.\n',
@@ -321,6 +339,7 @@ try {
       installedExecutableRemoved: true,
       uninstallRegistrationRemoved: true,
       startMenuShortcutRemoved: true,
+      desktopShortcutRemoved: true,
       userDataPreserved: true,
     },
     validatedAt: new Date().toISOString(),

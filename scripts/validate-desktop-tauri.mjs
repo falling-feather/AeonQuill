@@ -1,25 +1,34 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { waitForBridgeClosed } from '../desktop/shared/bridge-contract.mjs'
 import { loadReleaseMetadata } from '../desktop/release/release-meta.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
-const releaseMode = process.argv.includes('--release')
+const installedDirectoryArgument = process.argv.find((argument) => argument.startsWith('--installed-directory='))
+const installedDirectory = installedDirectoryArgument
+  ? resolve(installedDirectoryArgument.slice('--installed-directory='.length))
+  : null
+const releaseMode = process.argv.includes('--release') || Boolean(installedDirectory)
 const buildProfile = releaseMode ? 'release' : 'debug'
-const targetDirectory = join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'target', buildProfile)
+const targetDirectory = installedDirectory
+  || join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'target', buildProfile)
 const appPath = join(targetDirectory, metadata.appExecutable)
 const sidecarPath = join(targetDirectory, metadata.sidecarRuntimeFilename)
 const finalReportPath = join(
   projectRoot,
   '.runtime',
   'qa',
-  releaseMode ? 'desktop-tauri-release-final.json' : 'desktop-tauri-debug-final.json',
+  installedDirectory
+    ? 'desktop-tauri-installed-final.json'
+    : releaseMode
+      ? 'desktop-tauri-release-final.json'
+      : 'desktop-tauri-debug-final.json',
 )
 
 async function availablePort() {
@@ -70,7 +79,12 @@ async function terminateProcessTree(child) {
 }
 
 async function runTauriQa(runtimeDirectory) {
+  const launchDirectory = installedDirectory || join(runtimeDirectory, 'App')
+  const launchAppPath = installedDirectory
+    ? appPath
+    : join(launchDirectory, metadata.appExecutable)
   const appDataRoot = join(runtimeDirectory, 'app-local-data')
+  const localAppDataPath = join(runtimeDirectory, 'local-app-data')
   const runtimePath = join(appDataRoot, 'runtime')
   const dataPath = join(appDataRoot, 'data')
   const cachePath = join(appDataRoot, 'cache')
@@ -80,12 +94,26 @@ async function runTauriQa(runtimeDirectory) {
   const unavailableComfyPort = await availablePort()
   const stdout = []
   const stderr = []
-  const child = spawn(appPath, [], {
-    cwd: targetDirectory,
+  await mkdir(localAppDataPath, { recursive: true })
+  if (!installedDirectory) {
+    await mkdir(launchDirectory, { recursive: true })
+    await Promise.all([
+      copyFile(appPath, launchAppPath),
+      copyFile(sidecarPath, join(launchDirectory, metadata.sidecarRuntimeFilename)),
+      writeFile(join(launchDirectory, 'aeonquill-layout.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        layout: 'sibling-user-data',
+        dataDirectoryName: 'UserData',
+      }, null, 2)}\n`, 'utf8'),
+    ])
+  }
+  const child = spawn(launchAppPath, [], {
+    cwd: launchDirectory,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      LOCALAPPDATA: localAppDataPath,
       AEONQUILL_DESKTOP_QA: '1',
       AEONQUILL_DESKTOP_REPORT: reportPath,
       AEONQUILL_RUNTIME_DIR: runtimePath,
@@ -120,7 +148,7 @@ async function runTauriQa(runtimeDirectory) {
     exitCode,
     stdout: stdout.join('').trim(),
     stderr: stderr.join('').trim(),
-    runtimeLayout: { runtimePath, dataPath, cachePath, logPath, configPath },
+    runtimeLayout: { localAppDataPath, runtimePath, dataPath, cachePath, logPath, configPath },
   }
 }
 
@@ -164,6 +192,7 @@ try {
   assert.equal(report.rendererProbe.requireType, 'undefined')
   assert.equal(report.rendererProbe.documentReadyState, 'complete')
   for (const directory of [
+    result.runtimeLayout.localAppDataPath,
     result.runtimeLayout.runtimePath,
     result.runtimeLayout.dataPath,
     result.runtimeLayout.cachePath,
@@ -199,8 +228,9 @@ try {
     },
     validation: {
       completedAt: new Date().toISOString(),
-      assertions: 30,
+      assertions: 31,
       tauriExitCode: result.exitCode,
+      target: installedDirectory ? 'installed' : buildProfile,
     },
   }
   await mkdir(dirname(finalReportPath), { recursive: true })
@@ -208,7 +238,7 @@ try {
   console.log(`✓ Tauri desktop lifecycle passed in ${report.timeline.windowLoadedMs}ms`)
   console.log(`✓ Bridge PID ${report.bridgePid} exited through parent control; port ${report.bridgePort} is closed`)
   console.log(`✓ Renderer probe: __TAURI__=${report.rendererProbe.tauriGlobalType}, process=${report.rendererProbe.processType}`)
-  console.log(`✓ ${buildProfile} artifacts ${((appStats.size + sidecarStats.size) / 1024 / 1024).toFixed(1)} MiB combined`)
+  console.log(`✓ ${installedDirectory ? 'installed' : buildProfile} artifacts ${((appStats.size + sidecarStats.size) / 1024 / 1024).toFixed(1)} MiB combined`)
   console.log(`✓ Report: ${finalReportPath}`)
 } finally {
   await rm(runtimeDirectory, { recursive: true, force: true })
