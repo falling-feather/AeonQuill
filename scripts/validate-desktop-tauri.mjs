@@ -133,7 +133,7 @@ const [config, capability] = await Promise.all([
   readFile(join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'capabilities', 'main.json'), 'utf8').then(JSON.parse),
 ])
 assert.equal(config.app.withGlobalTauri, false)
-assert.deepEqual(capability.permissions, ['core:default'])
+assert.deepEqual(capability.permissions, ['core:default', 'dialog:allow-open'])
 assert.equal(capability.permissions.some((permission) => permission.startsWith('shell:')), false)
 
 const runtimeDirectory = await mkdtemp(join(tmpdir(), 'aeonquill-tauri-qa-'))
@@ -192,6 +192,7 @@ try {
     securityValidation: {
       withGlobalTauri: false,
       capabilityPermissions: capability.permissions,
+      nativeDirectoryDialogOnly: capability.permissions.includes('dialog:allow-open'),
       shellPermissionExposedToRenderer: false,
       navigationPolicy: 'exact bridge origin',
       newWindows: 'deny',
