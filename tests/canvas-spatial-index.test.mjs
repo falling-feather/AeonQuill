@@ -3,8 +3,11 @@ import test from 'node:test'
 import {
   boundsIntersect,
   createCanvasSpatialIndex,
+  elementIntersectsWorldBounds,
   elementWorldBounds,
   queryCanvasSpatialIndex,
+  screenMarqueeWorldBounds,
+  selectElementIdsInWorldBounds,
   viewportWorldBounds,
 } from '../src/lib/canvasSpatialIndex.mjs'
 
@@ -40,4 +43,29 @@ test('very large elements use the global bucket and remain queryable', () => {
   assert.equal(index.globalIds.has('huge'), true)
   const matches = queryCanvasSpatialIndex(index, { left: 0, top: 0, right: 50, bottom: 50 })
   assert.deepEqual([...matches].sort(), ['huge', 'small'])
+})
+
+test('marquee preview coordinates and committed world bounds share one camera transform', () => {
+  assert.deepEqual(
+    screenMarqueeWorldBounds(
+      { x: 460, y: 330 },
+      { x: 220, y: 150 },
+      { x: 100, y: 50, zoom: 2 },
+    ),
+    { left: 60, top: 50, right: 180, bottom: 140 },
+  )
+})
+
+test('marquee selection follows the visible rotated rectangle instead of its unrotated box', () => {
+  const rotated = { ...element('rotated', 100, 100, 100, 20, 90), visible: true }
+  assert.equal(elementIntersectsWorldBounds(rotated, { left: 139, top: 61, right: 161, bottom: 80 }), true)
+  assert.equal(elementIntersectsWorldBounds(rotated, { left: 100, top: 100, right: 120, bottom: 120 }), false)
+  assert.deepEqual(
+    selectElementIdsInWorldBounds([
+      rotated,
+      { ...element('hidden', 140, 65, 10, 10), visible: false },
+      { ...element('canvas-background', 0, 0, 1_000, 1_000), visible: true },
+    ], { left: 139, top: 61, right: 161, bottom: 80 }),
+    ['rotated'],
+  )
 })

@@ -120,6 +120,27 @@ test('runtime config persists atomically while preserving unrelated local tool s
   })
 })
 
+test('runtime settings persist only an existing writable local output directory', async () => {
+  await withTempDirectory(async (root) => {
+    const outputDirectory = join(root, 'exports')
+    await mkdir(outputDirectory, { recursive: true })
+    const patch = await validateRuntimeSettingsPayload({
+      mode: 'manual',
+      outputDirectory,
+    })
+    assert.equal(patch.outputDirectory, resolve(outputDirectory))
+    await assert.rejects(() => validateRuntimeSettingsPayload({
+      mode: 'manual',
+      outputDirectory: join(root, 'missing'),
+    }), { code: 'OUTPUT_DIRECTORY_INVALID' })
+
+    const configPath = join(root, 'config', 'local.json')
+    const result = await persistRuntimeSettings({ mode: 'manual', outputDirectory }, configPath)
+    assert.equal(result.patch.outputDirectory, resolve(outputDirectory))
+    assert.equal(JSON.parse(await readFile(configPath, 'utf8')).outputDirectory, resolve(outputDirectory))
+  })
+})
+
 test('data directory keeps legacy durable state visible until an explicit migration exists', async () => {
   await withTempDirectory(async (root) => {
     const runtimeRoot = join(root, 'runtime')

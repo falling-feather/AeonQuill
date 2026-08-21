@@ -83,6 +83,9 @@ export async function loadLocalRuntimeConfig() {
     pythonPath: typeof (process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath) === 'string'
       ? process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath
       : undefined,
+    outputDirectory: typeof (process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory) === 'string'
+      ? process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory
+      : undefined,
     bridgePort: Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || config.bridgePort || 8787),
     allowedOrigins: [
       ...(Array.isArray(config.allowedOrigins) ? config.allowedOrigins : []),

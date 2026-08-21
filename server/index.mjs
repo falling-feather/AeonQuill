@@ -29,7 +29,9 @@ import {
   normalizeLoopbackComfyUrl,
   persistRuntimeSettings,
   readLocalConfigFile,
+  safePathLabel,
 } from './runtime-settings.mjs'
+import { copyOutputDelivery } from './output-delivery.mjs'
 import {
   probeSemanticWorkflowCatalog,
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
@@ -171,6 +173,28 @@ function assertManagedPrivatePath(filePath, rootDirectory) {
     })
   }
   return target
+}
+
+async function deliverConfiguredOutput(jobId, sourcePath, filename) {
+  const outputDirectory = localRuntimeConfig.outputDirectory
+  if (!outputDirectory) return undefined
+  const directoryLabel = safePathLabel(outputDirectory)
+  try {
+    const delivered = await copyOutputDelivery({ sourcePath, outputDirectory, filename })
+    await store.log(jobId, 'success', `已复制交付副本到 ${directoryLabel}`)
+    return {
+      status: 'copied',
+      filename: delivered.filename,
+      directoryLabel,
+    }
+  } catch {
+    await store.log(jobId, 'warning', '交付副本写入失败；内部不可变资产仍已安全保存')
+    return {
+      status: 'failed',
+      directoryLabel,
+      message: '输出目录当前不可写，请在本机设置中重新选择；内部资产未受影响。',
+    }
+  }
 }
 
 async function readJsonBody(request, maxBytes = 48 * 1024 * 1024) {
@@ -761,6 +785,7 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
 
     await store.update(jobId, { phase: 'saving', progress: 94, detail: '登记蒙版与透明元素版本' })
     const outputVersion = await describeOutputVersion(job, outputPath, 'image/png')
+    const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
     await store.log(jobId, 'success', `SAM 已提取 ${output.width}×${output.height} 透明元素`)
     await store.update(jobId, {
       status: 'completed',
@@ -785,6 +810,7 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
         threshold: job.request.params.threshold,
       },
       outputVersion,
+      delivery,
       completedAt: Date.now(),
       temporaryOutputPath: undefined,
     })
@@ -890,6 +916,7 @@ async function runImageJob(jobId, { signal }) {
     })
     await store.log(jobId, 'success', `已生成 ${output.width}×${output.height} PNG`)
     const outputVersion = await describeOutputVersion(job, outputPath, output.mimeType)
+    const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
     await store.update(jobId, {
       status: 'completed',
       phase: 'completed',
@@ -905,6 +932,7 @@ async function runImageJob(jobId, { signal }) {
         provider: output.provider,
       },
       outputVersion,
+      delivery,
       completedAt: Date.now(),
     })
   } catch (error) {
@@ -1129,6 +1157,7 @@ async function runVideoJob(jobId, { signal }) {
     }
     await store.log(jobId, 'success', `视频已保存：${output.subfolder ? `${output.subfolder}/` : ''}${output.filename}`)
     const outputVersion = await describeOutputVersion(job, finalAssetPath, 'video/mp4')
+    const delivery = await deliverConfiguredOutput(jobId, finalAssetPath, assetFilename)
     await store.update(jobId, {
       status: 'completed',
       phase: 'completed',
@@ -1141,6 +1170,7 @@ async function runVideoJob(jobId, { signal }) {
         type: output.type || 'output',
       },
       outputVersion,
+      delivery,
       completedAt: Date.now(),
       temporaryOutputPath: undefined,
     })
@@ -1669,6 +1699,10 @@ const server = createServer(async (request, response) => {
           patch.comfyIdleSeconds,
         )
       }
+      if (patch.outputDirectory !== undefined) {
+        if (patch.outputDirectory === null) delete localRuntimeConfig.outputDirectory
+        else localRuntimeConfig.outputDirectory = patch.outputDirectory
+      }
       runtimeCache = null
       const diagnostics = await inspectRuntimeDiagnostics(true, config)
       const restartRequired = diagnostics.configuration.restartRequired
@@ -1680,6 +1714,10 @@ const server = createServer(async (request, response) => {
           ? '损坏的旧配置已备份，并已写入有效设置；建议重新打开 AEONQUILL。'
           : restartRequired
           ? '配置已安全保存；退出并重新打开 AEONQUILL 后生效。'
+          : patch.outputDirectory !== undefined
+          ? patch.outputDirectory === null
+            ? '已恢复内部资产保存；后续任务不再写入额外交付副本。'
+            : '输出副本目录已保存并立即生效。'
           : '运行策略已保存并立即生效。',
         diagnostics,
       })

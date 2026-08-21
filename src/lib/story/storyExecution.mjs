@@ -71,6 +71,7 @@ const MINIMUM_VRAM_GB = Object.freeze({
   delivery720: 8,
   nativeHigh: 12,
 })
+const VRAM_REPORTING_TOLERANCE_BYTES = 64 * 1024 ** 2
 
 function fail(code, message, details) {
   throw new StoryContractError(code, message, details)
@@ -282,7 +283,7 @@ function runtimeBlocks(runtime, preset) {
   const minimumBytes = MINIMUM_VRAM_GB[preset] * 1024 ** 3
   if (runtime.vramTotalBytes === null || runtime.vramTotalBytes === 0) {
     blocks.push(block('VRAM_UNVERIFIED', `尚未取得显存容量；${preset} 预设至少需要 ${MINIMUM_VRAM_GB[preset]}GB。`))
-  } else if (runtime.vramTotalBytes < minimumBytes) {
+  } else if (runtime.vramTotalBytes + VRAM_REPORTING_TOLERANCE_BYTES < minimumBytes) {
     const actualGb = (runtime.vramTotalBytes / 1024 ** 3).toFixed(1)
     blocks.push(block('VRAM_INSUFFICIENT', `${preset} 预设至少需要 ${MINIMUM_VRAM_GB[preset]}GB 显存，当前检测到 ${actualGb}GB。`))
   }

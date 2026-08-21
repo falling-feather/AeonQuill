@@ -409,6 +409,16 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
                     <span>SHA {job.outputVersion.assetId.slice(0, 8)}</span>
                   </div>
                 ) : null}
+                {job.delivery ? (
+                  <div className={`job-metadata job-delivery is-${job.delivery.status}`}>
+                    <span>
+                      {job.delivery.status === 'copied'
+                        ? `已输出到 ${job.delivery.directoryLabel ?? '所选目录'}`
+                        : job.delivery.message ?? '输出副本写入失败，内部资产仍可用'}
+                    </span>
+                    {job.delivery.filename ? <span>{job.delivery.filename}</span> : null}
+                  </div>
+                ) : null}
                 {job.error ? (
                   <div className="job-error-block">
                     <span className="job-error-code">{job.error.code}</span>

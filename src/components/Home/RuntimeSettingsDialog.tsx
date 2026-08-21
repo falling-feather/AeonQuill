@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Cpu,
   FolderCog,
+  FolderOpen,
   HardDrive,
   Image as ImageIcon,
   LoaderCircle,
@@ -18,6 +19,7 @@ import type {
   RuntimeConfigurationRequest,
   RuntimeDiagnostics,
 } from '../../types'
+import { pickNativeOutputDirectory, supportsNativeDirectoryPicker } from '../../lib/desktopDialog'
 
 interface RuntimeSettingsDialogProps {
   open: boolean
@@ -56,6 +58,8 @@ export function RuntimeSettingsDialog({
   const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188')
   const [policy, setPolicy] = useState<'persistent' | 'idle' | 'manual'>('idle')
   const [idleSeconds, setIdleSeconds] = useState(300)
+  const [outputDirectory, setOutputDirectory] = useState('')
+  const [outputPickerError, setOutputPickerError] = useState<string>()
 
   useEffect(() => {
     if (!open) return
@@ -100,6 +104,12 @@ export function RuntimeSettingsDialog({
     setIdleSeconds(diagnostics.configuration.idleSeconds)
   }, [diagnostics])
 
+  useEffect(() => {
+    if (!open) return
+    setOutputDirectory('')
+    setOutputPickerError(undefined)
+  }, [open])
+
   if (!open) return null
 
   const image = diagnostics?.capabilities.image
@@ -118,6 +128,7 @@ export function RuntimeSettingsDialog({
     }
     if (comfyRoot.trim()) request.comfyRoot = comfyRoot.trim()
     if (pythonPath.trim()) request.pythonPath = pythonPath.trim()
+    if (outputDirectory.trim()) request.outputDirectory = outputDirectory.trim()
     onConfigure(request)
   }
 
@@ -284,6 +295,55 @@ export function RuntimeSettingsDialog({
             </div>
 
             <div className="aq-runtime-settings__fields">
+              <div className="aq-runtime-settings__output-field">
+                <span>输出副本目录</span>
+                <div>
+                  <input
+                    value={outputDirectory}
+                    onChange={(event) => {
+                      setOutputDirectory(event.target.value)
+                      setOutputPickerError(undefined)
+                    }}
+                    placeholder={diagnostics?.configuration.outputDirectoryLabel ?? '例如 D:\\AEONQUILL-Outputs'}
+                    aria-label="输出副本目录"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={disabled}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOutputPickerError(undefined)
+                      void pickNativeOutputDirectory()
+                        .then((selected) => {
+                          if (selected) setOutputDirectory(selected)
+                        })
+                        .catch((nextError) => setOutputPickerError(nextError instanceof Error ? nextError.message : '无法打开目录选择器'))
+                    }}
+                    disabled={disabled}
+                    title={supportsNativeDirectoryPicker() ? '打开系统文件夹选择器' : '网页调试态请手工输入路径'}
+                  >
+                    <FolderOpen size={15} aria-hidden="true" />
+                    选择目录
+                  </button>
+                </div>
+                <small>
+                  {outputPickerError
+                    ?? (diagnostics?.configuration.outputDirectoryConfigured
+                      ? `当前：${diagnostics.configuration.outputDirectoryLabel ?? '已配置目录'}；新任务完成后会复制交付副本。`
+                      : '未配置时只保存内部不可变资产；选择后不会改变项目引用。')}
+                </small>
+                {diagnostics?.configuration.outputDirectoryConfigured ? (
+                  <button
+                    type="button"
+                    className="aq-runtime-settings__output-clear"
+                    onClick={() => onConfigure({ mode: 'manual', outputDirectory: null })}
+                    disabled={disabled}
+                  >
+                    恢复仅内部保存
+                  </button>
+                ) : null}
+              </div>
               <label>
                 <span>ComfyUI 根目录</span>
                 <input

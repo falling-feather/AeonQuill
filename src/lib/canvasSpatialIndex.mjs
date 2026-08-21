@@ -44,6 +44,99 @@ export function boundsIntersect(a, b) {
   return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top
 }
 
+export function screenMarqueeWorldBounds(start, end, camera) {
+  const zoom = Math.max(0.0001, finite(camera?.zoom, 1))
+  const cameraX = finite(camera?.x)
+  const cameraY = finite(camera?.y)
+  return {
+    left: (Math.min(finite(start?.x), finite(end?.x)) - cameraX) / zoom,
+    top: (Math.min(finite(start?.y), finite(end?.y)) - cameraY) / zoom,
+    right: (Math.max(finite(start?.x), finite(end?.x)) - cameraX) / zoom,
+    bottom: (Math.max(finite(start?.y), finite(end?.y)) - cameraY) / zoom,
+  }
+}
+
+function rotatedElementCorners(element) {
+  const x = finite(element.x)
+  const y = finite(element.y)
+  const width = Math.max(0, finite(element.width))
+  const height = Math.max(0, finite(element.height))
+  const centerX = x + width / 2
+  const centerY = y + height / 2
+  const radians = finite(element.rotation) * Math.PI / 180
+  const cosine = Math.cos(radians)
+  const sine = Math.sin(radians)
+  return [
+    { x, y },
+    { x: x + width, y },
+    { x: x + width, y: y + height },
+    { x, y: y + height },
+  ].map((point) => {
+    const dx = point.x - centerX
+    const dy = point.y - centerY
+    return {
+      x: centerX + dx * cosine - dy * sine,
+      y: centerY + dx * sine + dy * cosine,
+    }
+  })
+}
+
+function projectionsOverlap(pointsA, pointsB, axis) {
+  let minA = Infinity
+  let maxA = -Infinity
+  let minB = Infinity
+  let maxB = -Infinity
+  for (const point of pointsA) {
+    const projection = point.x * axis.x + point.y * axis.y
+    minA = Math.min(minA, projection)
+    maxA = Math.max(maxA, projection)
+  }
+  for (const point of pointsB) {
+    const projection = point.x * axis.x + point.y * axis.y
+    minB = Math.min(minB, projection)
+    maxB = Math.max(maxB, projection)
+  }
+  return maxA >= minB && maxB >= minA
+}
+
+export function elementIntersectsWorldBounds(element, bounds) {
+  if (!boundsIntersect(elementWorldBounds(element), bounds)) return false
+  if (!finite(element.rotation)) return true
+  const elementCorners = rotatedElementCorners(element)
+  const boundsCorners = [
+    { x: bounds.left, y: bounds.top },
+    { x: bounds.right, y: bounds.top },
+    { x: bounds.right, y: bounds.bottom },
+    { x: bounds.left, y: bounds.bottom },
+  ]
+  const edge = {
+    x: elementCorners[1].x - elementCorners[0].x,
+    y: elementCorners[1].y - elementCorners[0].y,
+  }
+  const side = {
+    x: elementCorners[3].x - elementCorners[0].x,
+    y: elementCorners[3].y - elementCorners[0].y,
+  }
+  const axes = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -edge.y, y: edge.x },
+    { x: -side.y, y: side.x },
+  ]
+  return axes.every((axis) => projectionsOverlap(elementCorners, boundsCorners, axis))
+}
+
+export function selectElementIdsInWorldBounds(elements, bounds) {
+  return elements
+    .filter((element) => (
+      element?.visible !== false
+      && element.kind !== 'connector'
+      && element.id !== 'canvas-background'
+      && elementIntersectsWorldBounds(element, bounds)
+    ))
+    .map((element) => element.id)
+}
+
 function cellRange(bounds, cellSize) {
   return {
     minX: Math.floor(bounds.left / cellSize),

@@ -328,6 +328,12 @@ export type ProcessingJob = {
   outputUrl?: string
   maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
+  delivery?: {
+    status: 'copied' | 'failed'
+    filename?: string
+    directoryLabel?: string
+    message?: string
+  }
   output?:
     | {
         filename: string
@@ -405,6 +411,7 @@ export type RuntimeDiagnostics = {
     cacheWritable: boolean
     logsWritable: boolean
     configWritable: boolean
+    outputDirectoryWritable: boolean | null
     runtimeLabel: string
     configLabel?: string
     projectsManaged: boolean
@@ -419,6 +426,8 @@ export type RuntimeDiagnostics = {
     pythonValid: boolean
     rootLabel?: string
     pythonLabel?: string
+    outputDirectoryConfigured: boolean
+    outputDirectoryLabel?: string
     offlineRuntimePackageId: string | null
     comfyUrl: string
     launchPolicy: 'persistent' | 'idle' | 'manual'
@@ -474,6 +483,7 @@ export type RuntimeConfigurationRequest =
       comfyUrl?: string
       comfyLaunchPolicy?: 'persistent' | 'idle' | 'manual'
       comfyIdleSeconds?: number
+      outputDirectory?: string | null
     }
 
 export type RuntimeConfigurationResult = {

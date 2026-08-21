@@ -111,6 +111,8 @@ type PlannedShot = {
   shot: StoryProject['scenes'][number]['shots'][number]
 }
 
+type VideoWorkspaceSection = 'source' | 'plan' | 'execution'
+
 const stageIcons: Record<GenerationTaskStage, typeof Users> = {
   references: Users,
   frames: ImageIcon,
@@ -230,6 +232,12 @@ export function SmartVideoWorkbench({
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [latestJobIdByItem, setLatestJobIdByItem] = useState<Record<string, string>>({})
   const [submittedJobIds, setSubmittedJobIds] = useState<string[]>([])
+  const [activeWorkspace, setActiveWorkspace] = useState<VideoWorkspaceSection>('plan')
+
+  function revealWorkspace(section: VideoWorkspaceSection) {
+    setActiveWorkspace(section)
+    document.getElementById(`aq-video-${section}-workspace`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   useEffect(() => {
     let disposed = false
@@ -593,8 +601,22 @@ export function SmartVideoWorkbench({
       </header>
 
       <div className="aq-video-body">
+        <nav className="aq-video-tool-rail" aria-label="智能视频工作区导航">
+          <button type="button" className={activeWorkspace === 'source' ? 'is-active' : ''} aria-current={activeWorkspace === 'source' ? 'page' : undefined} onClick={() => revealWorkspace('source')}>
+            <ScrollText size={19} />
+            <span>故事</span>
+          </button>
+          <button type="button" className={activeWorkspace === 'plan' ? 'is-active' : ''} aria-current={activeWorkspace === 'plan' ? 'page' : undefined} onClick={() => revealWorkspace('plan')}>
+            <Clapperboard size={19} />
+            <span>分镜</span>
+          </button>
+          <button type="button" className={activeWorkspace === 'execution' ? 'is-active' : ''} aria-current={activeWorkspace === 'execution' ? 'page' : undefined} onClick={() => revealWorkspace('execution')}>
+            <ListChecks size={19} />
+            <span>执行</span>
+          </button>
+        </nav>
         <aside className="aq-video-source-panel" aria-label="故事输入">
-          <div className="aq-video-panel-title">
+          <div id="aq-video-source-workspace" className="aq-video-panel-title">
             <span><ScrollText size={17} /> 故事源</span>
             <small>{text.length.toLocaleString()} / 60,000</small>
           </div>
@@ -670,7 +692,7 @@ export function SmartVideoWorkbench({
         </aside>
 
         <main className="aq-video-plan-panel">
-          <div className="aq-video-plan-summary">
+          <div id="aq-video-plan-workspace" className="aq-video-plan-summary">
             <div>
               <p>结构化项目</p>
               <h2>{result.project.title}</h2>
@@ -793,7 +815,7 @@ export function SmartVideoWorkbench({
             </aside>
           </div>
 
-          <section className="aq-video-execution" aria-label="受控执行清单">
+          <section id="aq-video-execution-workspace" className="aq-video-execution" aria-label="受控执行清单">
             <div className="aq-video-execution-heading">
               <div>
                 <span><ListChecks size={18} /> 执行清单</span>
@@ -990,6 +1012,13 @@ export function SmartVideoWorkbench({
                               </div>
                               <div className="aq-video-job-progress"><i style={{ width: `${job.progress}%` }} /></div>
                               <p>{job.error ? `${job.error.code} · ${job.error.message}` : job.detail}</p>
+                              {job.delivery ? (
+                                <p className={`aq-video-job-delivery is-${job.delivery.status}`}>
+                                  {job.delivery.status === 'copied'
+                                    ? `已输出到 ${job.delivery.directoryLabel ?? '所选目录'}${job.delivery.filename ? ` · ${job.delivery.filename}` : ''}`
+                                    : job.delivery.message ?? '输出副本写入失败，内部资产仍可用'}
+                                </p>
+                              ) : null}
                               <div className="aq-video-job-actions">
                                 {['queued', 'running'].includes(job.status) ? (
                                   <button type="button" onClick={() => void cancelJob(item.id, job.id)} disabled={actionBusy !== null}>

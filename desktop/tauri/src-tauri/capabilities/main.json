@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "Only Tauri core APIs are available to the main creative workspace.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

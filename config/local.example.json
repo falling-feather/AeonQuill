@@ -2,6 +2,7 @@
   "comfyUrl": "http://127.0.0.1:8188",
   "comfyRoot": "D:\\path\\to\\ComfyUI",
   "pythonPath": "D:\\path\\to\\python\\python.exe",
+  "outputDirectory": "D:\\AEONQUILL-Outputs",
   "comfyLaunchPolicy": "idle",
   "comfyIdleSeconds": 300,
   "bridgePort": 8787,

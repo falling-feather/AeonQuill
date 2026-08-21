@@ -236,6 +236,26 @@ test('blocks insufficient VRAM, missing models, unavailable bridge, and manual s
   })
 })
 
+test('accepts nominal 8GB cards whose driver report is only a few MiB below the byte boundary', () => {
+  const nominalEightGb = checklistFor({}, {
+    runtime: {
+      ...READY_RUNTIME,
+      vramTotalBytes: 8 * 1024 ** 3 - 4 * 1024 ** 2,
+    },
+  }).checklist.items[0]
+  assert.equal(nominalEightGb.status, 'ready')
+  assert.equal(nominalEightGb.blocks.some(({ code }) => code === 'VRAM_INSUFFICIENT'), false)
+
+  const materiallyBelowEightGb = checklistFor({}, {
+    runtime: {
+      ...READY_RUNTIME,
+      vramTotalBytes: 8 * 1024 ** 3 - 128 * 1024 ** 2,
+    },
+  }).checklist.items[0]
+  assert.equal(materiallyBelowEightGb.status, 'blocked')
+  assert.equal(materiallyBelowEightGb.blocks.some(({ code }) => code === 'VRAM_INSUFFICIENT'), true)
+})
+
 test('rejects unknown selection fields, arbitrary workflow ids, and excessive batches', () => {
   const { project } = fixture()
   const shotId = project.scenes[0].shots[0].id

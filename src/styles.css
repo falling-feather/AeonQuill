@@ -4199,6 +4199,16 @@ button.video-frame-card {
   font-size: 7px;
 }
 
+.job-delivery.is-copied span {
+  color: #287052;
+  background: #eaf7f0;
+}
+
+.job-delivery.is-failed span {
+  color: #a94444;
+  background: #fff0f0;
+}
+
 .job-error-block {
   margin-top: 9px;
   padding: 9px;

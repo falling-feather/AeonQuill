@@ -18,6 +18,7 @@ const SETTINGS_KEYS = new Set([
   'comfyUrl',
   'comfyLaunchPolicy',
   'comfyIdleSeconds',
+  'outputDirectory',
 ])
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 const LAUNCH_POLICIES = new Set(['persistent', 'idle', 'manual'])
@@ -243,6 +244,14 @@ async function validatePaths(patch, current = {}) {
   if (patch.pythonPath && !(await isFile(patch.pythonPath))) {
     throw settingsError('PYTHON_PATH_INVALID', '所选 Python 可执行文件不存在')
   }
+  if (patch.outputDirectory) {
+    if (!(await isDirectory(patch.outputDirectory))) {
+      throw settingsError('OUTPUT_DIRECTORY_INVALID', '所选输出目录不存在或不是文件夹')
+    }
+    if (!(await writableDirectory(patch.outputDirectory))) {
+      throw settingsError('OUTPUT_DIRECTORY_NOT_WRITABLE', '所选输出目录不可写，请检查权限或改选其他目录')
+    }
+  }
   if ((patch.comfyRoot === null) !== (patch.pythonPath === null) && (patch.comfyRoot === null || patch.pythonPath === null)) {
     throw settingsError('INCOMPLETE_COMFY_CONFIGURATION', '清除配置时必须同时清除 ComfyUI 根目录和 Python 路径')
   }
@@ -287,6 +296,7 @@ export async function validateRuntimeSettingsPayload(value, { current = {} } = {
       comfyUrl: normalizeLoopbackComfyUrl(input.comfyUrl),
       comfyLaunchPolicy: normalizePolicy(input.comfyLaunchPolicy),
       comfyIdleSeconds: normalizeIdleSeconds(input.comfyIdleSeconds),
+      outputDirectory: normalizeOptionalPath(input.outputDirectory, '输出目录'),
     }
     for (const key of Object.keys(patch)) if (patch[key] === undefined) delete patch[key]
     if (!Object.keys(patch).length) {
@@ -383,10 +393,14 @@ export async function buildRuntimeDiagnostics({
   const trustedStored = configError ? {} : stored
   const effectiveRoot = trustedStored.comfyRoot || activeConfig?.comfyRoot
   const effectivePython = trustedStored.pythonPath || activeConfig?.pythonPath
+  const effectiveOutputDirectory = trustedStored.outputDirectory || activeConfig?.outputDirectory
   const rootConfigured = typeof effectiveRoot === 'string' && Boolean(effectiveRoot)
   const pythonConfigured = typeof effectivePython === 'string' && Boolean(effectivePython)
   const rootValid = rootConfigured && await isFile(join(effectiveRoot, 'main.py'))
   const pythonValid = pythonConfigured && await isFile(effectivePython)
+  const outputDirectoryConfigured = typeof effectiveOutputDirectory === 'string' && Boolean(effectiveOutputDirectory)
+  const outputDirectoryValid = outputDirectoryConfigured && await isDirectory(effectiveOutputDirectory)
+  const outputDirectoryWritable = outputDirectoryValid && await writableDirectory(effectiveOutputDirectory)
   const imageOperations = imageManifest?.operations ?? []
   const availableImageOperations = imageOperations.filter((operation) => operation.available)
   const semanticWorkflows = semanticManifest?.workflows ?? []
@@ -429,6 +443,14 @@ export async function buildRuntimeDiagnostics({
       severity: 'warning',
       message: '尚未配置可由 AEONQUILL 按需启动的 ComfyUI 与 Python。',
       action: '自动发现或手工填写本机路径',
+    })
+  }
+  if (outputDirectoryConfigured && (!outputDirectoryValid || !outputDirectoryWritable)) {
+    issues.push({
+      code: 'OUTPUT_DIRECTORY_UNAVAILABLE',
+      severity: 'warning',
+      message: '已配置的输出目录当前不可用；内部项目资产仍会正常保存。',
+      action: '在设置中重新选择一个存在且可写的本机目录',
     })
   }
   if (!availableImageOperations.length) {
@@ -480,6 +502,7 @@ export async function buildRuntimeDiagnostics({
       cacheWritable,
       logsWritable,
       configWritable,
+      outputDirectoryWritable: outputDirectoryConfigured ? outputDirectoryWritable : null,
       runtimeLabel: runtimeScope() === 'development' ? '开发工作区运行时' : '当前用户应用数据',
       configLabel: safePathLabel(localConfigPath),
       projectsManaged: true,
@@ -494,6 +517,8 @@ export async function buildRuntimeDiagnostics({
       pythonValid,
       rootLabel: safePathLabel(effectiveRoot),
       pythonLabel: safePathLabel(effectivePython),
+      outputDirectoryConfigured,
+      outputDirectoryLabel: safePathLabel(effectiveOutputDirectory),
       offlineRuntimePackageId: activeConfig?.offlineRuntimePackageId ?? null,
       comfyUrl: String(trustedStored.comfyUrl || activeConfig?.comfyUrl || DEFAULT_COMFY_URL),
       launchPolicy: trustedStored.comfyLaunchPolicy || activeConfig?.launchPolicy || 'idle',

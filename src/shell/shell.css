@@ -1274,6 +1274,58 @@
   grid-column: 1 / -1;
 }
 
+.aq-runtime-settings__output-field {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aq-runtime-settings__output-field > span {
+  margin-bottom: 5px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.aq-runtime-settings__output-field > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.aq-runtime-settings__output-field > div > button,
+.aq-runtime-settings__output-clear {
+  min-height: 39px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #cfd2d8;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.aq-runtime-settings__output-clear {
+  min-height: 0;
+  align-self: flex-start;
+  margin-top: 7px;
+  padding: 4px 0;
+  color: #286fc5;
+  border: 0;
+  background: transparent;
+}
+
+.aq-runtime-settings__output-field > small {
+  margin-top: 4px;
+  color: var(--aq-dialog-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
 .aq-runtime-settings__fields label > span {
   margin-bottom: 5px;
   font-size: 10px;

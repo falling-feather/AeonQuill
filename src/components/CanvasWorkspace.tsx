@@ -23,6 +23,8 @@ import {
   boundsIntersect,
   createCanvasSpatialIndex,
   queryCanvasSpatialIndex,
+  screenMarqueeWorldBounds,
+  selectElementIdsInWorldBounds,
   viewportWorldBounds,
 } from '../lib/canvasSpatialIndex.mjs'
 import { CanvasElementView } from './CanvasElementView'
@@ -60,6 +62,7 @@ type Gesture =
       pointerId: number
       startScreen: Point
       currentScreen: Point
+      camera: Camera
     }
 
 type CanvasWorkspaceProps = {
@@ -287,11 +290,14 @@ export function CanvasWorkspace({
     }
 
     const start = screenPoint(event.clientX, event.clientY)
+    const interactionCamera = pendingCameraRef.current ?? camera
+    flushScheduledCamera()
     gestureRef.current = {
       kind: 'marquee',
       pointerId: event.pointerId,
       startScreen: start,
       currentScreen: start,
+      camera: interactionCamera,
     }
     setMarquee({ x: start.x, y: start.y, width: 0, height: 0 })
     onSelect([])
@@ -435,24 +441,13 @@ export function CanvasWorkspace({
       onTransformCommit(gesture.startElements)
     }
     if (gesture.kind === 'marquee') {
-      const x1 = (Math.min(gesture.startScreen.x, gesture.currentScreen.x) - camera.x) / camera.zoom
-      const y1 = (Math.min(gesture.startScreen.y, gesture.currentScreen.y) - camera.y) / camera.zoom
-      const x2 = (Math.max(gesture.startScreen.x, gesture.currentScreen.x) - camera.x) / camera.zoom
-      const y2 = (Math.max(gesture.startScreen.y, gesture.currentScreen.y) - camera.y) / camera.zoom
-      if (Math.abs(x2 - x1) > 3 || Math.abs(y2 - y1) > 3) {
-        onSelect(
-          visibleElements
-            .filter(
-              (element) =>
-                element.kind !== 'connector' &&
-                element.id !== 'canvas-background' &&
-                element.x < x2 &&
-                element.x + element.width > x1 &&
-                element.y < y2 &&
-                element.y + element.height > y1,
-            )
-            .map((element) => element.id),
-        )
+      const bounds = screenMarqueeWorldBounds(
+        gesture.startScreen,
+        gesture.currentScreen,
+        gesture.camera,
+      )
+      if (bounds.right - bounds.left > 3 || bounds.bottom - bounds.top > 3) {
+        onSelect(selectElementIdsInWorldBounds(visibleElements, bounds))
       }
       setMarquee(null)
     }
@@ -479,6 +474,7 @@ export function CanvasWorkspace({
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault()
+    if (gestureRef.current) return
     if (event.ctrlKey || event.metaKey) {
       const rect = viewportRef.current?.getBoundingClientRect()
       const anchor = { x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }

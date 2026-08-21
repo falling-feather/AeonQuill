@@ -16,5 +16,12 @@ export function viewportWorldBounds(
   overscanScreenPixels?: number,
 ): WorldBounds
 export function boundsIntersect(a: WorldBounds, b: WorldBounds): boolean
+export function screenMarqueeWorldBounds(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  camera: Camera,
+): WorldBounds
+export function elementIntersectsWorldBounds(element: CanvasElement, bounds: WorldBounds): boolean
+export function selectElementIdsInWorldBounds(elements: CanvasElement[], bounds: WorldBounds): string[]
 export function createCanvasSpatialIndex(elements: CanvasElement[], cellSize?: number): CanvasSpatialIndex
 export function queryCanvasSpatialIndex(index: CanvasSpatialIndex, bounds: WorldBounds): Set<string>

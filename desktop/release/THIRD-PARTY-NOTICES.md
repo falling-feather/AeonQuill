@@ -4,7 +4,7 @@ This file records the distribution boundary of the V0.4 unsigned Windows test pa
 
 ## Bundled runtime components
 
-- **Tauri 2 / tauri-plugin-shell / Tauri CLI** — MIT OR Apache-2.0. The web renderer is sandboxed and receives no shell permission.
+- **Tauri 2 / tauri-plugin-shell / tauri-plugin-dialog / Tauri CLI** — MIT OR Apache-2.0. The web renderer is sandboxed; the main window receives only the native directory-open dialog permission and no shell execution permission.
 - **Node.js 22 runtime inside the AEONQUILL bridge sidecar** — Node.js is distributed under the MIT license and incorporates third-party components under their respective terms. A complete upstream Node.js third-party notice review remains required before public commercial distribution.
 - **React / React DOM / Lucide React** — MIT.
 - **WebView2 offline installer** — distributed through the Tauri Windows offline-installer mode and subject to Microsoft terms.

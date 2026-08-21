@@ -662,6 +662,7 @@ pub fn run() {
     let page_runtime = Arc::clone(&runtime);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| setup_desktop(app, &setup_runtime))
         .on_page_load(move |webview, payload| {
             if webview.label() != "main" || !matches!(payload.event(), PageLoadEvent::Finished) {
