@@ -57,6 +57,16 @@ import {
   validateBundledWorkflowTemplates,
   workflowCatalog,
 } from './workflow-builder.mjs'
+import {
+  AUTOMATIC_VIDEO_MODEL_PROFILE,
+  inspectVideoCapabilities,
+  resolveVideoModelProfile,
+  VIDEO_MODEL_PROFILES,
+} from './video-workflow-registry.mjs'
+import {
+  assertAllowedVideoPostprocessWorkflow,
+  buildSeedVr2VideoWorkflow,
+} from './video-postprocess-workflow.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -258,6 +268,7 @@ function validateVideoRequest(body) {
   const aspectRatio = body.aspectRatio || '16:9'
   const duration = Number(body.duration || 5)
   const preset = body.preset || 'fast'
+  const modelProfile = body.modelProfile || AUTOMATIC_VIDEO_MODEL_PROFILE
   const audio = body.audio !== false
   const scenario = body.scenario || 'auto'
   const seed = Number.isSafeInteger(Number(body.seed))
@@ -278,6 +289,15 @@ function validateVideoRequest(body) {
   }
   if (!VIDEO_PRESETS[preset]) {
     throw Object.assign(new Error('不支持的质量预设'), { status: 400 })
+  }
+  if (!VIDEO_PRESETS[preset].allowedDurations.includes(duration)) {
+    throw Object.assign(new Error(`${VIDEO_PRESETS[preset].label} 仅支持 ${VIDEO_PRESETS[preset].allowedDurations.join('、')} 秒`), {
+      code: 'VIDEO_PRESET_DURATION_UNSUPPORTED',
+      status: 400,
+    })
+  }
+  if (modelProfile !== AUTOMATIC_VIDEO_MODEL_PROFILE && !VIDEO_MODEL_PROFILES[modelProfile]) {
+    throw Object.assign(new Error('不支持的视频模型精度路径'), { status: 400 })
   }
   if (!Object.hasOwn(H3_SCENARIO_PRESETS, scenario)) {
     throw Object.assign(new Error('不支持的 H3 场景预设'), { status: 400 })
@@ -310,6 +330,7 @@ function validateVideoRequest(body) {
     aspectRatio,
     duration,
     preset,
+    modelProfile,
     seed,
     audio,
     sourceElementId: typeof body.sourceElementId === 'string' ? body.sourceElementId : undefined,
@@ -389,11 +410,13 @@ async function inspectRuntime(force = false) {
         return !Array.isArray(options) || !options.includes(filename)
       })
       .map(([, , filename]) => filename)
+    const videoCapabilities = inspectVideoCapabilities(objectInfo, status)
     runtimeCache = {
       ...status,
       ready: missingNodes.length === 0 && missingModels.length === 0,
       missingNodes,
       missingModels,
+      videoCapabilities,
       checkedAt: Date.now(),
       lifecycle: runtimeManager.status(),
     }
@@ -505,8 +528,11 @@ function imageResourceClass(operation) {
 }
 
 function estimateVideoMilliseconds(request) {
-  const multiplier = request.preset === 'fast' ? 30_000 : request.preset === 'nativeHigh' ? 120_000 : 60_000
-  return Math.max(60_000, request.duration * multiplier)
+  const estimate = VIDEO_PRESETS[request.preset]?.estimatedMinutes?.[request.duration]
+  const upperMinutes = Number(String(estimate || '').split('–').at(-1))
+  return Number.isFinite(upperMinutes)
+    ? upperMinutes * 60_000
+    : Math.max(60_000, request.duration * 60_000)
 }
 
 function estimateVideoStorageBytes(request) {
@@ -1025,6 +1051,37 @@ function reportComfyEvent(jobId, message) {
   }
 }
 
+function reportSeedVrEvent(jobId, message) {
+  const job = store.get(jobId)
+  if (!job || ['completed', 'failed', 'cancelled'].includes(job.status)) return
+  if (message.type === 'executing' && message.data?.node) {
+    const nodeId = String(message.data.node)
+    const stage = ['101', '102', '103', '104'].includes(nodeId)
+      ? { progress: 87, detail: '读取母片并建立 720P 时序修复画布' }
+      : ['105', '106', '107', '108'].includes(nodeId)
+        ? { progress: 90, detail: '释放 H3 后加载 SeedVR2 并切分时序块' }
+        : ['109', '110', '111'].includes(nodeId)
+          ? { progress: 94, detail: 'SeedVR2 正在逐块修复并交叠合并' }
+          : ['112', '113'].includes(nodeId)
+            ? { progress: 97, detail: '分块解码、对齐并稳定颜色' }
+            : ['114', '115'].includes(nodeId)
+              ? { progress: 99, detail: '回填原音频与帧率并封装母版' }
+              : null
+    if (stage) {
+      const changedStage = job.detail !== stage.detail
+      void store.update(jobId, { status: 'running', phase: 'restoring', ...stage })
+      if (changedStage) void store.log(jobId, 'info', stage.detail)
+    }
+  } else if (message.type === 'progress') {
+    void store.update(jobId, {
+      status: 'running',
+      phase: 'restoring',
+      progress: 95,
+      detail: 'SeedVR2 正在执行一步时序修复',
+    })
+  }
+}
+
 function normalizeExecutionError(error) {
   const message = redactSensitiveText(error?.comfyData?.exception_message || error?.message || '未知错误')
   const lower = message.toLowerCase()
@@ -1034,6 +1091,15 @@ function normalizeExecutionError(error) {
     exceptionType: error?.comfyData?.exception_type,
     rawMessage: message.slice(0, 2_000),
   })
+  if (['VIDEO_PRESET_UNAVAILABLE', 'VIDEO_MODEL_PROFILE_UNAVAILABLE'].includes(error?.code)) {
+    return {
+      code: error.code,
+      title: '所选高质量流水线尚未就绪',
+      message: '当前运行时缺少该档位所需的模型、节点或精度环境，任务没有静默降级。',
+      suggestions: ['在设置中重新检测本机运行时', '选择“Base 20 步精修”保留高质量生成但跳过 SeedVR2', '选择“快速动作预览”先验证镜头'],
+      details: sanitizePublicPayload({ ...details, ...(error.details || {}), ...(error.payload?.node_errors || {}) }),
+    }
+  }
   if (error?.code === 'ENOSPC' || lower.includes('no space left') || lower.includes('disk full')) {
     return {
       code: 'STORAGE_EXHAUSTED',
@@ -1043,12 +1109,16 @@ function normalizeExecutionError(error) {
       details,
     }
   }
-  if (lower.includes('out of memory') || lower.includes('cuda oom') || lower.includes('allocation on device')) {
+  if (isOutOfMemoryFailure(error)) {
     return {
       code: 'COMFY_OOM',
-      title: '显存不足，视频采样未完成',
-      message: '当前分辨率、时长或采样配置超过了可用显存。',
-      suggestions: ['切换为“快速预览”', '先生成 5 秒版本', '关闭占用显存的其他程序后重试'],
+      title: error?.stage === 'seedvr2' ? 'SeedVR2 时序精修显存不足' : '显存不足，视频采样未完成',
+      message: error?.stage === 'seedvr2'
+        ? '系统已经尝试更小的时序块，但当前显存仍不足；H3 原生母片已保留。'
+        : '当前分辨率、时长或采样配置超过了可用显存。',
+      suggestions: error?.stage === 'seedvr2'
+        ? ['直接使用已保留的 Base 母片', '关闭占用显存的其他程序后重试', '改用 5 秒母版档']
+        : ['切换为“快速预览”', '先生成 5 秒版本', '关闭占用显存的其他程序后重试'],
       details,
     }
   }
@@ -1079,6 +1149,15 @@ function normalizeExecutionError(error) {
       details: { ...details, nodeErrors: error?.payload?.node_errors },
     }
   }
+  if (error?.stage === 'seedvr2') {
+    return {
+      code: 'SEEDVR2_EXECUTION_ERROR',
+      title: '时序精修失败，原生母片已保留',
+      message,
+      suggestions: ['直接使用已保留的 Base 母片', '查看 SeedVR2 节点日志', '重新检测模型后重试精修'],
+      details,
+    }
+  }
   return {
     code: 'COMFY_EXECUTION_ERROR',
     title: '视频生成失败',
@@ -1088,11 +1167,21 @@ function normalizeExecutionError(error) {
   }
 }
 
+function isOutOfMemoryFailure(error) {
+  const message = String(error?.comfyData?.exception_message || error?.message || '').toLowerCase()
+  return message.includes('out of memory') || message.includes('cuda oom') || message.includes('allocation on device')
+}
+
 async function runVideoJob(jobId, { signal }) {
   const job = store.get(jobId)
   if (!job) return
   let tracker
   const createdOutputPaths = new Set()
+  const uploadedComfyInputPaths = new Set()
+  const managedComfyInputRoot = buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs }).directories.input
+  const rememberComfyInput = (name) => {
+    uploadedComfyInputPaths.add(assertManagedPrivatePath(join(managedComfyInputRoot, name), managedComfyInputRoot))
+  }
   try {
     await store.update(jobId, {
       status: 'running',
@@ -1116,23 +1205,45 @@ async function runVideoJob(jobId, { signal }) {
       error.payload = { node_errors: { missingNodes: runtime.missingNodes, missingModels: runtime.missingModels } }
       throw error
     }
+    const presetCapability = runtime.videoCapabilities?.presets?.find((candidate) => candidate.id === job.request.preset)
+    if (!presetCapability?.available) {
+      const error = Object.assign(new Error(`${VIDEO_PRESETS[job.request.preset].label} 所需模型或后处理器尚未就绪`), {
+        code: 'VIDEO_PRESET_UNAVAILABLE',
+        payload: {
+          node_errors: {
+            missingNodes: presetCapability?.postprocessor?.missingNodes || [],
+            missingModels: presetCapability?.postprocessor?.missingModels || [],
+          },
+        },
+      })
+      throw error
+    }
+    const resolvedModelProfile = resolveVideoModelProfile(
+      job.request.preset,
+      runtime.videoCapabilities,
+      job.request.modelProfile || AUTOMATIC_VIDEO_MODEL_PROFILE,
+    )
     await store.log(jobId, 'success', `已连接 ComfyUI ${runtime.comfyVersion} · ${runtime.device}`)
+    await store.log(jobId, 'info', `模型精度路由：${VIDEO_MODEL_PROFILES[resolvedModelProfile].label}`)
 
     let inputImageName
     let lastFrameImageName
     if (job.request.mode === 'image-to-video') {
       await store.update(jobId, { progress: 7, detail: '上传规范化首帧' })
       inputImageName = await comfy.uploadImage(job.inputPath, `aeonquill-${job.id}.png`, signal)
+      rememberComfyInput(inputImageName)
       await store.log(jobId, 'success', `首帧已上传：${inputImageName}`)
       if (job.lastFramePath) {
         await store.update(jobId, { progress: 8, detail: '上传可选末帧约束' })
         lastFrameImageName = await comfy.uploadImage(job.lastFramePath, `aeonquill-${job.id}-last.png`, signal)
+        rememberComfyInput(lastFrameImageName)
         await store.log(jobId, 'success', `末帧已上传：${lastFrameImageName}`)
       }
     }
 
     const { workflow, metadata } = await buildVideoWorkflow({
       ...job.request,
+      modelProfile: resolvedModelProfile,
       inputImageName,
       lastFrameImageName,
       jobId,
@@ -1154,7 +1265,12 @@ async function runVideoJob(jobId, { signal }) {
     const latest = store.get(jobId)
     if (latest?.cancelRequested) return
 
-    await store.update(jobId, { phase: 'saving', progress: 97, detail: '复制生成结果到本地资产库' })
+    const needsSeedVr = metadata.delivery === '720p-seedvr2'
+    await store.update(jobId, {
+      phase: 'saving',
+      progress: needsSeedVr ? 84 : 97,
+      detail: needsSeedVr ? '保存 H3 原生母片，准备时序精修' : '复制生成结果到本地资产库',
+    })
     const output = findVideoOutput(history)
     if (!output) throw new Error('ComfyUI finished without returning a video output')
     const response = await comfy.fetchOutput(output)
@@ -1167,6 +1283,7 @@ async function runVideoJob(jobId, { signal }) {
     createdOutputPaths.add(sourceAssetPath)
     let assetFilename = sourceAssetFilename
     let finalAssetPath = sourceAssetPath
+    let finalComfyOutput = output
     const intermediateOutputs = []
     if (metadata.delivery === '720p-lanczos') {
       assetFilename = `${job.id}-720p.mp4`
@@ -1186,8 +1303,98 @@ async function runVideoJob(jobId, { signal }) {
       })
       await store.log(jobId, 'success', `已生成 ${metadata.deliveryDimensions.width}×${metadata.deliveryDimensions.height} 交付文件`)
       await store.log(jobId, 'info', '已保留 H3 原生生成片，便于后续超分或重新编码')
+    } else if (needsSeedVr) {
+      intermediateOutputs.push({
+        role: 'native-source',
+        label: `H3 ${metadata.dimensions.width}×${metadata.dimensions.height} Base 母片`,
+        filename: sourceAssetFilename,
+        outputUrl: `/api/assets/${encodeURIComponent(sourceAssetFilename)}`,
+        dimensions: metadata.dimensions,
+      })
+      await store.update(jobId, {
+        phase: 'restoring',
+        progress: 85,
+        detail: '卸载 H3 模型，释放显存给 SeedVR2',
+        intermediateOutputs,
+      })
+      await store.log(jobId, 'success', 'H3 Base 母片已保留，SeedVR2 失败也不会覆盖源片')
+      tracker?.close()
+      tracker = undefined
+      await comfy.freeMemory(signal)
+      const uploadedVideoName = await comfy.uploadVideo(sourceAssetPath, `aeonquill-${job.id}-native.mp4`, signal)
+      rememberComfyInput(uploadedVideoName)
+      const seedVrMemoryProfiles = [
+        { framesPerChunk: 21, vaeTileSize: 384 },
+        { framesPerChunk: 13, vaeTileSize: 256 },
+        { framesPerChunk: 9, vaeTileSize: 192 },
+        { framesPerChunk: 5, vaeTileSize: 128 },
+      ]
+      let postprocessOutput
+      for (let attempt = 0; attempt < seedVrMemoryProfiles.length; attempt += 1) {
+        const { framesPerChunk, vaeTileSize } = seedVrMemoryProfiles[attempt]
+        try {
+          const { workflow: postprocessWorkflow, metadata: postprocessMetadata } = buildSeedVr2VideoWorkflow({
+            inputVideoName: uploadedVideoName,
+            outputDimensions: metadata.deliveryDimensions,
+            seed: job.request.seed,
+            jobId,
+            framesPerChunk,
+            vaeTileSize,
+          })
+          assertAllowedVideoPostprocessWorkflow(postprocessWorkflow)
+          await store.update(jobId, {
+            workflowMetadata: { ...metadata, postprocessMetadata },
+            progress: 86,
+            detail: `提交 SeedVR2 时序修复 · ${framesPerChunk} 帧 / VAE ${vaeTileSize}`,
+          })
+          const postprocessClientId = `aeonquill-seedvr2-${randomUUID()}`
+          tracker = await comfy.openExecutionTracker(postprocessClientId, (message) => reportSeedVrEvent(jobId, message))
+          const queuedPostprocess = await comfy.queuePrompt(postprocessWorkflow, postprocessClientId, signal)
+          await store.update(jobId, {
+            comfyPromptId: queuedPostprocess.prompt_id,
+            queueNumber: queuedPostprocess.number,
+            phase: 'restoring',
+            progress: 87,
+            detail: queuedPostprocess.number ? `SeedVR2 已进入队列 · #${queuedPostprocess.number}` : 'SeedVR2 已进入执行队列',
+          })
+          await store.log(jobId, 'info', `SeedVR2 Prompt ID：${queuedPostprocess.prompt_id} · ${framesPerChunk} 帧 / VAE ${vaeTileSize}`)
+          const postprocessHistory = await tracker.waitForPrompt(queuedPostprocess.prompt_id, signal)
+          postprocessOutput = findVideoOutput(postprocessHistory)
+          if (!postprocessOutput) throw new Error('SeedVR2 finished without returning a video output')
+          break
+        } catch (error) {
+          tracker?.close()
+          tracker = undefined
+          const nextProfile = seedVrMemoryProfiles[attempt + 1]
+          if (nextProfile && isOutOfMemoryFailure(error)) {
+            await store.log(jobId, 'warning', `SeedVR2 ${framesPerChunk} 帧 / VAE ${vaeTileSize} 显存不足，自动降为 ${nextProfile.framesPerChunk} 帧 / VAE ${nextProfile.vaeTileSize}`)
+            await store.update(jobId, {
+              phase: 'restoring',
+              progress: 88,
+              detail: `释放显存并以 ${nextProfile.framesPerChunk} 帧 / VAE ${nextProfile.vaeTileSize} 重试`,
+            })
+            await comfy.freeMemory(signal)
+            continue
+          }
+          error.stage = 'seedvr2'
+          throw error
+        }
+      }
+      if (!postprocessOutput) {
+        throw Object.assign(new Error('SeedVR2 exhausted every bounded temporal chunk size'), { stage: 'seedvr2' })
+      }
+      const postprocessResponse = await comfy.fetchOutput(postprocessOutput)
+      assetFilename = `${job.id}-seedvr2-720p.mp4`
+      finalAssetPath = join(assetDirectory, assetFilename)
+      const restoredTemporaryPath = join(assetDirectory, `${job.id}-seedvr2-720p.part.mp4`)
+      await store.update(jobId, { outputPath: finalAssetPath, temporaryOutputPath: restoredTemporaryPath })
+      await writeFile(restoredTemporaryPath, Buffer.from(await postprocessResponse.arrayBuffer()), { flag: 'wx' })
+      await rename(restoredTemporaryPath, finalAssetPath)
+      createdOutputPaths.add(finalAssetPath)
+      finalComfyOutput = postprocessOutput
+      await store.log(jobId, 'success', `SeedVR2 时序母版已生成：${metadata.deliveryDimensions.width}×${metadata.deliveryDimensions.height}`)
     }
-    await store.log(jobId, 'success', `视频已保存：${output.subfolder ? `${output.subfolder}/` : ''}${output.filename}`)
+    await store.log(jobId, 'success', `视频已保存：${finalComfyOutput.subfolder ? `${finalComfyOutput.subfolder}/` : ''}${finalComfyOutput.filename}`)
     const outputVersion = await describeOutputVersion(job, finalAssetPath, 'video/mp4')
     const delivery = await deliverConfiguredOutput(jobId, finalAssetPath, assetFilename)
     await store.update(jobId, {
@@ -1197,9 +1404,9 @@ async function runVideoJob(jobId, { signal }) {
       detail: '生成完成，已回填画布',
       outputUrl: `/api/assets/${encodeURIComponent(assetFilename)}`,
       output: {
-        filename: output.filename,
-        subfolder: output.subfolder || '',
-        type: output.type || 'output',
+        filename: finalComfyOutput.filename,
+        subfolder: finalComfyOutput.subfolder || '',
+        type: finalComfyOutput.type || 'output',
       },
       outputVersion,
       intermediateOutputs,
@@ -1233,9 +1440,13 @@ async function runVideoJob(jobId, { signal }) {
     tracker?.close()
     const latest = store.get(jobId)
     if (latest?.status !== 'completed') {
-      for (const filePath of createdOutputPaths) await unlink(filePath).catch(() => {})
+      const retainedIntermediates = new Set((latest?.intermediateOutputs || []).map((item) => join(assetDirectory, item.filename)))
+      for (const filePath of createdOutputPaths) {
+        if (!retainedIntermediates.has(filePath)) await unlink(filePath).catch(() => {})
+      }
       if (latest?.temporaryOutputPath) await unlink(latest.temporaryOutputPath).catch(() => {})
     }
+    for (const uploadedPath of uploadedComfyInputPaths) await unlink(uploadedPath).catch(() => {})
     await scheduleRuntimeIdleStop()
   }
 }
@@ -1798,7 +2009,8 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, { state })
     }
     if (request.method === 'GET' && pathname === '/api/workflows') {
-      return sendJson(response, 200, workflowCatalog())
+      const runtime = await inspectRuntime()
+      return sendJson(response, 200, workflowCatalog(runtime.videoCapabilities))
     }
     if (request.method === 'POST' && pathname === '/api/video/prompt/compile') {
       const body = await readJsonBody(request, 16 * 1024)

@@ -16,7 +16,7 @@ export const CONTROLLED_H3_WORKFLOW_IDS = Object.freeze({
   imageToVideo: 'aeonquill.video.minimax-h3-i2v.v1',
 })
 
-export const CONTROLLED_H3_WORKFLOW_VERSION = 'h3-turbo-v2'
+export const CONTROLLED_H3_WORKFLOW_VERSION = 'h3-quality-matrix-v3'
 
 const EXECUTION_REQUEST_KEYS = new Set(['schemaVersion', 'selections'])
 const SELECTION_KEYS = new Set([
@@ -51,7 +51,7 @@ const PAYLOAD_KEYS = new Set(['bindingId', 'assetVersionId', 'dataUrl'])
 
 const VIDEO_MODES = new Set(['text-to-video', 'image-to-video'])
 const FRAME_MODES = new Set(['none', 'first', 'first-last'])
-const PRESETS = new Set(['fast', 'balanced', 'delivery720', 'nativeHigh'])
+const PRESETS = new Set(['fast', 'balanced', 'delivery720', 'nativeHigh', 'cinemaBase', 'master720'])
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1'])
 const CAMERA_MOVEMENTS = new Set(['locked', 'push-in', 'pan', 'orbit', 'follow'])
 const MOTION_LEVELS = new Set(['subtle', 'natural', 'dynamic'])
@@ -69,7 +69,9 @@ const MINIMUM_VRAM_GB = Object.freeze({
   fast: 8,
   balanced: 8,
   delivery720: 8,
-  nativeHigh: 12,
+  nativeHigh: 8,
+  cinemaBase: 8,
+  master720: 8,
 })
 const VRAM_REPORTING_TOLERANCE_BYTES = 64 * 1024 ** 2
 
@@ -233,11 +235,26 @@ function directorMotion(cameraMovement) {
   return 'natural'
 }
 
+function h3DialogueLanguage(text) {
+  if (/[぀-ヿ]/u.test(text)) return 'Japanese'
+  if (/[가-힯]/u.test(text)) return 'Korean'
+  if (/[؀-ۿ]/u.test(text)) return 'Arabic'
+  if (/[Ѐ-ӿ]/u.test(text)) return 'Russian'
+  if (/[㐀-鿿]/u.test(text)) return 'Chinese'
+  return 'English'
+}
+
+function h3DialogueLine(speaker, text) {
+  const cleanSpeaker = String(speaker).replace(/[<>]/g, '').trim()
+  const cleanText = String(text).replace(/<\/?d>/gi, '').trim()
+  return `${cleanSpeaker} speaks clearly: <d>[${h3DialogueLanguage(cleanText)}] ${cleanText}</d>`
+}
+
 function deterministicPrompt(project, scene, shot) {
   const characters = shot.characterIds
     .map((id) => project.characters.find((character) => character.id === id)?.name)
     .filter(Boolean)
-  const dialogue = shot.dialogue.map(({ speaker, text }) => `${speaker}: ${text}`).join(' ')
+  const dialogue = shot.dialogue.map(({ speaker, text }) => h3DialogueLine(speaker, text)).join(' ')
   return [
     scene.heading,
     shot.action,

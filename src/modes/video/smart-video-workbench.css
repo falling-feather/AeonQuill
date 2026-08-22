@@ -1004,6 +1004,107 @@
   color: #7ca18f;
 }
 
+.aq-video-quality-brief {
+  display: grid;
+  gap: 7px;
+  margin: 0 15px 13px;
+  padding: 12px 13px;
+  border: 1px solid #d9daf9;
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(79, 70, 245, 0.055), rgba(255, 255, 255, 0.9));
+}
+
+.aq-video-quality-brief > div:first-child,
+.aq-video-quality-brief > div:first-child > span,
+.aq-video-quality-brief footer,
+.aq-video-quality-warning {
+  display: flex;
+  align-items: center;
+}
+
+.aq-video-quality-brief > div:first-child {
+  min-width: 0;
+  gap: 9px;
+}
+
+.aq-video-quality-brief > div:first-child > span {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  justify-content: center;
+  color: #4f46f5;
+  border: 1px solid #d2d0fb;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.aq-video-quality-brief p,
+.aq-video-quality-brief strong,
+.aq-video-quality-brief small {
+  display: block;
+  margin: 0;
+}
+
+.aq-video-quality-brief > div:first-child p {
+  min-width: 0;
+}
+
+.aq-video-quality-brief strong {
+  color: #25222f;
+  font-size: 11px;
+}
+
+.aq-video-quality-brief small,
+.aq-video-quality-brief > p,
+.aq-video-quality-brief footer {
+  color: #747582;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.aq-video-quality-brief > div:first-child b {
+  margin-left: auto;
+  padding: 4px 7px;
+  color: #4b45ad;
+  border-radius: 999px;
+  background: rgba(79, 70, 245, 0.08);
+  font-size: 8px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.aq-video-quality-brief footer {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aq-video-quality-brief footer span {
+  padding: 3px 7px;
+  border: 1px solid rgba(79, 70, 245, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.aq-video-quality-brief.is-compatibility {
+  border-color: #ecd8b9;
+  background: #fffaf1;
+}
+
+.aq-video-quality-brief.is-unavailable {
+  border-color: #edcfcc;
+  background: #fff8f7;
+}
+
+.aq-video-quality-warning {
+  gap: 6px;
+  color: #9a4f48;
+  font-size: 9px;
+}
+
+.aq-video-quality-warning svg {
+  flex: 0 0 auto;
+}
+
 .aq-video-execution-shots {
   display: grid;
   gap: 8px;

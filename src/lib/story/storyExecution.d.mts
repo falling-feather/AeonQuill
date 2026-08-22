@@ -4,7 +4,7 @@ import type { GenerationPlan, StoryProject } from './storyProject.mjs'
 export const STORY_EXECUTION_SCHEMA_VERSION: 1
 export const STORY_EXECUTION_CONFIRMATION_SCHEMA_VERSION: 1
 export const MANAGED_FRAME_ASSET_SCHEMA_VERSION: 1
-export const CONTROLLED_H3_WORKFLOW_VERSION: 'h3-turbo-v2'
+export const CONTROLLED_H3_WORKFLOW_VERSION: 'h3-quality-matrix-v3'
 
 export const STORY_EXECUTION_LIMITS: Readonly<{
   maxItems: number
@@ -20,7 +20,7 @@ export const CONTROLLED_H3_WORKFLOW_IDS: Readonly<{
 
 export type VideoExecutionMode = 'text-to-video' | 'image-to-video'
 export type VideoFrameMode = 'none' | 'first' | 'first-last'
-export type VideoExecutionPreset = 'fast' | 'balanced' | 'delivery720' | 'nativeHigh'
+export type VideoExecutionPreset = 'fast' | 'balanced' | 'delivery720' | 'nativeHigh' | 'cinemaBase' | 'master720'
 export type Sha256AssetVersionId = `sha256:${string}`
 
 export type ExecutionRuntimeSnapshot = {

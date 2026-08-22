@@ -209,6 +209,7 @@ export type VideoJobPhase =
   | 'sampling'
   | 'decoding'
   | 'encoding'
+  | 'restoring'
   | 'saving'
   | 'completed'
   | 'failed'
@@ -274,7 +275,8 @@ export type VideoJobRequest = {
   scenario?: H3ScenarioId
   aspectRatio: '16:9' | '9:16' | '1:1'
   duration: 5 | 10 | 15
-  preset: 'fast' | 'balanced' | 'delivery720' | 'nativeHigh'
+  preset: 'fast' | 'balanced' | 'delivery720' | 'nativeHigh' | 'cinemaBase' | 'master720'
+  modelProfile?: 'auto' | 'fp8Scaled4060' | 'int8ConvrotCu130'
   seed: number
   audio: boolean
   sourceElementId?: string
@@ -312,6 +314,8 @@ export type ProcessingJob = {
         frames: number
         fps: number
         steps: number
+        samplingMode?: 'turbo' | 'base'
+        sampler?: string
         lowVram: boolean
         audio: boolean
         modelProfile?: string
@@ -319,6 +323,23 @@ export type ProcessingJob = {
         delivery?: string
         deliveryDimensions?: { width: number; height: number }
         preserveNative?: boolean
+        qualityClass?: string
+        estimatedMinutes?: string
+        sourceEncoding?: string
+        postprocessor?: string | null
+        postprocessMetadata?: {
+          version: string
+          postprocessor: string
+          model: string
+          vae: string
+          outputDimensions: { width: number; height: number }
+          framesPerChunk: number
+          temporalOverlap: number
+          colorCorrection: string
+          steps: number
+          sampler: string
+          scheduler: string
+        }
         promptAgent?: {
           version: string
           mode: 'T2VA' | 'I2VA' | 'FL2VA'
@@ -389,6 +410,9 @@ export type RuntimeStatus = {
   ready: boolean
   comfyVersion?: string
   pythonVersion?: string
+  pytorchVersion?: string
+  systemRamTotal?: number
+  systemRamFree?: number
   device?: string
   vramTotal?: number
   vramFree?: number
@@ -396,6 +420,38 @@ export type RuntimeStatus = {
   queuePending: number
   missingNodes?: string[]
   missingModels?: string[]
+  videoCapabilities?: {
+    modelProfiles: Array<{
+      id: string
+      label: string
+      state: string
+      modes: Record<'base' | 'turbo', {
+        available: boolean
+        missingNodes: string[]
+        missingModels: string[]
+        runtimeIssues: string[]
+      }>
+    }>
+    postprocessors: Array<{
+      id: string
+      label: string
+      state: string
+      available: boolean
+      missingNodes: string[]
+      missingModels: string[]
+    }>
+    presets: Array<{
+      id: string
+      available: boolean
+      availableProfiles: string[]
+      postprocessor: null | {
+        id: string
+        available: boolean
+        missingNodes: string[]
+        missingModels: string[]
+      }
+    }>
+  }
   message?: string
   checkedAt?: number
   lifecycle?: {

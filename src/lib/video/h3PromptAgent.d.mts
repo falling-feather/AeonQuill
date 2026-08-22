@@ -15,8 +15,18 @@ export type H3PromptPlan = {
   mode: 'T2VA' | 'I2VA' | 'FL2VA'
   requestedScenario: H3ScenarioId
   resolvedScenario: Exclude<H3ScenarioId, 'auto'>
-  recommendedPreset: 'balanced' | 'delivery720'
+  recommendedPreset: 'balanced' | 'master720'
   effectiveDurationSeconds: number
+  shotPlan: Array<{
+    start: number
+    end: number
+    role: string
+    instruction: string
+  }>
+  qualityGuidance: {
+    nativeMaster: string
+    finalMaster: string
+  }
   sourcePrompt: string
   compiledPrompt: string
   sections: {
@@ -34,7 +44,7 @@ export const H3_SCENARIO_PRESETS: Readonly<Record<H3ScenarioId, Readonly<{
   id: H3ScenarioId
   label: string
   description: string
-  recommendedPreset: 'balanced' | 'delivery720'
+  recommendedPreset: 'balanced' | 'master720'
   style?: string
   continuity?: string
   soundscape?: string

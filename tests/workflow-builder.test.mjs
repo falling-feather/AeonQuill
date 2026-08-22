@@ -30,6 +30,7 @@ test('builds every supported mode, preset, duration, and aspect ratio offline', 
     for (const aspectRatio of Object.keys(VIDEO_DIMENSIONS)) {
       for (const duration of Object.keys(VIDEO_DURATIONS).map(Number)) {
         for (const preset of Object.keys(VIDEO_PRESETS)) {
+          if (!VIDEO_PRESETS[preset].allowedDurations.includes(duration)) continue
           const { workflow, metadata } = await buildVideoWorkflow({
             mode,
             prompt: 'Offline workflow contract.',
@@ -74,6 +75,40 @@ test('handles optional last frame, audio removal, and safe output prefixes', asy
   assert.equal(workflow['14'].inputs.audio, undefined)
   assert.ok(!workflow['15'].inputs.filename_prefix.includes('..'))
   assert.ok(!workflow['15'].inputs.filename_prefix.includes(' '))
+})
+
+test('compiles Base quality presets without a Turbo LoRA and with the official sampler', async () => {
+  const { workflow, metadata } = await buildVideoWorkflow({
+    mode: 'text-to-video',
+    prompt: 'A controlled cinematic Base sample.',
+    aspectRatio: '16:9',
+    duration: 10,
+    preset: 'cinemaBase',
+    seed: 42,
+    audio: true,
+    jobId: 'base-quality-contract',
+  })
+  assert.equal(workflow['5'], undefined)
+  assert.deepEqual(workflow['8'].inputs.model, ['1', 0])
+  assert.equal(workflow['9'].class_type, 'KSamplerSelect')
+  assert.equal(workflow['9'].inputs.sampler_name, 'res_multistep')
+  assert.equal(workflow['10'].inputs.steps, 20)
+  assert.equal(workflow['15'].inputs['codec.encoding.crf'], 8)
+  assert.equal(metadata.samplingMode, 'base')
+  assert.deepEqual(metadata.dimensions, { width: 1024, height: 576 })
+})
+
+test('rejects unsafe preset-duration combinations before queueing', async () => {
+  await assert.rejects(buildVideoWorkflow({
+    mode: 'text-to-video',
+    prompt: 'Too long for native 768p on 8GB.',
+    aspectRatio: '16:9',
+    duration: 10,
+    preset: 'nativeHigh',
+    seed: 1,
+    audio: true,
+    jobId: 'unsafe-duration',
+  }), (error) => error.code === 'VIDEO_PRESET_DURATION_UNSUPPORTED')
 })
 
 test('rejects unsupported or incomplete workflow requests', async () => {

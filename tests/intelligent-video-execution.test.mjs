@@ -127,6 +127,7 @@ test('creates stable ready T2V checklist ids and deterministic H3 submission par
   assert.equal(submission.request.aspectRatio, '16:9')
   assert.equal(submission.request.preset, 'fast')
   assert.match(submission.request.prompt, /雨夜书店/)
+  assert.match(submission.request.prompt, /阿砚 speaks clearly: <d>\[Chinese\] 我要找回遗失的一页。<\/d>/)
   assert.equal('sourceImageDataUrl' in submission.request, false)
   assert.match(submission.idempotencyKey, /^story-[a-f0-9]{48}$/)
 })

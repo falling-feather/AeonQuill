@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "packageId": "aeonquill-comfyui-h3-cu130-win-x64-v2",
+  "status": "validated-candidate-not-standalone",
+  "platform": "windows",
+  "architecture": "x64",
+  "baseRuntimePackageId": "aeonquill-comfyui-h3-cu129-win-x64-v1",
+  "entrypoints": {
+    "comfyRoot": "ComfyUI",
+    "python": ".venv/Scripts/python.exe",
+    "databaseArgumentRequired": true
+  },
+  "runtime": {
+    "comfyuiVersion": "0.31.0",
+    "comfyuiCommit": "43cb4fffc89bba20ab7bd61467a36d0339338dab",
+    "comfyuiRepository": "https://github.com/comfy-org/ComfyUI",
+    "comfyuiLicense": "GPL-3.0-only",
+    "pythonVersion": "3.12.10",
+    "pythonDistribution": "inherits D-drive Python base from the stable runtime",
+    "torchVersion": "2.12.1+cu130",
+    "torchvisionVersion": "0.27.1+cu130",
+    "torchaudioVersion": "2.11.0+cpu",
+    "cudaRuntime": "13.0",
+    "gpuFamily": "NVIDIA",
+    "minimumVramGb": 8,
+    "minimumSystemRamGb": 32,
+    "standalone": false
+  },
+  "customNodes": [
+    {
+      "directory": "ComfyUI-MiniMax-H3-Turbo",
+      "repository": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo",
+      "commit": "4274783a23afcfdbea3b4876cb79effd6c510785",
+      "license": "Apache-2.0"
+    }
+  ],
+  "candidateModels": [
+    {
+      "path": "ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "bytes": 20970379616,
+      "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "license": "MiniMax-H3-Community-License",
+      "storage": "shared from stable D-drive model root"
+    },
+    {
+      "path": "ComfyUI/models/diffusion_models/seedvr2_3b_int8_convrot.safetensors",
+      "bytes": 3458259704,
+      "sha256": "c3dec8bcc5916843a8a858572970597462e1f2dc598d6dfd818f6cd40f53a157",
+      "source": "https://huggingface.co/Comfy-Org/SeedVR2",
+      "license": "Apache-2.0",
+      "storage": "shared from stable D-drive model root"
+    },
+    {
+      "path": "ComfyUI/models/vae/seedvr2_ema_vae_fp16.safetensors",
+      "bytes": 501324814,
+      "sha256": "20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1",
+      "source": "https://huggingface.co/Comfy-Org/SeedVR2",
+      "license": "Apache-2.0",
+      "storage": "shared from stable D-drive model root"
+    }
+  ],
+  "validation": {
+    "databaseUrl": "sqlite:///D:/AEONQUILL/UserData/data/comfyui-cu130/user/comfyui.db",
+    "modelPaths": "shared read-only lookup through extra_model_paths.yaml",
+    "nativeKernels": [
+      "convrot_w4a4",
+      "asym_w4a8_int8",
+      "int8_tensorwise"
+    ],
+    "tritonRequired": false,
+    "oneStepH3Preflight": "passed",
+    "oneStepElapsedSeconds": 106.79,
+    "fullBase20Comparison": "passed",
+    "fullBase20ElapsedSeconds": 899.49,
+    "seedVr2ElapsedSeconds": 321.5,
+    "fullMasterElapsedSeconds": 1220.99,
+    "outputContract": "1280x720, 124 frames, 24 fps, H.264/AAC, seekable",
+    "temporalStripReview": "passed-no-observed-chunk-boundary-jump"
+  },
+  "promotionGates": [
+    "Complete fixed-seed Base 20 quality and timing comparison against FP8/cu129",
+    "Freeze a self-contained Python distribution instead of inheriting the stable runtime base",
+    "Add candidate files to the offline staging manifest and full hash validation",
+    "Repeat cold start, queue, idle shutdown, SeedVR2, and packaged sidecar validation",
+    "Complete SBOM, model territory, attribution, and redistribution review"
+  ],
+  "publicCommercialReleaseReady": false
+}

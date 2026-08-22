@@ -31,6 +31,9 @@ test('compiles free-form T2VA into the official three-section order', () => {
   assert.ok(plan.compiledPrompt.indexOf('integrated_multimodal_description:') < plan.compiledPrompt.indexOf('overall_soundscape:'))
   assert.ok(plan.compiledPrompt.indexOf('overall_soundscape:') < plan.compiledPrompt.indexOf('non_diegetic_music:'))
   assert.match(plan.compiledPrompt, /pushes in with small amplitude at slow speed/)
+  assert.equal(plan.shotPlan.length, 3)
+  assert.match(plan.compiledPrompt, /\[0\.00s–1\.13s\]/)
+  assert.equal(plan.recommendedPreset, 'master720')
   assert.ok(plan.compiledPrompt.length <= 8_000)
 })
 
@@ -87,4 +90,17 @@ test('publishes a stable prompt-agent catalog', () => {
     'non_diegetic_music',
   ])
   assert.ok(catalog.scenarios.some(({ id }) => id === 'shortDrama'))
+})
+
+test('preserves user-authored time marks instead of inventing a second timeline', () => {
+  const plan = compileH3Prompt({
+    mode: 'text-to-video',
+    sourcePrompt: '[0s-2s] A locked wide shot. [2s-5s] The subject turns once and settles.',
+    scenario: 'cinematic',
+    duration: 5,
+    audio: false,
+  })
+  assert.equal(plan.shotPlan.length, 1)
+  assert.equal(plan.shotPlan[0].role, 'user-timed')
+  assert.ok(plan.warnings.some((warning) => warning.includes('用户时间轴')))
 })

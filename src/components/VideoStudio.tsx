@@ -88,6 +88,7 @@ const phaseGroups: Array<{ label: string; phases: VideoJobPhase[] }> = [
   { label: '条件', phases: ['conditioning'] },
   { label: '采样', phases: ['sampling'] },
   { label: '解码', phases: ['decoding', 'encoding'] },
+  { label: '精修', phases: ['restoring'] },
   { label: '保存', phases: ['saving', 'completed'] },
 ]
 
@@ -99,42 +100,74 @@ const pipelinePresets: Array<{
   detail: string
   minVram: string
   risk: string
+  allowedDurations: VideoJobRequest['duration'][]
+  estimate: Partial<Record<VideoJobRequest['duration'], string>>
 }> = [
   {
     id: 'fast',
-    label: '8GB 稳定预览',
+    label: '快速动作预览',
     native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
     delivery: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    detail: '4 步 · 低显存 · 本机已验证',
+    detail: '608×352 · 4 步 Turbo · 只看动作构图',
     minVram: '8 GB',
     risk: '低',
+    allowedDurations: [5, 10, 15],
+    estimate: { 5: '3–5 分钟', 10: '7–11 分钟', 15: '12–18 分钟' },
   },
   {
     id: 'balanced',
-    label: '8GB 细节',
-    native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    delivery: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    detail: '6 步 · 改善快速运动拖影',
+    label: '高清 Turbo',
+    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
+    delivery: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
+    detail: '8 步 Turbo · 源像素为旧预览约 2.75 倍',
     minVram: '8 GB',
     risk: '中',
+    allowedDurations: [5, 10],
+    estimate: { 5: '11–16 分钟', 10: '20–28 分钟' },
   },
   {
     id: 'delivery720',
-    label: '8GB · 720P 交付',
+    label: '兼容 720P（插值）',
     native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
     delivery: { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' },
-    detail: '8 步生成 · 保留原生片 · Lanczos 交付',
+    detail: '旧 608×352 源片 · Lanczos · 不新增真实细节',
     minVram: '8 GB',
     risk: '中',
+    allowedDurations: [5, 10, 15],
+    estimate: { 5: '5–7 分钟', 10: '11–16 分钟', 15: '17–24 分钟' },
   },
   {
     id: 'nativeHigh',
-    label: '原生高清实验',
-    native: { '16:9': '736×416', '9:16': '416×736', '1:1': '544×544' },
-    delivery: { '16:9': '736×416', '9:16': '416×736', '1:1': '544×544' },
-    detail: '8 步 · 未在 8GB 本机执行',
-    minVram: '12 GB+',
+    label: '原生 768P Turbo',
+    native: { '16:9': '1344×768', '9:16': '768×1344', '1:1': '992×992' },
+    delivery: { '16:9': '1344×768', '9:16': '768×1344', '1:1': '992×992' },
+    detail: 'H3 官方原生画布 · 8 步 · 限 5 秒',
+    minVram: '8 GB',
     risk: '高',
+    allowedDurations: [5],
+    estimate: { 5: '17–24 分钟' },
+  },
+  {
+    id: 'cinemaBase',
+    label: 'Base 20 步精修',
+    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
+    delivery: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
+    detail: '官方 res_multistep · 无 Turbo LoRA · 声画优先',
+    minVram: '8 GB',
+    risk: '中高',
+    allowedDurations: [5, 10],
+    estimate: { 5: '15–30 分钟', 10: '30–55 分钟' },
+  },
+  {
+    id: 'master720',
+    label: '720P 时序精修母版',
+    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
+    delivery: { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' },
+    detail: 'Base 20 步 → 卸载 H3 → SeedVR2 分块修复',
+    minVram: '8 GB',
+    risk: '高',
+    allowedDurations: [5, 10],
+    estimate: { 5: '20–40 分钟', 10: '38–75 分钟' },
   },
 ]
 
@@ -182,7 +215,7 @@ export function VideoStudio({
   const [prompt, setPrompt] = useState(starterPrompts[selectedImage ? 'image-to-video' : 'text-to-video'])
   const [aspectRatio, setAspectRatio] = useState<VideoJobRequest['aspectRatio']>('16:9')
   const [duration, setDuration] = useState<VideoJobRequest['duration']>(5)
-  const [preset, setPreset] = useState<VideoJobRequest['preset']>('delivery720')
+  const [preset, setPreset] = useState<VideoJobRequest['preset']>('master720')
   const [scenario, setScenario] = useState<H3ScenarioId>('auto')
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2_147_483_647))
   const [audio, setAudio] = useState(true)
@@ -257,18 +290,29 @@ export function VideoStudio({
     [aspectRatio, audio, camera, constraints, continuity, duration, lastFrame, mode, motion, music, prompt, scenario, soundscape],
   )
   const selectedPreset = pipelinePresets.find((item) => item.id === preset) ?? pipelinePresets[0]
+  const presetCapability = runtime?.videoCapabilities?.presets.find((item) => item.id === preset)
+  const capabilityKnown = Boolean(runtime?.connected && runtime.videoCapabilities)
+  const presetUnavailable = capabilityKnown && presetCapability?.available === false
   const vramGb = (runtime?.vramTotal || 0) / 1024 ** 3
-  const risky = selectedPreset.id === 'nativeHigh' && vramGb > 0 && vramGb < 12
+  const insufficientVram = Boolean(runtime?.vramTotal && runtime.vramTotal + 64 * 1024 ** 2 < 8 * 1024 ** 3)
+  const durationUnsupported = !selectedPreset.allowedDurations.includes(duration)
   const manualRuntimeUnavailable = lifecycle?.policy === 'manual' && !ready
   const canSubmit = prompt.trim().length >= 2
     && (mode !== 'image-to-video' || selectedImage)
-    && !risky
+    && !insufficientVram
+    && !durationUnsupported
+    && !presetUnavailable
     && !manualRuntimeUnavailable
 
   const changeMode = (nextMode: VideoGenerationMode) => {
     setMode(nextMode)
     setPrompt(starterPrompts[nextMode])
     if (nextMode === 'text-to-video') setLastFrame(undefined)
+  }
+
+  const changePreset = (nextPreset: (typeof pipelinePresets)[number]) => {
+    setPreset(nextPreset.id)
+    if (!nextPreset.allowedDurations.includes(duration)) setDuration(nextPreset.allowedDurations[0])
   }
 
   return (
@@ -425,7 +469,7 @@ export function VideoStudio({
           <span className="video-section-label">时长</span>
           <div className="choice-segment is-three compact">
             {([5, 10, 15] as const).map((value) => (
-              <button type="button" key={value} className={duration === value ? 'is-active' : ''} aria-pressed={duration === value} onClick={() => setDuration(value)}>{value}s</button>
+              <button type="button" key={value} disabled={!selectedPreset.allowedDurations.includes(value)} className={duration === value ? 'is-active' : ''} aria-pressed={duration === value} onClick={() => setDuration(value)}>{value}s</button>
             ))}
           </div>
         </section>
@@ -440,21 +484,26 @@ export function VideoStudio({
       <section className="video-form-section">
         <div className="video-section-label"><span>生成流水线</span><small>生成与交付尺寸分开</small></div>
         <div className="preset-options pipeline-options">
-          {pipelinePresets.map((item) => (
-            <button type="button" key={item.id} className={preset === item.id ? 'is-active' : ''} aria-pressed={preset === item.id} onClick={() => setPreset(item.id)}>
+          {pipelinePresets.map((item) => {
+            const capability = runtime?.videoCapabilities?.presets.find((candidate) => candidate.id === item.id)
+            const unavailable = capabilityKnown && capability?.available === false
+            return (
+            <button type="button" key={item.id} className={preset === item.id ? 'is-active' : ''} aria-pressed={preset === item.id} aria-disabled={unavailable} title={unavailable ? '当前运行时缺少该档位所需模型或后处理器' : undefined} onClick={() => changePreset(item)}>
               <span><strong>{item.label}</strong>{item.id === compiledPlan.recommendedPreset ? <em>场景推荐</em> : null}</span>
               <small>{item.detail}</small>
               <dl>
                 <div><dt>生成</dt><dd>{item.native[aspectRatio]}</dd></div>
                 <div><dt>交付</dt><dd>{item.delivery[aspectRatio]}</dd></div>
-                <div><dt>最低显存</dt><dd>{item.minVram}</dd></div>
-                <div><dt>风险</dt><dd>{item.risk}</dd></div>
+                <div><dt>预计</dt><dd>{item.estimate[duration] || '当前时长不支持'}</dd></div>
+                <div><dt>{unavailable ? '状态' : '显存 / 风险'}</dt><dd>{unavailable ? '依赖未就绪' : `${item.minVram} / ${item.risk}`}</dd></div>
               </dl>
             </button>
-          ))}
+          )})}
         </div>
-        {preset === 'delivery720' ? <p className="pipeline-note">720P 档使用确定性放大获得标准交付尺寸，不宣称生成了原生 720P 细节。</p> : null}
-        {risky ? <p className="pipeline-warning"><AlertTriangle size={13} />当前检测到约 {vramGb.toFixed(1)}GB 显存，原生高清实验档要求至少 12GB。</p> : null}
+        {preset === 'delivery720' ? <p className="pipeline-note">兼容档只把文件尺寸放大到 720P；清晰度仍受 608×352 源片限制。</p> : null}
+        {preset === 'master720' ? <p className="pipeline-note">母版档会保留 H3 原生片，卸载 H3 后再运行 SeedVR2；第二阶段失败不会覆盖原生母片。</p> : null}
+        {presetUnavailable ? <p className="pipeline-warning"><AlertTriangle size={13} />当前运行时尚未注册此档位的完整模型或节点；系统不会静默降级。</p> : null}
+        {insufficientVram ? <p className="pipeline-warning"><AlertTriangle size={13} />当前检测到约 {vramGb.toFixed(1)}GB 显存，全部 H3 档位至少需要标称 8GB。</p> : null}
       </section>
 
       <section className="seed-setting">
@@ -475,6 +524,7 @@ export function VideoStudio({
           aspectRatio,
           duration,
           preset,
+          modelProfile: 'auto',
           seed,
           audio,
           director,
@@ -483,9 +533,11 @@ export function VideoStudio({
         })}
       >
         {submitting ? <LoaderCircle className="is-spinning" size={17} /> : <Film size={17} />}
-        {submitting ? '正在准备任务…' : ready ? '生成视频' : manualRuntimeUnavailable ? '等待外部 ComfyUI' : '启动 ComfyUI 并生成'}
+        {submitting ? '正在准备任务…' : presetUnavailable ? '高质量依赖尚未就绪' : ready ? '生成视频' : manualRuntimeUnavailable ? '等待外部 ComfyUI' : '启动 ComfyUI 并生成'}
       </button>
-      <p className="video-runtime-note">{ready ? `当前 ${selectedPreset.label} · ${selectedPreset.detail}` : '首次冷启动需加载节点与模型，后续连续任务会复用进程。'}</p>
+      <p className="video-runtime-note">{ready
+        ? `当前 ${selectedPreset.label} · ${selectedPreset.detail}${presetCapability?.availableProfiles?.[0] ? ` · ${presetCapability.availableProfiles[0]}` : ''}`
+        : '首次冷启动需加载节点与模型，后续连续任务会复用进程。'}</p>
 
       {activeJob ? (
         <section className="active-video-job">

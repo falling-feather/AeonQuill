@@ -1,12 +1,12 @@
 export const H3_PROMPT_AGENT_SCHEMA_VERSION = 1
-export const H3_PROMPT_AGENT_VERSION = 'aeonquill-h3-context-lite-v1'
+export const H3_PROMPT_AGENT_VERSION = 'aeonquill-h3-shot-planner-v2'
 
 export const H3_SCENARIO_PRESETS = Object.freeze({
   auto: Object.freeze({
     id: 'auto',
     label: '智能匹配',
     description: '根据主体、对白、画幅与动作强度选择受控场景结构。',
-    recommendedPreset: 'delivery720',
+    recommendedPreset: 'master720',
   }),
   cinematic: Object.freeze({
     id: 'cinematic',
@@ -16,7 +16,7 @@ export const H3_SCENARIO_PRESETS = Object.freeze({
     continuity: 'Maintain subject identity, wardrobe, scene geometry, lighting direction, and screen direction throughout the shot.',
     soundscape: 'Natural synchronized ambience and physical action sounds matching every visible movement.',
     music: 'Sparse cinematic instrumentation at a restrained tempo, with dynamics following the visible action.',
-    recommendedPreset: 'delivery720',
+    recommendedPreset: 'master720',
   }),
   shortDrama: Object.freeze({
     id: 'shortDrama',
@@ -26,7 +26,7 @@ export const H3_SCENARIO_PRESETS = Object.freeze({
     continuity: 'Keep every speaker visually consistent, preserve eyelines and lip synchronization, and avoid unmotivated cuts or background changes.',
     soundscape: 'Clean dialogue-forward production sound with restrained room tone and synchronized Foley.',
     music: 'A minimal underscore at low volume that never masks dialogue.',
-    recommendedPreset: 'delivery720',
+    recommendedPreset: 'master720',
   }),
   product: Object.freeze({
     id: 'product',
@@ -36,7 +36,7 @@ export const H3_SCENARIO_PRESETS = Object.freeze({
     continuity: 'Preserve product silhouette, proportions, surface markings, material, label placement, and lighting continuity without adding parts.',
     soundscape: 'Subtle synchronized material and handling sounds in a clean studio acoustic space.',
     music: 'A restrained modern pulse with sparse percussion and no vocals.',
-    recommendedPreset: 'delivery720',
+    recommendedPreset: 'master720',
   }),
   portrait: Object.freeze({
     id: 'portrait',
@@ -56,7 +56,7 @@ export const H3_SCENARIO_PRESETS = Object.freeze({
     continuity: 'Preserve line weight, palette, character proportions, costume shapes, and background perspective without drifting into photorealism.',
     soundscape: 'Stylized but synchronized ambience and Foley matching the animated action.',
     music: 'A light instrumental arrangement with a clear rhythm and no vocals unless explicitly requested.',
-    recommendedPreset: 'delivery720',
+    recommendedPreset: 'master720',
   }),
 })
 
@@ -136,6 +136,43 @@ function safeDirector(input = {}) {
   }
 }
 
+function formatTimestamp(value) {
+  return Number(value).toFixed(2)
+}
+
+function hasTimedShotSyntax(value) {
+  return /(?:\[\s*\d+(?:\.\d+)?\s*s?\s*[-–—]\s*\d+(?:\.\d+)?\s*s?\s*\]|\[Shot\s+\d+\]|\b\d+(?:\.\d+)?\s*seconds?\b)/i.test(value)
+}
+
+function buildShotPlan(sourceBody, effectiveDurationSeconds, mode) {
+  if (hasTimedShotSyntax(sourceBody)) {
+    return [{
+      start: 0,
+      end: effectiveDurationSeconds,
+      role: 'user-timed',
+      instruction: sourceBody,
+    }]
+  }
+  const boundaries = effectiveDurationSeconds <= 5.2
+    ? [0, 0.22, 0.78, 1]
+    : [0, 0.15, 0.48, 0.8, 1]
+  const roles = boundaries.length === 4
+    ? ['establish', 'develop', 'resolve']
+    : ['establish', 'initiate', 'develop', 'resolve']
+  const instructions = {
+    establish: `${mode === 'image-to-video' ? 'Hold the supplied opening identity and composition while establishing' : 'Establish'} the scene, primary subject, spatial layout, lighting, and visual style. Creative intent: ${sourceBody}`,
+    initiate: 'Begin the requested primary action with readable anticipation; keep camera movement smooth and preserve screen direction.',
+    develop: 'Develop the primary action continuously with believable weight, stable anatomy, coherent occlusion, synchronized environmental response, and no unrequested cut.',
+    resolve: 'Resolve the action into a clear final pose or scene state; reduce residual motion and hold identity, geometry, lighting, and composition stable through the last frame.',
+  }
+  return roles.map((role, index) => ({
+    start: effectiveDurationSeconds * boundaries[index],
+    end: effectiveDurationSeconds * boundaries[index + 1],
+    role,
+    instruction: instructions[role],
+  }))
+}
+
 export function compileH3Prompt(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_H3_PROMPT_REQUEST', 'H3 prompt request must be an object')
   const mode = input.mode
@@ -156,6 +193,10 @@ export function compileH3Prompt(input) {
   const alignment = alignmentInstruction(mode, Boolean(input.hasLastFrame), effectiveDurationSeconds)
   const anchor = referenceAnchor(mode, Boolean(input.hasLastFrame))
   const sourceBody = structured?.integrated || sourcePrompt
+  const shotPlan = buildShotPlan(sourceBody, effectiveDurationSeconds, mode)
+  const timeline = shotPlan.map((beat) => (
+    `[${formatTimestamp(beat.start)}s–${formatTimestamp(beat.end)}s] ${beat.instruction}`
+  )).join('\n')
   const continuity = director.continuity
     ? scenario.continuity
     : 'Allow deliberate scene evolution while keeping the primary subject recognizable and the visual transition motivated.'
@@ -165,15 +206,15 @@ export function compileH3Prompt(input) {
   const integrated = [
     `[Shot 1] ${scenario.style}.`,
     anchor,
-    sourceBody,
+    timeline,
     CAMERA[director.camera],
     MOTION[director.motion],
     continuity,
     constraints,
-  ].filter(Boolean).join(' ')
+  ].filter(Boolean).join('\n')
   const audio = input.audio !== false
   const soundscape = audio
-    ? director.soundscape || structured?.soundscape || scenario.soundscape
+    ? `${director.soundscape || structured?.soundscape || scenario.soundscape} Synchronize every audible event to its visible cause and keep dialogue intelligible.`
     : 'N/A'
   const music = audio
     ? director.music || structured?.music || scenario.music
@@ -203,12 +244,13 @@ export function compileH3Prompt(input) {
   }
   const warnings = []
   if (director.motion === 'dynamic' && duration === 5) {
-    warnings.push('5 秒强运动对 Turbo 采样更敏感；若出现拖影，优先使用 6–8 步质量档或降低运动幅度。')
+    warnings.push('5 秒强运动对 Turbo 更敏感；正式母版优先使用 Base 20 步，或降低单镜头位移与转速。')
   }
   if (Boolean(input.hasLastFrame) && director.motion === 'dynamic') {
     warnings.push('首尾帧约束与强运动同时使用时，应确保两张参考图之间存在连续可达的动作路径。')
   }
   if (structured) warnings.push('检测到既有 H3 结构，已保留主体描述并按当前场景、镜头和声画字段重新规范化。')
+  if (hasTimedShotSyntax(sourceBody)) warnings.push('检测到用户时间轴，已原样保留时间标记，不再自动拆分节拍。')
   return {
     schemaVersion: H3_PROMPT_AGENT_SCHEMA_VERSION,
     agentVersion: H3_PROMPT_AGENT_VERSION,
@@ -217,6 +259,11 @@ export function compileH3Prompt(input) {
     resolvedScenario,
     recommendedPreset: scenario.recommendedPreset,
     effectiveDurationSeconds,
+    shotPlan,
+    qualityGuidance: {
+      nativeMaster: duration === 5 ? '1344×768 Turbo 适合短镜头原生母版。' : '长镜头优先 1024×576，避免 8GB 时空注意力峰值。',
+      finalMaster: '正式成片优先 Base 20 步；需要标准 720P 时再串联 SeedVR2 时序修复。',
+    },
     sourcePrompt,
     compiledPrompt,
     sections,

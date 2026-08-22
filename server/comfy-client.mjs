@@ -74,6 +74,9 @@ export class ComfyClient {
       connected: true,
       comfyVersion: stats.system?.comfyui_version || 'unknown',
       pythonVersion: stats.system?.python_version || 'unknown',
+      pytorchVersion: stats.system?.pytorch_version || 'unknown',
+      systemRamTotal: stats.system?.ram_total || 0,
+      systemRamFree: stats.system?.ram_free || 0,
       device: device?.name || '未检测到 GPU',
       vramTotal: device?.vram_total || 0,
       vramFree: device?.vram_free || 0,
@@ -103,6 +106,30 @@ export class ComfyClient {
     }, 60_000)
     const result = await response.json()
     return result.subfolder ? `${result.subfolder}/${result.name}` : result.name
+  }
+
+  async uploadVideo(filePath, filename, signal) {
+    const bytes = await readFile(filePath)
+    const form = new FormData()
+    form.append('image', new Blob([bytes], { type: 'video/mp4' }), filename)
+    form.append('type', 'input')
+    form.append('overwrite', 'true')
+    const response = await this.request('/upload/image', {
+      method: 'POST',
+      body: form,
+      signal,
+    }, 5 * 60_000)
+    const result = await response.json()
+    return result.subfolder ? `${result.subfolder}/${result.name}` : result.name
+  }
+
+  async freeMemory(signal) {
+    await this.request('/free', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+      signal,
+    }, 60_000)
   }
 
   async prepareSamImage(imageReference, signal) {

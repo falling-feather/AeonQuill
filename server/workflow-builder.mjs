@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
+  DEFAULT_RUNTIME_REQUIREMENTS,
   DEFAULT_VIDEO_MODEL_PROFILE,
   VIDEO_DELIVERY_DIMENSIONS_720P,
-  VIDEO_MODEL_PROFILES,
   VIDEO_NATIVE_DIMENSIONS,
   VIDEO_PRESETS,
   VIDEO_WORKFLOW_REGISTRY_VERSION,
@@ -22,8 +22,8 @@ const WORKFLOW_FILES = {
   'image-to-video': 'minimax-h3-i2v.json',
 }
 
-export const WORKFLOW_VERSION = 'h3-multiscene-fp8-v3'
-export const VIDEO_DIMENSIONS = VIDEO_NATIVE_DIMENSIONS.standard
+export const WORKFLOW_VERSION = 'h3-quality-matrix-v4'
+export const VIDEO_DIMENSIONS = VIDEO_NATIVE_DIMENSIONS.preview
 export { VIDEO_PRESETS }
 
 export const VIDEO_DURATIONS = {
@@ -32,34 +32,18 @@ export const VIDEO_DURATIONS = {
   15: 362,
 }
 
-export const REQUIRED_NODE_TYPES = [
-  'UNETLoader',
-  'CLIPLoader',
-  'VAELoader',
-  'MiniMaxH3TurboLoRA',
-  'MiniMaxH3ImageToVideo',
-  'RandomNoise',
-  'BasicGuider',
-  'MiniMaxH3TurboSampler',
-  'BasicScheduler',
-  'SamplerCustomAdvanced',
-  'VAEDecode',
-  'VAEDecodeAudio',
-  'CreateVideo',
-  'SaveVideo',
-  'LoadImage',
-]
+export const REQUIRED_NODE_TYPES = [...new Set([...DEFAULT_RUNTIME_REQUIREMENTS.requiredNodes, 'KSamplerSelect'])]
 
 const ALLOWED_NODE_TYPES_BY_ID = {
   '1': 'UNETLoader',
   '2': 'CLIPLoader',
   '3': 'VAELoader',
   '4': 'VAELoader',
-  '5': 'MiniMaxH3TurboLoRA',
+  '5': new Set(['MiniMaxH3TurboLoRA']),
   '6': 'MiniMaxH3ImageToVideo',
   '7': 'RandomNoise',
   '8': 'BasicGuider',
-  '9': 'MiniMaxH3TurboSampler',
+  '9': new Set(['MiniMaxH3TurboSampler', 'KSamplerSelect']),
   '10': 'BasicScheduler',
   '11': 'SamplerCustomAdvanced',
   '12': 'VAEDecode',
@@ -70,7 +54,7 @@ const ALLOWED_NODE_TYPES_BY_ID = {
   '17': 'LoadImage',
 }
 
-export const ALLOWED_WORKFLOW_NODE_TYPES = new Set(Object.values(ALLOWED_NODE_TYPES_BY_ID))
+export const ALLOWED_WORKFLOW_NODE_TYPES = new Set(Object.values(ALLOWED_NODE_TYPES_BY_ID).flatMap((value) => value instanceof Set ? [...value] : [value]))
 
 export function assertAllowedWorkflow(workflow) {
   if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
@@ -80,7 +64,8 @@ export function assertAllowedWorkflow(workflow) {
     if (!/^\d{1,4}$/.test(nodeId) || !node || typeof node !== 'object' || Array.isArray(node)) {
       throw Object.assign(new Error('Compiled workflow contains an invalid node'), { code: 'WORKFLOW_NOT_ALLOWED' })
     }
-    if (ALLOWED_NODE_TYPES_BY_ID[nodeId] !== node.class_type) {
+    const allowed = ALLOWED_NODE_TYPES_BY_ID[nodeId]
+    if (!(allowed instanceof Set ? allowed.has(node.class_type) : allowed === node.class_type)) {
       throw Object.assign(new Error(`Compiled workflow contains an unregistered node mapping: ${nodeId}/${node.class_type}`), {
         code: 'WORKFLOW_NOT_ALLOWED',
       })
@@ -147,6 +132,11 @@ export async function buildVideoWorkflow({
   if (!dimensions) throw new Error(`Unsupported aspect ratio: ${aspectRatio}`)
   if (!presetConfig) throw new Error(`Unsupported quality preset: ${preset}`)
   if (!length) throw new Error(`Unsupported duration: ${duration}`)
+  if (!presetConfig.allowedDurations.includes(Number(duration))) {
+    throw Object.assign(new Error(`${presetConfig.label} only supports ${presetConfig.allowedDurations.join(' or ')} second clips`), {
+      code: 'VIDEO_PRESET_DURATION_UNSUPPORTED',
+    })
+  }
   if (mode === 'image-to-video' && !inputImageName) {
     throw new Error('Image-to-video workflow requires an uploaded first frame')
   }
@@ -167,9 +157,20 @@ export async function buildVideoWorkflow({
   workflow['2'].inputs.clip_name = profile.clipName
   workflow['3'].inputs.vae_name = profile.videoVaeName
   workflow['4'].inputs.vae_name = profile.audioVaeName
-  workflow['5'].inputs.lora_name = profile.loraName
-  workflow['5'].inputs.strength = presetConfig.loraStrength
-  workflow['5'].inputs.low_vram = presetConfig.lowVram
+  if (presetConfig.samplingMode === 'turbo') {
+    workflow['5'].inputs.lora_name = profile.loraName
+    workflow['5'].inputs.strength = presetConfig.loraStrength
+    workflow['5'].inputs.low_vram = presetConfig.lowVram
+  } else {
+    delete workflow['5']
+    workflow['8'].inputs.model = ['1', 0]
+    workflow['9'] = {
+      inputs: { sampler_name: presetConfig.sampler },
+      class_type: 'KSamplerSelect',
+      _meta: { title: 'H3 Base 采样器' },
+    }
+    workflow['10'].inputs.model = ['1', 0]
+  }
   workflow['6'].inputs.prompt = promptPlan.compiledPrompt
   workflow['6'].inputs.width = dimensions.width
   workflow['6'].inputs.height = dimensions.height
@@ -177,6 +178,15 @@ export async function buildVideoWorkflow({
   workflow['7'].inputs.noise_seed = seed
   workflow['10'].inputs.steps = presetConfig.steps
   workflow['15'].inputs.filename_prefix = safeOutputPrefix(jobId, mode)
+  const sourceCrf = ['base-master', 'restored-master'].includes(presetConfig.qualityClass)
+    ? 8
+    : ['quality', 'native-master'].includes(presetConfig.qualityClass) ? 12 : null
+  if (sourceCrf !== null) {
+    workflow['15'].inputs.format = 'mp4'
+    workflow['15'].inputs.codec = 'h264'
+    workflow['15'].inputs['codec.encoding'] = 're-encode'
+    workflow['15'].inputs['codec.encoding.crf'] = sourceCrf
+  }
 
   if (mode === 'image-to-video') workflow['16'].inputs.image = inputImageName
   if (mode === 'image-to-video' && lastFrameImageName) {
@@ -207,14 +217,21 @@ export async function buildVideoWorkflow({
       frames: length,
       fps: 24,
       steps: presetConfig.steps,
+      samplingMode: presetConfig.samplingMode,
+      sampler: presetConfig.sampler,
       loraStrength: presetConfig.loraStrength,
       lowVram: presetConfig.lowVram,
       audio,
       delivery: presetConfig.delivery,
       preserveNative: presetConfig.preserveNative,
-      deliveryDimensions: presetConfig.delivery === '720p-lanczos'
+      deliveryDimensions: presetConfig.delivery.startsWith('720p-')
         ? VIDEO_DELIVERY_DIMENSIONS_720P[aspectRatio]
         : dimensions,
+      qualityClass: presetConfig.qualityClass,
+      allowedDurations: presetConfig.allowedDurations,
+      estimatedMinutes: presetConfig.estimatedMinutes[duration],
+      postprocessor: presetConfig.postprocessor || null,
+      sourceEncoding: sourceCrf === null ? 'auto' : `h264-crf${sourceCrf}`,
       minVramGb: presetConfig.minVramGb,
       validation: presetConfig.validation,
       promptAgent: {
@@ -229,8 +246,8 @@ export async function buildVideoWorkflow({
   }
 }
 
-export function workflowCatalog() {
-  const registry = videoWorkflowRegistryCatalog()
+export function workflowCatalog(capabilities) {
+  const registry = videoWorkflowRegistryCatalog(capabilities)
   return {
     version: WORKFLOW_VERSION,
     registry,
@@ -258,10 +275,4 @@ export function workflowCatalog() {
   }
 }
 
-export const REQUIRED_MODEL_FILES = Object.freeze(Object.values(VIDEO_MODEL_PROFILES).flatMap((profile) => [
-  ['UNETLoader', 'unet_name', profile.unetName],
-  ['CLIPLoader', 'clip_name', profile.clipName],
-  ['VAELoader', 'vae_name', profile.videoVaeName],
-  ['VAELoader', 'vae_name', profile.audioVaeName],
-  ['MiniMaxH3TurboLoRA', 'lora_name', profile.loraName],
-]))
+export const REQUIRED_MODEL_FILES = DEFAULT_RUNTIME_REQUIREMENTS.requiredModels

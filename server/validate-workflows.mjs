@@ -35,6 +35,26 @@ const cases = [
     audio: true,
     jobId: 'validate-delivery720',
   },
+  {
+    mode: 'text-to-video',
+    prompt: 'Workflow contract validation.',
+    aspectRatio: '16:9',
+    duration: 5,
+    preset: 'nativeHigh',
+    seed: 4,
+    audio: true,
+    jobId: 'validate-native-high',
+  },
+  {
+    mode: 'text-to-video',
+    prompt: 'Workflow contract validation.',
+    aspectRatio: '16:9',
+    duration: 10,
+    preset: 'cinemaBase',
+    seed: 5,
+    audio: true,
+    jobId: 'validate-cinema-base',
+  },
 ]
 
 async function main() {
