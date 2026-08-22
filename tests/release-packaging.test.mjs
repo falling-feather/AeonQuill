@@ -30,7 +30,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
-  assert.equal(metadata.version, '0.5.0')
+  assert.equal(metadata.version, '0.5.1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -41,7 +41,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     '../../release/THIRD-PARTY-NOTICES.md': 'release/THIRD-PARTY-NOTICES.md',
   })
   assert.match(cargoSource, /^name = "aeonquill-desktop"$/m)
-  assert.match(cargoSource, /^version = "0\.5\.0"$/m)
+  assert.match(cargoSource, /^version = "0\.5\.1"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
@@ -65,7 +65,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
   }
-  assert.equal(basename(paths.installer), 'AEONQUILL_0.5.0_x64-setup.exe')
+  assert.equal(basename(paths.installer), 'AEONQUILL_0.5.1_x64-setup.exe')
   assert.equal(basename(paths.builtApp), 'aeonquill-desktop.exe')
   assert.equal(basename(paths.bundledSidecar), 'aeonquill-bridge.exe')
 })
