@@ -6,6 +6,7 @@ import {
   elementIntersectsWorldBounds,
   elementWorldBounds,
   queryCanvasSpatialIndex,
+  screenMarqueeRect,
   screenMarqueeWorldBounds,
   selectElementIdsInWorldBounds,
   viewportWorldBounds,
@@ -46,6 +47,13 @@ test('very large elements use the global bucket and remain queryable', () => {
 })
 
 test('marquee preview coordinates and committed world bounds share one camera transform', () => {
+  assert.deepEqual(
+    screenMarqueeRect(
+      { x: 460, y: 330 },
+      { x: 220, y: 150 },
+    ),
+    { left: 220, top: 150, width: 240, height: 180 },
+  )
   assert.deepEqual(
     screenMarqueeWorldBounds(
       { x: 460, y: 330 },

@@ -44,15 +44,27 @@ export function boundsIntersect(a, b) {
   return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top
 }
 
+export function screenMarqueeRect(start, end) {
+  const left = Math.min(finite(start?.x), finite(end?.x))
+  const top = Math.min(finite(start?.y), finite(end?.y))
+  return {
+    left,
+    top,
+    width: Math.abs(finite(end?.x) - finite(start?.x)),
+    height: Math.abs(finite(end?.y) - finite(start?.y)),
+  }
+}
+
 export function screenMarqueeWorldBounds(start, end, camera) {
   const zoom = Math.max(0.0001, finite(camera?.zoom, 1))
   const cameraX = finite(camera?.x)
   const cameraY = finite(camera?.y)
+  const rect = screenMarqueeRect(start, end)
   return {
-    left: (Math.min(finite(start?.x), finite(end?.x)) - cameraX) / zoom,
-    top: (Math.min(finite(start?.y), finite(end?.y)) - cameraY) / zoom,
-    right: (Math.max(finite(start?.x), finite(end?.x)) - cameraX) / zoom,
-    bottom: (Math.max(finite(start?.y), finite(end?.y)) - cameraY) / zoom,
+    left: (rect.left - cameraX) / zoom,
+    top: (rect.top - cameraY) / zoom,
+    right: (rect.left + rect.width - cameraX) / zoom,
+    bottom: (rect.top + rect.height - cameraY) / zoom,
   }
 }
 

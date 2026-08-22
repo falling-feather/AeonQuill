@@ -23,6 +23,7 @@ import {
   boundsIntersect,
   createCanvasSpatialIndex,
   queryCanvasSpatialIndex,
+  screenMarqueeRect,
   screenMarqueeWorldBounds,
   selectElementIdsInWorldBounds,
   viewportWorldBounds,
@@ -115,7 +116,7 @@ export function CanvasWorkspace({
   const pendingCameraRef = useRef<Camera | null>(null)
   const spacePressedRef = useRef(false)
   const lastPixelActivationRef = useRef<{ id: string; time: number } | null>(null)
-  const [marquee, setMarquee] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
+  const [marquee, setMarquee] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [viewportSize, setViewportSize] = useState({ width: 900, height: 700 })
 
@@ -299,7 +300,7 @@ export function CanvasWorkspace({
       currentScreen: start,
       camera: interactionCamera,
     }
-    setMarquee({ x: start.x, y: start.y, width: 0, height: 0 })
+    setMarquee(screenMarqueeRect(start, start))
     onSelect([])
     viewportRef.current?.setPointerCapture(event.pointerId)
   }
@@ -426,12 +427,7 @@ export function CanvasWorkspace({
 
     const current = screenPoint(event.clientX, event.clientY)
     gesture.currentScreen = current
-    setMarquee({
-      x: Math.min(gesture.startScreen.x, current.x),
-      y: Math.min(gesture.startScreen.y, current.y),
-      width: Math.abs(current.x - gesture.startScreen.x),
-      height: Math.abs(current.y - gesture.startScreen.y),
-    })
+    setMarquee(screenMarqueeRect(gesture.startScreen, current))
   }
 
   const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {

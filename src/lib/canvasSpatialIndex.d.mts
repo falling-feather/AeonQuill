@@ -1,6 +1,7 @@
 import type { Camera, CanvasElement } from '../types'
 
 export type WorldBounds = { left: number; top: number; right: number; bottom: number }
+export type ScreenMarqueeRect = { left: number; top: number; width: number; height: number }
 export type CanvasSpatialIndex = {
   cellSize: number
   cells: Map<string, Set<string>>
@@ -16,6 +17,10 @@ export function viewportWorldBounds(
   overscanScreenPixels?: number,
 ): WorldBounds
 export function boundsIntersect(a: WorldBounds, b: WorldBounds): boolean
+export function screenMarqueeRect(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): ScreenMarqueeRect
 export function screenMarqueeWorldBounds(
   start: { x: number; y: number },
   end: { x: number; y: number },
