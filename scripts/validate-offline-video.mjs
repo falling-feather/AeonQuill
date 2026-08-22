@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
@@ -13,7 +13,8 @@ const execFileAsync = promisify(execFile)
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const sidecarPath = resolveReleasePaths(metadata).sourceSidecar
-const packageRoot = join(
+const sourceMode = process.env.AEONQUILL_VIDEO_QA_SOURCE === '1'
+const packageRoot = resolve(process.env.AEONQUILL_VIDEO_QA_RUNTIME || join(
   projectRoot,
   '.runtime',
   'releases',
@@ -21,9 +22,9 @@ const packageRoot = join(
   `AEONQUILL_${metadata.version}_windows_x64_full`,
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
-)
+))
 const qaRoot = join(projectRoot, '.runtime', 'qa')
-const reportPath = join(qaRoot, 'offline-video-final.json')
+const reportPath = join(qaRoot, sourceMode ? 'h3-video-source-v050.json' : 'offline-video-final.json')
 const sourceImagePath = join(projectRoot, 'src', 'assets', 'sample-summer-character.png')
 
 function availablePort() {
@@ -114,12 +115,18 @@ async function waitForVideoJob(baseUrl, cookie, jobId, label) {
 async function probeVideo(runtime, pathname) {
   const { stdout } = await execFileAsync(runtime.ffprobePath, [
     '-v', 'error',
-    '-select_streams', 'v:0',
-    '-show_entries', 'stream=codec_name,width,height,avg_frame_rate:format=duration',
+    '-show_entries', 'stream=codec_name,codec_type,width,height,avg_frame_rate:format=duration',
     '-of', 'json',
     pathname,
   ], { windowsHide: true, encoding: 'utf8', timeout: 60_000 })
   return JSON.parse(stdout)
+}
+
+async function verifySeekable(runtime, pathname) {
+  await execFileAsync(runtime.ffmpegPath, [
+    '-hide_banner', '-loglevel', 'error', '-ss', '2.5', '-i', pathname,
+    '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-',
+  ], { windowsHide: true, timeout: 60_000 })
 }
 
 await mkdir(qaRoot, { recursive: true })
@@ -138,6 +145,7 @@ try {
     data: join(runRoot, 'data'),
     cache: join(runRoot, 'cache'),
     logs: join(runRoot, 'logs'),
+    output: join(runRoot, 'output'),
     config: join(runRoot, 'config', 'local.json'),
   }
   await Promise.all([
@@ -145,6 +153,7 @@ try {
     mkdir(paths.data, { recursive: true }),
     mkdir(paths.cache, { recursive: true }),
     mkdir(paths.logs, { recursive: true }),
+    mkdir(paths.output, { recursive: true }),
     mkdir(dirname(paths.config), { recursive: true }),
   ])
   await writeFile(paths.config, `${JSON.stringify({
@@ -177,8 +186,11 @@ try {
   const frameDataUrl = `data:image/png;base64,${(await readFile(framePath)).toString('base64')}`
   const systemRoot = process.env.SystemRoot || 'C:\\Windows'
   const systemOnlyPath = [join(systemRoot, 'System32'), systemRoot, join(systemRoot, 'System32', 'Wbem')].join(';')
-  child = spawn(sidecarPath, [], {
-    cwd: runRoot,
+  child = spawn(
+    sourceMode ? process.execPath : sidecarPath,
+    sourceMode ? [join(projectRoot, 'server', 'index.mjs')] : [],
+    {
+    cwd: sourceMode ? projectRoot : runRoot,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
@@ -197,6 +209,7 @@ try {
       AEONQUILL_DATA_DIR: paths.data,
       AEONQUILL_CACHE_DIR: paths.cache,
       AEONQUILL_LOG_DIR: paths.logs,
+      AEONQUILL_DEFAULT_OUTPUT_DIR: paths.output,
       AEONQUILL_CONFIG: paths.config,
       AEONQUILL_PARENT_CONTROL: 'stdio',
     },
@@ -209,8 +222,15 @@ try {
       label: 'T2V',
       request: {
         mode: 'text-to-video',
-        prompt: 'A calm black ink ripple on white rice paper, locked camera, subtle natural motion, clean composition.',
-        aspectRatio: '16:9', duration: 5, preset: 'fast', seed: 420401, audio: true,
+        prompt: 'A calm black ink ripple spreads across white rice paper. Soft morning light reveals the paper fibers while one cobalt-blue brushstroke slowly appears beside the inkstone. The composition remains clean and elegant.',
+        scenario: 'cinematic',
+        aspectRatio: '16:9', duration: 5, preset: 'delivery720', seed: 420501, audio: true,
+        director: {
+          camera: 'push-in', motion: 'subtle', continuity: true,
+          soundscape: 'Quiet studio air, soft brush contact, and a delicate synchronized ink ripple.',
+          music: 'Sparse guqin notes at low volume.',
+          constraints: 'No text, no watermark, no duplicate brush, and no abrupt morphing.',
+        },
       },
     },
     {
@@ -218,7 +238,8 @@ try {
       request: {
         mode: 'image-to-video',
         prompt: 'Preserve the character identity and composition. Add a gentle breathing motion and a slow breeze, locked camera.',
-        aspectRatio: '16:9', duration: 5, preset: 'fast', seed: 420402, audio: false,
+        scenario: 'illustration',
+        aspectRatio: '16:9', duration: 5, preset: 'fast', seed: 420502, audio: false,
         sourceImageDataUrl: frameDataUrl,
       },
     },
@@ -228,7 +249,7 @@ try {
     const startedAt = Date.now()
     const created = await requestJson(baseUrl, cookie, '/api/jobs/video', {
       method: 'POST',
-      headers: { 'idempotency-key': `rel004-${testCase.label.toLowerCase()}-001` },
+      headers: { 'idempotency-key': `dev004-${testCase.label.toLowerCase()}-001` },
       body: JSON.stringify(testCase.request),
     }, 202)
     const completed = await waitForVideoJob(baseUrl, cookie, created.job.id, testCase.label)
@@ -236,6 +257,10 @@ try {
     assert.match(completed.outputUrl, /^\/api\/assets\//u)
     assert.equal(completed.output.subfolder, 'AEONQUILL')
     assert.match(completed.output.filename, new RegExp(`^${testCase.label}_`, 'u'))
+    assert.equal(completed.workflowMetadata.modelProfile, 'fp8Scaled4060')
+    assert.equal(completed.workflowMetadata.promptAgent.version, 'aeonquill-h3-context-lite-v1')
+    assert.equal(completed.delivery.status, 'copied')
+    assert.equal(completed.delivery.directoryLabel.endsWith('output'), true)
     assert.doesNotMatch(JSON.stringify(completed), /MiaoHui|[A-Z]:\\|\\Users\\|inputPath|outputPath|"pid"/iu)
     const response = await fetch(`${baseUrl}${completed.outputUrl}`, { headers: { cookie } })
     assert.equal(response.status, 200)
@@ -244,11 +269,29 @@ try {
     const outputPath = join(runRoot, `${testCase.label}.mp4`)
     await writeFile(outputPath, bytes)
     const media = await probeVideo(runtime, outputPath)
-    const stream = media.streams?.[0]
+    const stream = media.streams?.find((entry) => entry.codec_type === 'video')
+    const audioStream = media.streams?.find((entry) => entry.codec_type === 'audio')
     assert.equal(stream?.codec_name, 'h264')
-    assert.equal(stream?.width, 608)
-    assert.equal(stream?.height, 352)
+    assert.equal(stream?.width, testCase.request.preset === 'delivery720' ? 1280 : 608)
+    assert.equal(stream?.height, testCase.request.preset === 'delivery720' ? 720 : 352)
+    assert.equal(Boolean(audioStream), testCase.request.audio)
     assert.ok(Number(media.format?.duration) >= 5 && Number(media.format?.duration) < 6)
+    await verifySeekable(runtime, outputPath)
+    const deliveredBytes = await readFile(join(paths.output, completed.delivery.filename))
+    assert.equal(createHash('sha256').update(deliveredBytes).digest('hex'), completed.outputVersion.assetId)
+    let native
+    if (testCase.request.preset === 'delivery720') {
+      assert.equal(completed.intermediateOutputs?.length, 1)
+      const nativeResponse = await fetch(`${baseUrl}${completed.intermediateOutputs[0].outputUrl}`, { headers: { cookie } })
+      assert.equal(nativeResponse.status, 200)
+      const nativePath = join(runRoot, `${testCase.label}-native.mp4`)
+      await writeFile(nativePath, Buffer.from(await nativeResponse.arrayBuffer()))
+      native = await probeVideo(runtime, nativePath)
+      const nativeStream = native.streams?.find((entry) => entry.codec_type === 'video')
+      assert.equal(nativeStream?.width, 608)
+      assert.equal(nativeStream?.height, 352)
+      await verifySeekable(runtime, nativePath)
+    }
     results.push({
       mode: testCase.request.mode,
       audioRequested: testCase.request.audio,
@@ -259,6 +302,13 @@ try {
       width: stream.width,
       height: stream.height,
       duration: Number(media.format.duration),
+      audio: Boolean(audioStream),
+      seekable: true,
+      nativePreserved: Boolean(native),
+      deliveredToDefaultOutput: true,
+      preset: testCase.request.preset,
+      steps: completed.workflowMetadata.steps,
+      scenario: completed.workflowMetadata.promptAgent.resolvedScenario,
       workflowVersion: completed.workflowVersion,
     })
   }
@@ -271,7 +321,8 @@ try {
     schemaVersion: 1,
     status: 'passed',
     packageId: runtime.packageId,
-    sidecarSelfContainedNode: true,
+    sourceMode,
+    sidecarSelfContainedNode: !sourceMode,
     systemPythonRequired: false,
     gpuClass: 'RTX 4060 Laptop 8GB',
     results,

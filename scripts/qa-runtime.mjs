@@ -71,6 +71,7 @@ export async function startIsolatedBridge(label = 'qa') {
   const bridgeEnvironment = {
     ...process.env,
     MIAOHUI_RUNTIME_DIR: runtimeDirectory,
+    AEONQUILL_DEFAULT_OUTPUT_DIR: join(runtimeDirectory, 'output'),
     MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
     MIAOHUI_PORT: String(port),
     MIAOHUI_HOST: '127.0.0.1',

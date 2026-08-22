@@ -52,11 +52,16 @@ import {
   VIDEO_DIMENSIONS,
   VIDEO_DURATIONS,
   VIDEO_PRESETS,
+  REQUIRED_MODEL_FILES,
   WORKFLOW_VERSION,
   validateBundledWorkflowTemplates,
   workflowCatalog,
 } from './workflow-builder.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
+import {
+  compileH3Prompt,
+  H3_SCENARIO_PRESETS,
+} from '../src/lib/video/h3PromptAgent.mjs'
 
 const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
@@ -254,6 +259,7 @@ function validateVideoRequest(body) {
   const duration = Number(body.duration || 5)
   const preset = body.preset || 'fast'
   const audio = body.audio !== false
+  const scenario = body.scenario || 'auto'
   const seed = Number.isSafeInteger(Number(body.seed))
     ? Math.max(0, Math.min(Number(body.seed), Number.MAX_SAFE_INTEGER))
     : randomInt(1, 2_147_483_647)
@@ -273,23 +279,41 @@ function validateVideoRequest(body) {
   if (!VIDEO_PRESETS[preset]) {
     throw Object.assign(new Error('不支持的质量预设'), { status: 400 })
   }
+  if (!Object.hasOwn(H3_SCENARIO_PRESETS, scenario)) {
+    throw Object.assign(new Error('不支持的 H3 场景预设'), { status: 400 })
+  }
+
+  const director = body.director && typeof body.director === 'object' ? {
+    camera: String(body.director.camera || 'locked').slice(0, 32),
+    motion: String(body.director.motion || 'natural').slice(0, 32),
+    continuity: body.director.continuity !== false,
+    soundscape: String(body.director.soundscape || '').slice(0, 800),
+    music: String(body.director.music || '').slice(0, 800),
+    constraints: String(body.director.constraints || '').slice(0, 800),
+  } : undefined
+  compileH3Prompt({
+    mode,
+    sourcePrompt: prompt,
+    scenario,
+    aspectRatio,
+    duration,
+    frameCount: VIDEO_DURATIONS[duration],
+    audio,
+    hasLastFrame: mode === 'image-to-video' && Boolean(body.lastFrameImageDataUrl),
+    director,
+  })
 
   return {
     mode,
     prompt,
+    scenario,
     aspectRatio,
     duration,
     preset,
     seed,
     audio,
     sourceElementId: typeof body.sourceElementId === 'string' ? body.sourceElementId : undefined,
-    director: body.director && typeof body.director === 'object' ? {
-      camera: String(body.director.camera || 'locked').slice(0, 32),
-      motion: String(body.director.motion || 'natural').slice(0, 32),
-      continuity: body.director.continuity !== false,
-      soundscape: String(body.director.soundscape || '').slice(0, 800),
-      constraints: String(body.director.constraints || '').slice(0, 800),
-    } : undefined,
+    director,
     hasLastFrame: mode === 'image-to-video' && Boolean(body.lastFrameImageDataUrl),
   }
 }
@@ -359,14 +383,7 @@ async function inspectRuntime(force = false) {
   try {
     const [status, objectInfo] = await Promise.all([comfy.runtimeStatus(), comfy.objectInfo()])
     const missingNodes = REQUIRED_NODE_TYPES.filter((type) => !objectInfo[type])
-    const requiredModels = [
-      ['UNETLoader', 'unet_name', 'minimax_h3_fl2va_pruned_fp8_scaled.safetensors'],
-      ['CLIPLoader', 'clip_name', 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors'],
-      ['VAELoader', 'vae_name', 'minimax_h3_video_vae_fp16.safetensors'],
-      ['VAELoader', 'vae_name', 'minimax_h3_audio_vae_fp32.safetensors'],
-      ['MiniMaxH3TurboLoRA', 'lora_name', 'minimax_h3_turbo_v4_step600_ema.safetensors'],
-    ]
-    const missingModels = requiredModels
+    const missingModels = REQUIRED_MODEL_FILES
       .filter(([nodeType, inputName, filename]) => {
         const options = objectInfo[nodeType]?.input?.required?.[inputName]?.[0]
         return !Array.isArray(options) || !options.includes(filename)
@@ -520,6 +537,14 @@ async function describeOutputVersion(job, filePath, mimeType) {
       kind: job.kind,
       tool: job.tool,
       workflowVersion: job.workflowVersion,
+      ...(job.kind === 'video' ? {
+        preset: job.request?.preset,
+        scenario: job.workflowMetadata?.promptAgent?.resolvedScenario || job.request?.scenario,
+        modelProfile: job.workflowMetadata?.modelProfile,
+        modelPrecision: job.workflowMetadata?.modelPrecision,
+        promptAgentVersion: job.workflowMetadata?.promptAgent?.version,
+        samplingSteps: job.workflowMetadata?.steps,
+      } : {}),
       createdAt: Date.now(),
     },
   }
@@ -1142,6 +1167,7 @@ async function runVideoJob(jobId, { signal }) {
     createdOutputPaths.add(sourceAssetPath)
     let assetFilename = sourceAssetFilename
     let finalAssetPath = sourceAssetPath
+    const intermediateOutputs = []
     if (metadata.delivery === '720p-lanczos') {
       assetFilename = `${job.id}-720p.mp4`
       finalAssetPath = join(assetDirectory, assetFilename)
@@ -1151,9 +1177,15 @@ async function runVideoJob(jobId, { signal }) {
       await createDeliveryVideo(sourceAssetPath, deliveryTemporaryPath, metadata.deliveryDimensions, signal)
       await rename(deliveryTemporaryPath, finalAssetPath)
       createdOutputPaths.add(finalAssetPath)
-      await unlink(sourceAssetPath).catch(() => {})
-      createdOutputPaths.delete(sourceAssetPath)
+      intermediateOutputs.push({
+        role: 'native-source',
+        label: 'H3 原生生成片',
+        filename: sourceAssetFilename,
+        outputUrl: `/api/assets/${encodeURIComponent(sourceAssetFilename)}`,
+        dimensions: metadata.dimensions,
+      })
       await store.log(jobId, 'success', `已生成 ${metadata.deliveryDimensions.width}×${metadata.deliveryDimensions.height} 交付文件`)
+      await store.log(jobId, 'info', '已保留 H3 原生生成片，便于后续超分或重新编码')
     }
     await store.log(jobId, 'success', `视频已保存：${output.subfolder ? `${output.subfolder}/` : ''}${output.filename}`)
     const outputVersion = await describeOutputVersion(job, finalAssetPath, 'video/mp4')
@@ -1170,6 +1202,7 @@ async function runVideoJob(jobId, { signal }) {
         type: output.type || 'output',
       },
       outputVersion,
+      intermediateOutputs,
       delivery,
       completedAt: Date.now(),
       temporaryOutputPath: undefined,
@@ -1700,8 +1733,13 @@ const server = createServer(async (request, response) => {
         )
       }
       if (patch.outputDirectory !== undefined) {
-        if (patch.outputDirectory === null) delete localRuntimeConfig.outputDirectory
-        else localRuntimeConfig.outputDirectory = patch.outputDirectory
+        if (patch.outputDirectory === null) {
+          localRuntimeConfig.outputDirectory = localRuntimeConfig.defaultOutputDirectory
+          localRuntimeConfig.outputDirectorySource = 'application'
+        } else {
+          localRuntimeConfig.outputDirectory = patch.outputDirectory
+          localRuntimeConfig.outputDirectorySource = 'custom'
+        }
       }
       runtimeCache = null
       const diagnostics = await inspectRuntimeDiagnostics(true, config)
@@ -1716,7 +1754,7 @@ const server = createServer(async (request, response) => {
           ? '配置已安全保存；退出并重新打开 AEONQUILL 后生效。'
           : patch.outputDirectory !== undefined
           ? patch.outputDirectory === null
-            ? '已恢复内部资产保存；后续任务不再写入额外交付副本。'
+            ? '已恢复软件 output 默认目录；后续交付文件会继续自动写入。'
             : '输出副本目录已保存并立即生效。'
           : '运行策略已保存并立即生效。',
         diagnostics,
@@ -1761,6 +1799,27 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && pathname === '/api/workflows') {
       return sendJson(response, 200, workflowCatalog())
+    }
+    if (request.method === 'POST' && pathname === '/api/video/prompt/compile') {
+      const body = await readJsonBody(request, 16 * 1024)
+      const normalized = validateVideoRequest({
+        ...body,
+        prompt: body.prompt || body.sourcePrompt,
+        preset: body.preset || 'delivery720',
+      })
+      return sendJson(response, 200, {
+        plan: compileH3Prompt({
+          mode: normalized.mode,
+          sourcePrompt: normalized.prompt,
+          scenario: normalized.scenario,
+          aspectRatio: normalized.aspectRatio,
+          duration: normalized.duration,
+          frameCount: VIDEO_DURATIONS[normalized.duration],
+          audio: normalized.audio,
+          hasLastFrame: normalized.hasLastFrame,
+          director: normalized.director,
+        }),
+      })
     }
     if (request.method === 'GET' && pathname === '/api/image-tools') {
       return sendJson(response, 200, await imageProcessor.probe(url.searchParams.get('refresh') === '1'))

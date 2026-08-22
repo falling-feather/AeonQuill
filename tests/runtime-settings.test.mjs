@@ -11,7 +11,7 @@ import {
   safePathLabel,
   validateRuntimeSettingsPayload,
 } from '../server/runtime-settings.mjs'
-import { resolveDataDirectory } from '../server/runtime-paths.mjs'
+import { resolveDataDirectory, resolveDefaultOutputDirectory } from '../server/runtime-paths.mjs'
 
 async function withTempDirectory(run) {
   const root = await mkdtemp(join(tmpdir(), 'aeonquill-runtime-settings-'))
@@ -154,6 +154,22 @@ test('data directory keeps legacy durable state visible until an explicit migrat
     await mkdir(configuredDirectory, { recursive: true })
     await writeFile(join(configuredDirectory, 'jobs.json'), '[]\n', 'utf8')
     assert.equal(resolveDataDirectory({ configuredDirectory, runtimeRoot }), resolve(configuredDirectory))
+  })
+})
+
+test('default output directory follows the application root unless the desktop shell overrides it', async () => {
+  await withTempDirectory(async (root) => {
+    assert.equal(
+      resolveDefaultOutputDirectory({ applicationRoot: root, configuredDirectory: '' }),
+      resolve(root, 'output'),
+    )
+    assert.equal(
+      resolveDefaultOutputDirectory({
+        applicationRoot: root,
+        configuredDirectory: join(root, 'selected-output'),
+      }),
+      resolve(root, 'selected-output'),
+    )
   })
 })
 

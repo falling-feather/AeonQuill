@@ -46,6 +46,15 @@ export function resolveLogDirectory() {
   )
 }
 
+export function resolveDefaultOutputDirectory({
+  configuredDirectory = process.env.AEONQUILL_DEFAULT_OUTPUT_DIR,
+  applicationRoot = projectRoot,
+} = {}) {
+  return resolve(
+    configuredDirectory || join(applicationRoot, 'output'),
+  )
+}
+
 export const dataDirectory = resolveDataDirectory()
 export const usingLegacyDataDirectory = Boolean(
   (process.env.AEONQUILL_DATA_DIR || process.env.MIAOHUI_DATA_DIR)
@@ -53,3 +62,4 @@ export const usingLegacyDataDirectory = Boolean(
 )
 export const cacheDirectory = resolveCacheDirectory()
 export const logDirectory = resolveLogDirectory()
+export const defaultOutputDirectory = resolveDefaultOutputDirectory()

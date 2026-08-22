@@ -22,10 +22,16 @@ import type {
   CanvasElement,
   ProcessingJob,
   RuntimeStatus,
+  H3ScenarioId,
   VideoGenerationMode,
   VideoJobPhase,
   VideoJobRequest,
 } from '../types'
+import {
+  compileH3Prompt,
+  H3_PROMPT_AGENT_VERSION,
+  H3_SCENARIO_PRESETS,
+} from '../lib/video/h3PromptAgent.mjs'
 
 type StoredVideoRequest = Extract<
   NonNullable<ProcessingJob['request']>,
@@ -71,6 +77,12 @@ const motionLabels = {
   dynamic: '强烈',
 } as const
 
+const durationFrames: Record<VideoJobRequest['duration'], number> = {
+  5: 124,
+  10: 243,
+  15: 362,
+}
+
 const phaseGroups: Array<{ label: string; phases: VideoJobPhase[] }> = [
   { label: '准备', phases: ['queued', 'preparing'] },
   { label: '条件', phases: ['conditioning'] },
@@ -111,7 +123,7 @@ const pipelinePresets: Array<{
     label: '8GB · 720P 交付',
     native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
     delivery: { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' },
-    detail: '6 步生成 · FFmpeg Lanczos 交付',
+    detail: '8 步生成 · 保留原生片 · Lanczos 交付',
     minVram: '8 GB',
     risk: '中',
   },
@@ -150,33 +162,6 @@ function fileToDataUrl(file: File) {
   })
 }
 
-function compileDirectorPrompt(
-  prompt: string,
-  director: NonNullable<VideoJobRequest['director']>,
-  audio: boolean,
-) {
-  const camera = {
-    locked: 'locked-off camera, stable composition',
-    'push-in': 'slow cinematic push-in',
-    pan: 'smooth lateral pan',
-    orbit: 'controlled gentle orbit around the subject',
-    follow: 'smooth follow camera keeping the subject centered',
-  }[director.camera]
-  const motion = {
-    subtle: 'subtle motion with small displacement',
-    natural: 'natural medium motion with believable weight',
-    dynamic: 'dynamic fast motion with clear anticipation and follow-through',
-  }[director.motion]
-  const continuity = director.continuity
-    ? 'Preserve subject identity, clothing, scene geometry, lighting direction and visual style. No scene cut, no sudden morphing.'
-    : 'Allow creative scene evolution while retaining the main subject.'
-  const sound = audio
-    ? director.soundscape || 'natural synchronized ambience matching the visible action'
-    : 'No audio track.'
-  const constraints = director.constraints || 'No subtitles, no watermark, no extra limbs, no duplicate subjects.'
-  return `integrated_multimodal_description:\n${prompt.trim()}\nCamera: ${camera}. Motion: ${motion}.\nContinuity: ${continuity}\nVisual constraints: ${constraints}\noverall_soundscape: ${sound}`
-}
-
 export function VideoStudio({
   selectedImage,
   jobs,
@@ -197,13 +182,15 @@ export function VideoStudio({
   const [prompt, setPrompt] = useState(starterPrompts[selectedImage ? 'image-to-video' : 'text-to-video'])
   const [aspectRatio, setAspectRatio] = useState<VideoJobRequest['aspectRatio']>('16:9')
   const [duration, setDuration] = useState<VideoJobRequest['duration']>(5)
-  const [preset, setPreset] = useState<VideoJobRequest['preset']>('fast')
+  const [preset, setPreset] = useState<VideoJobRequest['preset']>('delivery720')
+  const [scenario, setScenario] = useState<H3ScenarioId>('auto')
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2_147_483_647))
   const [audio, setAudio] = useState(true)
   const [camera, setCamera] = useState<NonNullable<VideoJobRequest['director']>['camera']>('locked')
   const [motion, setMotion] = useState<NonNullable<VideoJobRequest['director']>['motion']>('natural')
   const [continuity, setContinuity] = useState(true)
   const [soundscape, setSoundscape] = useState('自然环境声与画面动作同步')
+  const [music, setMusic] = useState('')
   const [constraints, setConstraints] = useState('无字幕、无水印、无突然变形、无重复主体')
   const [lastFrame, setLastFrame] = useState<{ name: string; dataUrl: string }>()
   const [countdown, setCountdown] = useState<string | null>(null)
@@ -220,12 +207,8 @@ export function VideoStudio({
   useEffect(() => {
     if (!reuseRequest) return
     setMode(reuseRequest.mode)
-    setPrompt(
-      reuseRequest.prompt
-        .replace(/^integrated_multimodal_description:\s*/i, '')
-        .split('\nCamera:')[0]
-        .split('\noverall_soundscape:')[0],
-    )
+    setPrompt(reuseRequest.prompt)
+    setScenario(reuseRequest.scenario || 'auto')
     setAspectRatio(reuseRequest.aspectRatio)
     setDuration(reuseRequest.duration)
     setPreset(reuseRequest.preset)
@@ -236,6 +219,7 @@ export function VideoStudio({
       setMotion(reuseRequest.director.motion)
       setContinuity(reuseRequest.director.continuity)
       setSoundscape(reuseRequest.director.soundscape)
+      setMusic(reuseRequest.director.music || '')
       setConstraints(reuseRequest.director.constraints)
     }
   }, [reuseRequest])
@@ -257,10 +241,20 @@ export function VideoStudio({
   const lifecycle = runtime?.lifecycle
   const starting = lifecycle?.state === 'starting' || runtimeLoading
   const ready = Boolean(runtime?.connected && runtime?.ready)
-  const director = { camera, motion, continuity, soundscape, constraints }
-  const compiledPrompt = useMemo(
-    () => compileDirectorPrompt(prompt, director, audio),
-    [audio, camera, constraints, continuity, motion, prompt, soundscape],
+  const director = { camera, motion, continuity, soundscape, music, constraints }
+  const compiledPlan = useMemo(
+    () => compileH3Prompt({
+      mode,
+      sourcePrompt: prompt.trim().length >= 2 ? prompt : '请补充视频主体与动作描述',
+      scenario,
+      aspectRatio,
+      duration,
+      frameCount: durationFrames[duration],
+      audio,
+      hasLastFrame: mode === 'image-to-video' && Boolean(lastFrame),
+      director,
+    }),
+    [aspectRatio, audio, camera, constraints, continuity, duration, lastFrame, mode, motion, music, prompt, scenario, soundscape],
   )
   const selectedPreset = pipelinePresets.find((item) => item.id === preset) ?? pipelinePresets[0]
   const vramGb = (runtime?.vramTotal || 0) / 1024 ** 3
@@ -371,7 +365,22 @@ export function VideoStudio({
       ) : null}
 
       <section className="video-form-section director-section">
-        <div className="video-section-label"><span>导演控制</span><small>确定性提示词编译</small></div>
+        <div className="video-section-label"><span>导演控制</span><small>H3 智能提示词编排</small></div>
+        <div className="scenario-options" aria-label="H3 视频场景预设">
+          {(Object.values(H3_SCENARIO_PRESETS) as Array<(typeof H3_SCENARIO_PRESETS)[H3ScenarioId]>).map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={scenario === item.id ? 'is-active' : ''}
+              aria-pressed={scenario === item.id}
+              title={item.description}
+              onClick={() => setScenario(item.id)}
+            >
+              <strong>{item.label}</strong>
+              <small>{item.id === 'auto' ? `当前匹配：${H3_SCENARIO_PRESETS[compiledPlan.resolvedScenario].label}` : item.description}</small>
+            </button>
+          ))}
+        </div>
         <textarea value={prompt} maxLength={8000} rows={4} onChange={(event) => setPrompt(event.target.value)} placeholder="描述主体、场景与动作……" />
         <div className="director-control-row">
           <span>镜头运动</span>
@@ -391,8 +400,13 @@ export function VideoStudio({
           <i />
         </label>
         <label className="director-input"><span>声音氛围</span><input value={soundscape} disabled={!audio} onChange={(event) => setSoundscape(event.target.value)} /></label>
+        <label className="director-input"><span>非画内音乐</span><input value={music} disabled={!audio} placeholder="留空则采用场景默认配乐；人像模式默认无配乐" onChange={(event) => setMusic(event.target.value)} /></label>
         <label className="director-input"><span>画面约束</span><input value={constraints} onChange={(event) => setConstraints(event.target.value)} /></label>
-        <details className="compiled-prompt"><summary>已编译提示词（预览）</summary><pre>{compiledPrompt}</pre></details>
+        {compiledPlan.warnings.map((warning) => <p className="pipeline-warning" key={warning}><AlertTriangle size={13} />{warning}</p>)}
+        <details className="compiled-prompt">
+          <summary>已编译提示词（{H3_PROMPT_AGENT_VERSION} · {compiledPlan.mode}）</summary>
+          <pre>{compiledPlan.compiledPrompt}</pre>
+        </details>
       </section>
 
       <section className="video-form-section">
@@ -428,7 +442,7 @@ export function VideoStudio({
         <div className="preset-options pipeline-options">
           {pipelinePresets.map((item) => (
             <button type="button" key={item.id} className={preset === item.id ? 'is-active' : ''} aria-pressed={preset === item.id} onClick={() => setPreset(item.id)}>
-              <span><strong>{item.label}</strong>{item.id === 'fast' ? <em>推荐</em> : null}</span>
+              <span><strong>{item.label}</strong>{item.id === compiledPlan.recommendedPreset ? <em>场景推荐</em> : null}</span>
               <small>{item.detail}</small>
               <dl>
                 <div><dt>生成</dt><dd>{item.native[aspectRatio]}</dd></div>
@@ -456,7 +470,8 @@ export function VideoStudio({
         disabled={!canSubmit || submitting}
         onClick={() => onSubmit({
           mode,
-          prompt: compiledPrompt,
+          prompt,
+          scenario,
           aspectRatio,
           duration,
           preset,

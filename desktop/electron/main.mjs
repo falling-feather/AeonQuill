@@ -98,12 +98,20 @@ function runtimePaths() {
   const dataDirectory = resolve(process.env.AEONQUILL_DATA_DIR || join(appDataRoot, 'data'))
   const cacheDirectory = resolve(process.env.AEONQUILL_CACHE_DIR || join(appDataRoot, 'cache'))
   const logDirectory = resolve(process.env.AEONQUILL_LOG_DIR || join(appDataRoot, 'logs'))
+  const defaultOutputDirectory = resolve(
+    process.env.AEONQUILL_DEFAULT_OUTPUT_DIR
+      || (userDataSelection.layout === 'portable-sibling-user-data'
+        ? join(dirname(appDataRoot), 'output')
+        : app.isPackaged
+        ? join(appDataRoot, 'output')
+        : join(appRoot, 'output')),
+  )
   const configPath = resolve(
     process.env.AEONQUILL_CONFIG
       || process.env.MIAOHUI_CONFIG
       || join(appDataRoot, 'config', 'local.json'),
   )
-  return { appRoot, appDataRoot, runtimeDirectory, dataDirectory, cacheDirectory, logDirectory, configPath }
+  return { appRoot, appDataRoot, runtimeDirectory, dataDirectory, cacheDirectory, logDirectory, defaultOutputDirectory, configPath }
 }
 
 function createBridgeEnvironment({
@@ -112,6 +120,7 @@ function createBridgeEnvironment({
   dataDirectory,
   cacheDirectory,
   logDirectory,
+  defaultOutputDirectory,
   configPath,
 }) {
   return createRestrictedChildEnvironment({
@@ -121,6 +130,7 @@ function createBridgeEnvironment({
     AEONQUILL_DATA_DIR: dataDirectory,
     AEONQUILL_CACHE_DIR: cacheDirectory,
     AEONQUILL_LOG_DIR: logDirectory,
+    AEONQUILL_DEFAULT_OUTPUT_DIR: defaultOutputDirectory,
     AEONQUILL_CONFIG: configPath,
     MIAOHUI_PORT: port,
     MIAOHUI_HOST: LOOPBACK_HOST,
@@ -159,6 +169,7 @@ async function startBridge() {
     dataDirectory,
     cacheDirectory,
     logDirectory,
+    defaultOutputDirectory,
     configPath,
   } = runtimePaths()
   await Promise.all([
@@ -166,6 +177,7 @@ async function startBridge() {
     mkdir(dataDirectory, { recursive: true }),
     mkdir(cacheDirectory, { recursive: true }),
     mkdir(logDirectory, { recursive: true }),
+    mkdir(defaultOutputDirectory, { recursive: true }),
     mkdir(dirname(configPath), { recursive: true }),
   ])
   bridgePort = await findAvailableLoopbackPort()
@@ -180,6 +192,7 @@ async function startBridge() {
       dataDirectory,
       cacheDirectory,
       logDirectory,
+      defaultOutputDirectory,
       configPath,
     }),
     serviceName: 'AEONQUILL Local Bridge',

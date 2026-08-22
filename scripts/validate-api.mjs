@@ -104,6 +104,33 @@ try {
   const workflows = await requestJson(bridge.baseUrl, '/api/workflows')
   assert.deepEqual(workflows.modes.map(({ id }) => id), ['text-to-video', 'image-to-video'])
   assert.ok(workflows.presets.some(({ id }) => id === 'delivery720'))
+  assert.equal(workflows.registry.defaultModelProfile, 'fp8Scaled4060')
+  assert.equal(workflows.promptAgent.version, 'aeonquill-h3-context-lite-v1')
+
+  const promptPlan = await requestJson(bridge.baseUrl, '/api/video/prompt/compile', {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: 'image-to-video',
+      prompt: '保持商品瓶身、标签和材质，镜头缓慢推进。',
+      scenario: 'product',
+      aspectRatio: '16:9',
+      duration: 5,
+      audio: true,
+      director: {
+        camera: 'push-in',
+        motion: 'subtle',
+        continuity: true,
+        soundscape: '安静摄影棚与轻微瓶身触碰声',
+        music: '',
+        constraints: '不改变品牌标签',
+      },
+    }),
+  })
+  assert.equal(promptPlan.plan.mode, 'I2VA')
+  assert.equal(promptPlan.plan.resolvedScenario, 'product')
+  assert.match(promptPlan.plan.compiledPrompt, /integrated_multimodal_description:/)
+  assert.match(promptPlan.plan.compiledPrompt, /overall_soundscape:/)
+  assert.match(promptPlan.plan.compiledPrompt, /non_diegetic_music:/)
 
   const imageTools = await requestJson(bridge.baseUrl, '/api/image-tools?refresh=1')
   const pixelate = imageTools.operations.find(({ id }) => id === 'pixelate')
@@ -114,6 +141,10 @@ try {
   assert.equal(diagnostics.product.service, 'aeonquill-local-runtime')
   assert.equal(diagnostics.storage.dataWritable, true)
   assert.equal(diagnostics.storage.configWritable, true)
+  assert.equal(diagnostics.storage.outputDirectoryWritable, true)
+  assert.equal(diagnostics.configuration.outputDirectoryConfigured, false)
+  assert.equal(diagnostics.configuration.outputDirectorySource, 'application')
+  assert.match(diagnostics.configuration.outputDirectoryLabel, /output$/i)
   assert.ok(diagnostics.capabilities.image.available >= 1)
   const diagnosticText = JSON.stringify(diagnostics)
   assert.doesNotMatch(diagnosticText, /[A-Z]:\\\\/u)

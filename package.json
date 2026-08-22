@@ -1,7 +1,7 @@
 {
   "name": "aeonquill",
   "private": true,
-  "version": "0.4.5",
+  "version": "0.5.0",
   "type": "module",
   "main": "desktop/electron/main.mjs",
   "scripts": {

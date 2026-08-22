@@ -296,7 +296,7 @@ export function RuntimeSettingsDialog({
 
             <div className="aq-runtime-settings__fields">
               <div className="aq-runtime-settings__output-field">
-                <span>输出副本目录</span>
+                <span>成片输出目录</span>
                 <div>
                   <input
                     value={outputDirectory}
@@ -305,7 +305,7 @@ export function RuntimeSettingsDialog({
                       setOutputPickerError(undefined)
                     }}
                     placeholder={diagnostics?.configuration.outputDirectoryLabel ?? '例如 D:\\AEONQUILL-Outputs'}
-                    aria-label="输出副本目录"
+                    aria-label="成片输出目录"
                     autoComplete="off"
                     spellCheck={false}
                     disabled={disabled}
@@ -330,8 +330,8 @@ export function RuntimeSettingsDialog({
                 <small>
                   {outputPickerError
                     ?? (diagnostics?.configuration.outputDirectoryConfigured
-                      ? `当前：${diagnostics.configuration.outputDirectoryLabel ?? '已配置目录'}；新任务完成后会复制交付副本。`
-                      : '未配置时只保存内部不可变资产；选择后不会改变项目引用。')}
+                      ? `自定义：${diagnostics.configuration.outputDirectoryLabel ?? '已配置目录'}；新任务完成后会复制交付成片。`
+                      : `软件默认：${diagnostics?.configuration.outputDirectoryLabel ?? 'output 文件夹'}；未手工选择时自动写入。`)}
                 </small>
                 {diagnostics?.configuration.outputDirectoryConfigured ? (
                   <button
@@ -340,7 +340,7 @@ export function RuntimeSettingsDialog({
                     onClick={() => onConfigure({ mode: 'manual', outputDirectory: null })}
                     disabled={disabled}
                   >
-                    恢复仅内部保存
+                    恢复软件默认 output
                   </button>
                 ) : null}
               </div>

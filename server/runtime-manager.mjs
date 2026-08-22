@@ -2,7 +2,13 @@ import { openSync } from 'node:fs'
 import { mkdir, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { cacheDirectory, dataDirectory, logDirectory, runtimeDirectory } from './runtime-paths.mjs'
+import {
+  cacheDirectory,
+  dataDirectory,
+  defaultOutputDirectory,
+  logDirectory,
+  runtimeDirectory,
+} from './runtime-paths.mjs'
 import { probeOfflineRuntimePackage } from './offline-runtime.mjs'
 import { normalizeLoopbackComfyUrl, readLocalConfigFile } from './runtime-settings.mjs'
 import { createRestrictedChildEnvironment, redactSensitiveText } from './security.mjs'
@@ -75,6 +81,11 @@ export async function loadLocalRuntimeConfig() {
     }
   }
   const imageTools = config.imageTools && typeof config.imageTools === 'object' ? config.imageTools : {}
+  const configuredOutputDirectory = process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory
+  const outputDirectory = typeof configuredOutputDirectory === 'string' && configuredOutputDirectory
+    ? configuredOutputDirectory
+    : defaultOutputDirectory
+  if (!configuredOutputDirectory) await mkdir(outputDirectory, { recursive: true })
   return {
     comfyUrl,
     comfyRoot: typeof (process.env.AEONQUILL_COMFY_ROOT || process.env.COMFY_ROOT || config.comfyRoot || offlineRuntime?.comfyRoot) === 'string'
@@ -83,9 +94,9 @@ export async function loadLocalRuntimeConfig() {
     pythonPath: typeof (process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath) === 'string'
       ? process.env.AEONQUILL_COMFY_PYTHON || process.env.COMFY_PYTHON || config.pythonPath || offlineRuntime?.pythonPath
       : undefined,
-    outputDirectory: typeof (process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory) === 'string'
-      ? process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory
-      : undefined,
+    outputDirectory,
+    defaultOutputDirectory,
+    outputDirectorySource: configuredOutputDirectory ? 'custom' : 'application',
     bridgePort: Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || config.bridgePort || 8787),
     allowedOrigins: [
       ...(Array.isArray(config.allowedOrigins) ? config.allowedOrigins : []),

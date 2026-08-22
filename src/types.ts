@@ -199,6 +199,7 @@ export type StoredImageJobRequest = Omit<ImageJobRequest, 'sourceImageDataUrl' |
 }
 
 export type VideoGenerationMode = 'text-to-video' | 'image-to-video'
+export type H3ScenarioId = 'auto' | 'cinematic' | 'shortDrama' | 'product' | 'portrait' | 'illustration'
 
 export type VideoJobPhase =
   | 'queued'
@@ -270,6 +271,7 @@ export type ProcessingJobOutputVersion = {
 export type VideoJobRequest = {
   mode: VideoGenerationMode
   prompt: string
+  scenario?: H3ScenarioId
   aspectRatio: '16:9' | '9:16' | '1:1'
   duration: 5 | 10 | 15
   preset: 'fast' | 'balanced' | 'delivery720' | 'nativeHigh'
@@ -283,6 +285,7 @@ export type VideoJobRequest = {
     motion: 'subtle' | 'natural' | 'dynamic'
     continuity: boolean
     soundscape: string
+    music?: string
     constraints: string
   }
 }
@@ -311,6 +314,19 @@ export type ProcessingJob = {
         steps: number
         lowVram: boolean
         audio: boolean
+        modelProfile?: string
+        modelPrecision?: string
+        delivery?: string
+        deliveryDimensions?: { width: number; height: number }
+        preserveNative?: boolean
+        promptAgent?: {
+          version: string
+          mode: 'T2VA' | 'I2VA' | 'FL2VA'
+          requestedScenario: H3ScenarioId
+          resolvedScenario: Exclude<H3ScenarioId, 'auto'>
+          effectiveDurationSeconds: number
+          warnings: string[]
+        }
       }
     | {
         version: string
@@ -326,6 +342,13 @@ export type ProcessingJob = {
   sampleStep?: number
   sampleSteps?: number
   outputUrl?: string
+  intermediateOutputs?: Array<{
+    role: 'native-source'
+    label: string
+    filename: string
+    outputUrl: string
+    dimensions: { width: number; height: number }
+  }>
   maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
   delivery?: {
@@ -427,6 +450,7 @@ export type RuntimeDiagnostics = {
     rootLabel?: string
     pythonLabel?: string
     outputDirectoryConfigured: boolean
+    outputDirectorySource: 'custom' | 'application'
     outputDirectoryLabel?: string
     offlineRuntimePackageId: string | null
     comfyUrl: string

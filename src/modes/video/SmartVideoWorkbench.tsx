@@ -1019,6 +1019,13 @@ export function SmartVideoWorkbench({
                                     : job.delivery.message ?? '输出副本写入失败，内部资产仍可用'}
                                 </p>
                               ) : null}
+                              {job.intermediateOutputs?.map((output) => (
+                                <p className="aq-video-job-delivery" key={output.filename}>
+                                  <a href={output.outputUrl} target="_blank" rel="noreferrer">
+                                    打开{output.label} · {output.dimensions.width}×{output.dimensions.height}
+                                  </a>
+                                </p>
+                              ))}
                               <div className="aq-video-job-actions">
                                 {['queued', 'running'].includes(job.status) ? (
                                   <button type="button" onClick={() => void cancelJob(item.id, job.id)} disabled={actionBusy !== null}>

@@ -3489,6 +3489,53 @@ button.video-frame-card {
   min-height: 78px;
 }
 
+.scenario-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.scenario-options > button {
+  min-width: 0;
+  min-height: 47px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid #e0e2e7;
+  border-radius: 7px;
+  color: #777b84;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scenario-options > button strong {
+  color: #4c4f57;
+  font-size: 8px;
+}
+
+.scenario-options > button small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #969aa3;
+  font-size: 7px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.scenario-options > button.is-active {
+  border-color: #aaa4f5;
+  background: #f8f7ff;
+  box-shadow: 0 0 0 1px rgba(79, 70, 245, 0.08);
+}
+
+.scenario-options > button.is-active strong {
+  color: #4238df;
+}
+
 .director-control-row {
   display: grid;
   gap: 5px;

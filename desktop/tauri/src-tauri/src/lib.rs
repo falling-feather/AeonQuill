@@ -433,6 +433,7 @@ fn configured_child_environment(
     data_directory: &Path,
     cache_directory: &Path,
     log_directory: &Path,
+    default_output_directory: &Path,
     config_path: &Path,
     port: u16,
 ) -> HashMap<OsString, OsString> {
@@ -482,6 +483,10 @@ fn configured_child_environment(
         cache_directory.as_os_str().into(),
     );
     environment.insert("AEONQUILL_LOG_DIR".into(), log_directory.as_os_str().into());
+    environment.insert(
+        "AEONQUILL_DEFAULT_OUTPUT_DIR".into(),
+        default_output_directory.as_os_str().into(),
+    );
     environment.insert("AEONQUILL_CONFIG".into(), config_path.as_os_str().into());
     environment.insert("AEONQUILL_PARENT_CONTROL".into(), "stdio".into());
 
@@ -501,10 +506,22 @@ fn setup_desktop(
     app: &mut App,
     runtime: &Arc<DesktopRuntime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let default_data_directory = match portable_data_directory()? {
+    let portable_data = portable_data_directory()?;
+    let default_data_directory = match portable_data.clone() {
         Some(directory) => directory,
         None => app.path().app_local_data_dir()?,
     };
+    let default_output_directory = configured_path(
+        "AEONQUILL_DEFAULT_OUTPUT_DIR",
+        None,
+        match portable_data {
+            Some(directory) => directory
+                .parent()
+                .ok_or("AEONQUILL portable user data directory has no installation root")?
+                .join("output"),
+            None => default_data_directory.join("output"),
+        },
+    );
     let runtime_directory = configured_path(
         "AEONQUILL_RUNTIME_DIR",
         Some("MIAOHUI_RUNTIME_DIR"),
@@ -536,6 +553,7 @@ fn setup_desktop(
         &data_directory,
         &cache_directory,
         &log_directory,
+        &default_output_directory,
         &webview_data_directory,
     ] {
         fs::create_dir_all(directory)?;
@@ -570,6 +588,7 @@ fn setup_desktop(
         &data_directory,
         &cache_directory,
         &log_directory,
+        &default_output_directory,
         &config_path,
         port,
     );

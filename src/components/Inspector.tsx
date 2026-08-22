@@ -394,6 +394,16 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
                     <span>{job.workflowMetadata.steps} 步</span>
                     <span>{Math.round(job.workflowMetadata.frames / job.workflowMetadata.fps)}s</span>
                     <span>{job.workflowMetadata.audio ? '音视频' : '静音'}</span>
+                    {job.workflowMetadata.promptAgent ? <span>{job.workflowMetadata.promptAgent.resolvedScenario}</span> : null}
+                  </div>
+                ) : null}
+                {job.intermediateOutputs?.length ? (
+                  <div className="job-metadata">
+                    {job.intermediateOutputs.map((item) => (
+                      <a href={item.outputUrl} target="_blank" rel="noreferrer" key={item.filename}>
+                        {item.label} · {item.dimensions.width}×{item.dimensions.height}
+                      </a>
+                    ))}
                   </div>
                 ) : null}
                 {job.kind === 'image' && isImageJobOutput(job.output) ? (

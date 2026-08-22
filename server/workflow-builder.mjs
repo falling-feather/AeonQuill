@@ -1,5 +1,19 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import {
+  DEFAULT_VIDEO_MODEL_PROFILE,
+  VIDEO_DELIVERY_DIMENSIONS_720P,
+  VIDEO_MODEL_PROFILES,
+  VIDEO_NATIVE_DIMENSIONS,
+  VIDEO_PRESETS,
+  VIDEO_WORKFLOW_REGISTRY_VERSION,
+  videoModelProfile,
+  videoWorkflowRegistryCatalog,
+} from './video-workflow-registry.mjs'
+import {
+  compileH3Prompt,
+  h3PromptAgentCatalog,
+} from '../src/lib/video/h3PromptAgent.mjs'
 
 const workflowDirectory = fileURLToPath(new URL('./workflows/', import.meta.url))
 
@@ -8,76 +22,9 @@ const WORKFLOW_FILES = {
   'image-to-video': 'minimax-h3-i2v.json',
 }
 
-export const WORKFLOW_VERSION = 'h3-turbo-v2'
-
-const NATIVE_DIMENSIONS = {
-  standard: {
-    '16:9': { width: 608, height: 352 },
-    '9:16': { width: 352, height: 608 },
-    '1:1': { width: 448, height: 448 },
-  },
-  high: {
-    '16:9': { width: 736, height: 416 },
-    '9:16': { width: 416, height: 736 },
-    '1:1': { width: 544, height: 544 },
-  },
-}
-
-const DELIVERY_DIMENSIONS_720P = {
-  '16:9': { width: 1280, height: 720 },
-  '9:16': { width: 720, height: 1280 },
-  '1:1': { width: 720, height: 720 },
-}
-
-export const VIDEO_DIMENSIONS = NATIVE_DIMENSIONS.standard
-
-export const VIDEO_PRESETS = {
-  fast: {
-    id: 'fast',
-    label: '快速预览',
-    description: '4 步采样与低显存合并，适合 8GB 显卡先看动作。',
-    steps: 4,
-    lowVram: true,
-  },
-  balanced: {
-    id: 'balanced',
-    label: '8GB 细节',
-    description: '6 步采样与低显存合并，改善快速运动拖影并保持 8GB 兼容。',
-    steps: 6,
-    lowVram: true,
-    nativeScale: 'standard',
-    delivery: 'native',
-    minVramGb: 8,
-    validation: '本机验证边界：608×352、4 步；6 步档位已通过契约检查，需继续积累实测。',
-  },
-  delivery720: {
-    id: 'delivery720',
-    label: '8GB · 720P 交付',
-    description: '6 步低显存生成，再由 FFmpeg Lanczos 放大到 720P；提升交付尺寸但不等于原生 720P 细节。',
-    steps: 6,
-    lowVram: true,
-    nativeScale: 'standard',
-    delivery: '720p-lanczos',
-    minVramGb: 8,
-    validation: '生成链路兼容 8GB；720P 后处理不增加 H3 峰值显存。',
-  },
-  nativeHigh: {
-    id: 'nativeHigh',
-    label: '原生高清实验',
-    description: '提高 H3 原生生成分辨率，预计需要至少 12GB 显存；4060 8GB 不推荐。',
-    steps: 8,
-    lowVram: true,
-    nativeScale: 'high',
-    delivery: 'native',
-    minVramGb: 12,
-    validation: '仅建立受控工作流和显存门槛，尚未在本机 8GB 环境执行。',
-  },
-}
-
-VIDEO_PRESETS.fast.nativeScale = 'standard'
-VIDEO_PRESETS.fast.delivery = 'native'
-VIDEO_PRESETS.fast.minVramGb = 8
-VIDEO_PRESETS.fast.validation = 'RTX 4060 8GB 已实测 608×352、124 帧、4 步、原生音频。'
+export const WORKFLOW_VERSION = 'h3-multiscene-fp8-v3'
+export const VIDEO_DIMENSIONS = VIDEO_NATIVE_DIMENSIONS.standard
+export { VIDEO_PRESETS }
 
 export const VIDEO_DURATIONS = {
   5: 124,
@@ -178,11 +125,14 @@ function safeOutputPrefix(jobId, mode) {
 export async function buildVideoWorkflow({
   mode,
   prompt,
+  scenario = 'auto',
   aspectRatio,
   duration,
   preset,
   seed,
   audio,
+  director,
+  modelProfile = DEFAULT_VIDEO_MODEL_PROFILE,
   inputImageName,
   lastFrameImageName,
   jobId,
@@ -190,7 +140,8 @@ export async function buildVideoWorkflow({
 }) {
   const workflow = await readTemplate(mode)
   const presetConfig = VIDEO_PRESETS[preset]
-  const dimensions = NATIVE_DIMENSIONS[presetConfig?.nativeScale || 'standard']?.[aspectRatio]
+  const profile = videoModelProfile(modelProfile)
+  const dimensions = VIDEO_NATIVE_DIMENSIONS[presetConfig?.nativeScale || 'standard']?.[aspectRatio]
   const length = frameCount ?? VIDEO_DURATIONS[duration]
 
   if (!dimensions) throw new Error(`Unsupported aspect ratio: ${aspectRatio}`)
@@ -200,8 +151,26 @@ export async function buildVideoWorkflow({
     throw new Error('Image-to-video workflow requires an uploaded first frame')
   }
 
+  const promptPlan = compileH3Prompt({
+    mode,
+    sourcePrompt: prompt,
+    scenario,
+    aspectRatio,
+    duration,
+    frameCount: length,
+    audio,
+    hasLastFrame: Boolean(lastFrameImageName),
+    director,
+  })
+
+  workflow['1'].inputs.unet_name = profile.unetName
+  workflow['2'].inputs.clip_name = profile.clipName
+  workflow['3'].inputs.vae_name = profile.videoVaeName
+  workflow['4'].inputs.vae_name = profile.audioVaeName
+  workflow['5'].inputs.lora_name = profile.loraName
+  workflow['5'].inputs.strength = presetConfig.loraStrength
   workflow['5'].inputs.low_vram = presetConfig.lowVram
-  workflow['6'].inputs.prompt = prompt
+  workflow['6'].inputs.prompt = promptPlan.compiledPrompt
   workflow['6'].inputs.width = dimensions.width
   workflow['6'].inputs.height = dimensions.height
   workflow['6'].inputs.length = length
@@ -231,25 +200,41 @@ export async function buildVideoWorkflow({
     workflow,
     metadata: {
       version: WORKFLOW_VERSION,
+      registryVersion: VIDEO_WORKFLOW_REGISTRY_VERSION,
+      modelProfile: profile.id,
+      modelPrecision: profile.precision,
       dimensions,
       frames: length,
       fps: 24,
       steps: presetConfig.steps,
+      loraStrength: presetConfig.loraStrength,
       lowVram: presetConfig.lowVram,
       audio,
       delivery: presetConfig.delivery,
+      preserveNative: presetConfig.preserveNative,
       deliveryDimensions: presetConfig.delivery === '720p-lanczos'
-        ? DELIVERY_DIMENSIONS_720P[aspectRatio]
+        ? VIDEO_DELIVERY_DIMENSIONS_720P[aspectRatio]
         : dimensions,
       minVramGb: presetConfig.minVramGb,
       validation: presetConfig.validation,
+      promptAgent: {
+        version: promptPlan.agentVersion,
+        mode: promptPlan.mode,
+        requestedScenario: promptPlan.requestedScenario,
+        resolvedScenario: promptPlan.resolvedScenario,
+        effectiveDurationSeconds: promptPlan.effectiveDurationSeconds,
+        warnings: promptPlan.warnings,
+      },
     },
   }
 }
 
 export function workflowCatalog() {
+  const registry = videoWorkflowRegistryCatalog()
   return {
     version: WORKFLOW_VERSION,
+    registry,
+    promptAgent: h3PromptAgentCatalog(),
     modes: [
       {
         id: 'text-to-video',
@@ -269,6 +254,14 @@ export function workflowCatalog() {
       seconds: Number(seconds),
       frames,
     })),
-    presets: Object.values(VIDEO_PRESETS),
+    presets: registry.presets,
   }
 }
+
+export const REQUIRED_MODEL_FILES = Object.freeze(Object.values(VIDEO_MODEL_PROFILES).flatMap((profile) => [
+  ['UNETLoader', 'unet_name', profile.unetName],
+  ['CLIPLoader', 'clip_name', profile.clipName],
+  ['VAELoader', 'vae_name', profile.videoVaeName],
+  ['VAELoader', 'vae_name', profile.audioVaeName],
+  ['MiniMaxH3TurboLoRA', 'lora_name', profile.loraName],
+]))

@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'n
 import {
   cacheDirectory,
   dataDirectory,
+  defaultOutputDirectory,
   logDirectory,
   projectRoot,
   runtimeDirectory,
@@ -393,13 +394,16 @@ export async function buildRuntimeDiagnostics({
   const trustedStored = configError ? {} : stored
   const effectiveRoot = trustedStored.comfyRoot || activeConfig?.comfyRoot
   const effectivePython = trustedStored.pythonPath || activeConfig?.pythonPath
-  const effectiveOutputDirectory = trustedStored.outputDirectory || activeConfig?.outputDirectory
+  const customOutputDirectory = trustedStored.outputDirectory
+  const effectiveOutputDirectory = customOutputDirectory || activeConfig?.outputDirectory || defaultOutputDirectory
   const rootConfigured = typeof effectiveRoot === 'string' && Boolean(effectiveRoot)
   const pythonConfigured = typeof effectivePython === 'string' && Boolean(effectivePython)
   const rootValid = rootConfigured && await isFile(join(effectiveRoot, 'main.py'))
   const pythonValid = pythonConfigured && await isFile(effectivePython)
-  const outputDirectoryConfigured = typeof effectiveOutputDirectory === 'string' && Boolean(effectiveOutputDirectory)
-  const outputDirectoryValid = outputDirectoryConfigured && await isDirectory(effectiveOutputDirectory)
+  const outputDirectoryConfigured = typeof customOutputDirectory === 'string' && Boolean(customOutputDirectory)
+  const outputDirectoryEffective = typeof effectiveOutputDirectory === 'string' && Boolean(effectiveOutputDirectory)
+  const outputDirectorySource = outputDirectoryConfigured ? 'custom' : 'application'
+  const outputDirectoryValid = outputDirectoryEffective && await isDirectory(effectiveOutputDirectory)
   const outputDirectoryWritable = outputDirectoryValid && await writableDirectory(effectiveOutputDirectory)
   const imageOperations = imageManifest?.operations ?? []
   const availableImageOperations = imageOperations.filter((operation) => operation.available)
@@ -445,7 +449,7 @@ export async function buildRuntimeDiagnostics({
       action: '自动发现或手工填写本机路径',
     })
   }
-  if (outputDirectoryConfigured && (!outputDirectoryValid || !outputDirectoryWritable)) {
+  if (outputDirectoryEffective && (!outputDirectoryValid || !outputDirectoryWritable)) {
     issues.push({
       code: 'OUTPUT_DIRECTORY_UNAVAILABLE',
       severity: 'warning',
@@ -502,7 +506,7 @@ export async function buildRuntimeDiagnostics({
       cacheWritable,
       logsWritable,
       configWritable,
-      outputDirectoryWritable: outputDirectoryConfigured ? outputDirectoryWritable : null,
+      outputDirectoryWritable: outputDirectoryEffective ? outputDirectoryWritable : null,
       runtimeLabel: runtimeScope() === 'development' ? '开发工作区运行时' : '当前用户应用数据',
       configLabel: safePathLabel(localConfigPath),
       projectsManaged: true,
@@ -518,6 +522,7 @@ export async function buildRuntimeDiagnostics({
       rootLabel: safePathLabel(effectiveRoot),
       pythonLabel: safePathLabel(effectivePython),
       outputDirectoryConfigured,
+      outputDirectorySource,
       outputDirectoryLabel: safePathLabel(effectiveOutputDirectory),
       offlineRuntimePackageId: activeConfig?.offlineRuntimePackageId ?? null,
       comfyUrl: String(trustedStored.comfyUrl || activeConfig?.comfyUrl || DEFAULT_COMFY_URL),
