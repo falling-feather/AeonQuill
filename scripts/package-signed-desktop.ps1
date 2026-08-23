@@ -10,7 +10,7 @@ $targetRelease = Join-Path $projectRoot 'desktop\tauri\src-tauri\target\release'
 $builtApplication = Join-Path $targetRelease 'aeonquill-desktop.exe'
 $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
 $installer = Join-Path $targetRelease 'bundle\nsis\AEONQUILL_0.6.0_x64-setup.exe'
-$signingRoot = Join-Path $projectRoot '.runtime\signing'
+$signingRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-SIGNING-TEMP'
 $signingConfig = Join-Path $signingRoot 'tauri-self-signing.json'
 $certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
@@ -188,6 +188,9 @@ try {
     $env:AEONQUILL_TAURI_CONFIG = $previousConfig
   }
   Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
+  if ((Test-Path -LiteralPath $signingRoot) -and @((Get-ChildItem -LiteralPath $signingRoot -Force)).Count -eq 0) {
+    Remove-Item -LiteralPath $signingRoot -Force -ErrorAction SilentlyContinue
+  }
   if (-not [string]::IsNullOrWhiteSpace($certificateThumbprint)) {
     Remove-TemporaryCertificate -Thumbprint $certificateThumbprint
   }
