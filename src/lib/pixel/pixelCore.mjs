@@ -37,6 +37,7 @@ const ACTORS = new Set(['user', 'tool', 'agent', 'system'])
 const COMMAND_TYPES = new Set([
   'pixels.paint',
   'pixels.erase',
+  'pixels.patch',
   'pixels.restore',
   'palette.replace',
   'layers.add',
@@ -479,6 +480,13 @@ export function assertPixelCommand(input, documentInput) {
       assertPointList(payload.pixels, 'command.payload.pixels', document, {})
       break
     }
+    case 'pixels.patch': {
+      assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
+      const { layer } = assertTarget(payload, document)
+      if (layer.locked) fail('LAYER_LOCKED', `Layer ${layer.id} is locked`, { layerId: layer.id })
+      assertPointList(payload.pixels, 'command.payload.pixels', document, { withValue: true })
+      break
+    }
     case 'pixels.restore': {
       assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
       assertTarget(payload, document)
@@ -671,6 +679,7 @@ export function applyPixelCommand(documentInput, commandInput) {
   switch (command.type) {
     case 'pixels.paint':
     case 'pixels.erase':
+    case 'pixels.patch':
     case 'pixels.restore': {
       const frame = next.frames.find((item) => item.id === payload.frameId)
       const cel = frame.cels[payload.layerId]

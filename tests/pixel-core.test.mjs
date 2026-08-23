@@ -153,6 +153,39 @@ test('applies a multi-pixel gesture as one revision and one complete inverse com
   assert.deepEqual(withoutRevision(restored.document), withoutRevision(before))
 })
 
+test('applies mixed transparent and colored pixel patches as one reversible command', () => {
+  let document = createPixelDocument({ width: 3, height: 2, palette })
+  document = execute(document, 'pixels.paint', {
+    frameId: 'frame-1',
+    layerId: 'layer-1',
+    pixels: [{ x: 0, y: 0, colorId: 'red' }, { x: 1, y: 0, colorId: 'blue' }],
+  }).document
+  const before = document
+  const changed = execute(document, 'pixels.patch', {
+    frameId: 'frame-1',
+    layerId: 'layer-1',
+    pixels: [{ x: 0, y: 0, value: null }, { x: 2, y: 1, value: 'blue' }],
+  })
+
+  assert.equal(changed.document.frames[0].cels['layer-1'][0], null)
+  assert.equal(changed.document.frames[0].cels['layer-1'][5], 'blue')
+  assert.equal(changed.inverse.type, 'pixels.restore')
+  assert.deepEqual(withoutRevision(applyPixelCommand(changed.document, changed.inverse).document), withoutRevision(before))
+
+  const locked = execute(changed.document, 'layers.patch', {
+    layerId: 'layer-1',
+    patch: { locked: true },
+  }).document
+  assert.throws(
+    () => createPixelCommand(locked, 'pixels.patch', {
+      frameId: 'frame-1',
+      layerId: 'layer-1',
+      pixels: [{ x: 0, y: 0, value: 'red' }],
+    }),
+    (error) => error instanceof PixelContractError && error.code === 'LAYER_LOCKED',
+  )
+})
+
 test('switches and reorders layers and frames while keeping onion-skin settings reversible', () => {
   let document = makeMultiLayerMultiFrameDocument()
   const original = document

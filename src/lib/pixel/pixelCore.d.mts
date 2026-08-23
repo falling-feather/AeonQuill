@@ -2,6 +2,7 @@ export type PixelActor = 'user' | 'tool' | 'agent' | 'system'
 export type PixelCommandType =
   | 'pixels.paint'
   | 'pixels.erase'
+  | 'pixels.patch'
   | 'pixels.restore'
   | 'palette.replace'
   | 'layers.add'

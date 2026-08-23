@@ -1459,3 +1459,241 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* V0.6.14 professional pixel editing controls */
+.aq-pixel-line-icon {
+  transform: rotate(-35deg);
+}
+
+.aq-pixel-stage-wrap {
+  position: relative;
+}
+
+.aq-pixel-stage-controls,
+.aq-pixel-selection-actions {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #dedfe5;
+  border-radius: 10px;
+  color: #4e5360;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 24px rgba(32, 35, 43, 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.aq-pixel-stage-controls {
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.aq-pixel-selection-actions {
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.aq-pixel-stage-controls button,
+.aq-pixel-selection-actions button {
+  min-width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.aq-pixel-stage-controls button > span {
+  flex: 0 0 auto;
+}
+
+.aq-pixel-stage-controls button:hover,
+.aq-pixel-stage-controls button.is-active,
+.aq-pixel-selection-actions button:hover {
+  border-color: #d8d5ff;
+  color: #4338ca;
+  background: #f1efff;
+}
+
+.aq-pixel-selection-actions button.is-danger:hover {
+  border-color: #f1c8ca;
+  color: #b4232c;
+  background: #fff1f1;
+}
+
+.aq-pixel-stage-controls output,
+.aq-pixel-selection-actions > span {
+  min-width: 46px;
+  color: #777c87;
+  font-size: 10px;
+  text-align: center;
+}
+
+.aq-pixel-selection-actions > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+
+.aq-pixel-brush-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 5px;
+  color: #777c87;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aq-pixel-brush-size select {
+  height: 28px;
+  padding: 0 22px 0 8px;
+  border: 1px solid #dedfe5;
+  border-radius: 7px;
+  color: #343741;
+  background: #fff;
+  font-size: 11px;
+}
+
+.aq-pixel-control-divider {
+  width: 1px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin: 0 2px;
+  background: #e6e7eb;
+}
+
+.aq-pixel-selection-actions > .aq-pixel-control-divider {
+  min-width: 1px;
+  width: 1px;
+  padding: 0;
+}
+
+.aq-pixel-marquee {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid #6553f5;
+  outline: 1px dashed rgba(255, 255, 255, 0.92);
+  outline-offset: -2px;
+  background: rgba(101, 83, 245, 0.08);
+  box-shadow: 0 0 0 1px rgba(101, 83, 245, 0.16);
+}
+
+.aq-pixel-marquee.is-shape-preview {
+  border-style: dashed;
+  background: rgba(101, 83, 245, 0.04);
+}
+
+.aq-pixel-layer-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e1e2e7;
+  border-radius: 10px;
+  background: #f8f8fa;
+}
+
+.aq-pixel-layer-editor label {
+  display: grid;
+  gap: 5px;
+  color: #777c87;
+  font-size: 10px;
+}
+
+.aq-pixel-layer-editor label > span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.aq-pixel-layer-editor input[type="text"],
+.aq-pixel-layer-editor input:not([type]) {
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid #dedfe5;
+  border-radius: 7px;
+  color: #343741;
+  background: #fff;
+  font-size: 11px;
+}
+
+.aq-pixel-layer-editor input[type="range"] {
+  width: 100%;
+  accent-color: #6553f5;
+}
+
+.aq-pixel-layer-editor > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.aq-pixel-layer-editor button {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #dedfe5;
+  border-radius: 7px;
+  color: #555a64;
+  background: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.aq-pixel-layer-editor button:hover:not(:disabled) {
+  border-color: #c9c7fb;
+  color: #4338ca;
+  background: #f1efff;
+}
+
+.aq-pixel-layer-editor button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.aq-pixel-layers-panel {
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .aq-pixel-stage-controls button span {
+    display: none;
+  }
+
+  .aq-pixel-stage-controls {
+    max-width: calc(100% - 20px);
+  }
+}
+
+@media (max-width: 460px) {
+  .aq-pixel-stage-controls {
+    top: 8px;
+  }
+
+  .aq-pixel-stage-controls .aq-pixel-control-divider:nth-of-type(2),
+  .aq-pixel-stage-controls button[title="垂直对称绘制"] {
+    display: none;
+  }
+
+  .aq-pixel-selection-actions {
+    bottom: 8px;
+    max-width: calc(100% - 16px);
+  }
+}

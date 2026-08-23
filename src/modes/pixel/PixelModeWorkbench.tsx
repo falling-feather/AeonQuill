@@ -1,5 +1,9 @@
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowLeft as ArrowLeftSmall,
   Copy,
   Download,
   Eraser,
@@ -7,19 +11,29 @@ import {
   EyeOff,
   FileImage,
   Film,
+  FlipHorizontal2,
+  FlipVertical2,
   FolderOpen,
   Grid3X3,
   Layers,
   Lock,
+  Minus,
+  Move,
+  PaintBucket,
   Pause,
   Pencil,
+  Pipette,
   Play,
   Plus,
   Redo2,
   Settings2,
+  Square,
+  SquareDashedMousePointer,
   Trash2,
   Undo2,
   Unlock,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import {
   useCallback,
@@ -41,7 +55,13 @@ import {
   createPixelCommand,
   createPixelDocument,
   createSpriteSheetMetadata,
+  createSelectionPatch,
+  expandPixelBrush,
+  floodFillPixels,
   migratePixelDocument,
+  normalizePixelRect,
+  rasterPixelLine,
+  rasterPixelRectangle,
   renderPixelFrameRgba,
   safePixelFilename,
   serializePixelProject,
@@ -51,6 +71,8 @@ import {
   type PixelDitherMode,
   type PixelDocument,
   type PixelFitMode,
+  type PixelPoint,
+  type PixelRect,
   type RgbaImage,
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
@@ -63,7 +85,7 @@ import {
 } from './pixelBrowser'
 import './pixel-mode.css'
 
-type PixelTool = 'pencil' | 'eraser'
+type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
 
 type HistoryState = {
   document: PixelDocument
@@ -75,10 +97,23 @@ type PixelStrokeContext = {
   baseRevision: number
   frameId: string
   layerId: string
-  tool: PixelTool
+  tool: 'pencil' | 'eraser'
   colorId: string
   previewColor: string
   layerOpacity: number
+  brushSize: number
+  mirrorHorizontal: boolean
+  mirrorVertical: boolean
+}
+
+type PixelDragContext = {
+  baseRevision: number
+  frameId: string
+  layerId: string
+  tool: 'line' | 'rectangle' | 'marquee'
+  colorId: string
+  start: PixelPoint
+  current: PixelPoint
 }
 
 type PixelImportSettings = {
@@ -219,6 +254,13 @@ export function PixelModeWorkbench({
     redo: [],
   }))
   const [tool, setTool] = useState<PixelTool>('pencil')
+  const [brushSize, setBrushSize] = useState(1)
+  const [mirrorHorizontal, setMirrorHorizontal] = useState(false)
+  const [mirrorVertical, setMirrorVertical] = useState(false)
+  const [gridVisible, setGridVisible] = useState(true)
+  const [zoom, setZoom] = useState(1)
+  const [selection, setSelection] = useState<PixelRect | null>(null)
+  const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
   const [importSettings, setImportSettings] = useState<PixelImportSettings>({
@@ -242,6 +284,8 @@ export function PixelModeWorkbench({
   const paintingRef = useRef(false)
   const strokeContextRef = useRef<PixelStrokeContext | null>(null)
   const strokePointsRef = useRef(new Map<string, { x: number; y: number }>())
+  const lastStrokePointRef = useRef<PixelPoint | null>(null)
+  const dragContextRef = useRef<PixelDragContext | null>(null)
   const commandSequenceRef = useRef(1)
   const document = history.document
   const historyRef = useRef(history)
@@ -319,6 +363,9 @@ export function PixelModeWorkbench({
     stopPlayback()
     replaceHistory({ document: nextDocument, undo: [], redo: [] })
     setActiveColorId(nextDocument.palette[0].id)
+    setSelection(null)
+    setDragDraft(null)
+    dragContextRef.current = null
     setStatus(message)
   }, [replaceHistory, stopPlayback])
 
@@ -456,58 +503,163 @@ export function PixelModeWorkbench({
     )
   }, [displayedFrameId, document, isPlaying, strokePreviewRevision])
 
-  const stagePixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const stroke = strokeContextRef.current
-    if (!stroke) return
+  const pixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget
     const bounds = canvas.getBoundingClientRect()
-    if (bounds.width <= 0 || bounds.height <= 0) return
+    if (bounds.width <= 0 || bounds.height <= 0) return null
     const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(((event.clientX - bounds.left) / bounds.width) * canvas.width)))
     const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height)))
-    const pixelKey = `${x}:${y}`
-    if (strokePointsRef.current.has(pixelKey)) return
-    strokePointsRef.current.set(pixelKey, { x, y })
+    return { x, y }
+  }, [])
+
+  const stageStrokeAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const stroke = strokeContextRef.current
+    const point = pixelAtPointer(event)
+    if (!stroke || !point) return
+    const canvas = event.currentTarget
+    const line = lastStrokePointRef.current
+      ? rasterPixelLine(lastStrokePointRef.current, point, event.currentTarget.width, event.currentTarget.height)
+      : [point]
+    lastStrokePointRef.current = point
+    const expanded = expandPixelBrush(line, event.currentTarget.width, event.currentTarget.height, {
+      size: stroke.brushSize,
+      mirrorHorizontal: stroke.mirrorHorizontal,
+      mirrorVertical: stroke.mirrorVertical,
+    })
     const context = canvas.getContext('2d')
     if (!context) return
     context.save()
-    if (stroke.tool === 'pencil') {
-      context.globalAlpha = stroke.layerOpacity
-      context.fillStyle = stroke.previewColor
-      context.fillRect(x, y, 1, 1)
-    } else {
-      context.clearRect(x, y, 1, 1)
+    for (const pixel of expanded) {
+      const pixelKey = `${pixel.x}:${pixel.y}`
+      if (strokePointsRef.current.has(pixelKey)) continue
+      strokePointsRef.current.set(pixelKey, pixel)
+      if (stroke.tool === 'pencil') {
+        context.globalAlpha = stroke.layerOpacity
+        context.fillStyle = stroke.previewColor
+        context.fillRect(pixel.x, pixel.y, 1, 1)
+      } else {
+        context.clearRect(pixel.x, pixel.y, 1, 1)
+      }
     }
     context.restore()
-  }, [])
+  }, [pixelAtPointer])
 
-  const beginStroke = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+  const beginCanvasGesture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     stopPlayback()
     const current = historyRef.current.document
+    const point = pixelAtPointer(event)
+    if (!point) return
+
+    if (tool === 'picker') {
+      const frame = current.frames.find((item) => item.id === current.activeFrameId)
+      const picked = [...current.layers].reverse().find((layer) => (
+        layer.visible && layer.opacity > 0 && frame?.cels[layer.id]?.[point.y * current.width + point.x]
+      ))
+      const colorId = picked ? frame?.cels[picked.id]?.[point.y * current.width + point.x] : null
+      if (colorId) {
+        setActiveColorId(colorId)
+        setTool('pencil')
+        setStatus(`已吸取颜色：${current.palette.find((color) => color.id === colorId)?.name ?? colorId}`)
+      } else {
+        setStatus('该位置为透明像素')
+      }
+      return
+    }
+
+    if (tool === 'marquee') {
+      const draft: PixelDragContext = {
+        baseRevision: current.revision,
+        frameId: current.activeFrameId,
+        layerId: current.activeLayerId,
+        tool,
+        colorId: activeColorId,
+        start: point,
+        current: point,
+      }
+      dragContextRef.current = draft
+      setDragDraft(draft)
+      setSelection(null)
+      event.currentTarget.setPointerCapture(event.pointerId)
+      return
+    }
+
     const activeLayer = current.layers.find((layer) => layer.id === current.activeLayerId)
     if (!activeLayer || activeLayer.locked) {
       setStatus(activeLayer ? `图层 ${activeLayer.name} 已锁定` : '当前图层不存在')
       return
     }
+
+    if (tool === 'fill') {
+      const frame = current.frames.find((item) => item.id === current.activeFrameId)
+      const cel = frame?.cels[current.activeLayerId]
+      if (!cel) return
+      const points = floodFillPixels(cel, current.width, current.height, point, activeColorId)
+      if (points.length === 0) {
+        setStatus('填充区域已经是当前颜色')
+        return
+      }
+      if (apply('pixels.paint', {
+        frameId: current.activeFrameId,
+        layerId: current.activeLayerId,
+        pixels: points.map((pixel) => ({ ...pixel, colorId: activeColorId })),
+      })) setStatus(`已填充 ${points.length} 个连续像素 · 1 个撤销单元`)
+      return
+    }
+
+    if (tool === 'line' || tool === 'rectangle') {
+      const draft: PixelDragContext = {
+        baseRevision: current.revision,
+        frameId: current.activeFrameId,
+        layerId: current.activeLayerId,
+        tool,
+        colorId: activeColorId,
+        start: point,
+        current: point,
+      }
+      dragContextRef.current = draft
+      setDragDraft(draft)
+      event.currentTarget.setPointerCapture(event.pointerId)
+      return
+    }
+
     strokeContextRef.current = {
       baseRevision: current.revision,
       frameId: current.activeFrameId,
       layerId: current.activeLayerId,
-      tool,
+      tool: tool === 'eraser' ? 'eraser' : 'pencil',
       colorId: activeColorId,
       previewColor: current.palette.find((color) => color.id === activeColorId)?.color ?? '#000000FF',
       layerOpacity: activeLayer.opacity,
+      brushSize,
+      mirrorHorizontal,
+      mirrorVertical,
     }
     strokePointsRef.current.clear()
+    lastStrokePointRef.current = null
     paintingRef.current = true
     event.currentTarget.setPointerCapture(event.pointerId)
-    stagePixelAtPointer(event)
-  }, [activeColorId, stagePixelAtPointer, stopPlayback, tool])
+    stageStrokeAtPointer(event)
+  }, [activeColorId, apply, brushSize, mirrorHorizontal, mirrorVertical, pixelAtPointer, stageStrokeAtPointer, stopPlayback, tool])
+
+  const updateCanvasGesture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (paintingRef.current) {
+      stageStrokeAtPointer(event)
+      return
+    }
+    const draft = dragContextRef.current
+    const point = pixelAtPointer(event)
+    if (!draft || !point || (point.x === draft.current.x && point.y === draft.current.y)) return
+    const next = { ...draft, current: point }
+    dragContextRef.current = next
+    setDragDraft(next)
+  }, [pixelAtPointer, stageStrokeAtPointer])
 
   const finishStroke = useCallback(() => {
     const stroke = strokeContextRef.current
     const points = [...strokePointsRef.current.values()]
     paintingRef.current = false
     strokeContextRef.current = null
+    lastStrokePointRef.current = null
     strokePointsRef.current.clear()
     setStrokePreviewRevision((revision) => revision + 1)
     if (!stroke || points.length === 0) return
@@ -529,8 +681,83 @@ export function PixelModeWorkbench({
     if (succeeded) setStatus(`已提交单笔：${points.length} 个唯一像素 · 1 个撤销单元`)
   }, [apply])
 
+  const finishCanvasGesture = useCallback(() => {
+    if (paintingRef.current) {
+      finishStroke()
+      return
+    }
+    const draft = dragContextRef.current
+    dragContextRef.current = null
+    setDragDraft(null)
+    if (!draft) return
+    const current = historyRef.current.document
+    if (draft.baseRevision !== current.revision) {
+      setStatus('拖拽期间文档已变化，本次草稿未提交')
+      return
+    }
+    if (draft.tool === 'marquee') {
+      const rect = normalizePixelRect(draft.start, draft.current, current.width, current.height)
+      setSelection(rect)
+      setStatus(`已选择 ${rect.width} × ${rect.height} 区域；方向键可逐像素移动`)
+      return
+    }
+    const basePoints = draft.tool === 'line'
+      ? rasterPixelLine(draft.start, draft.current, current.width, current.height)
+      : rasterPixelRectangle(draft.start, draft.current, current.width, current.height)
+    const points = expandPixelBrush(basePoints, current.width, current.height, {
+      size: brushSize,
+      mirrorHorizontal,
+      mirrorVertical,
+    })
+    if (apply('pixels.paint', {
+      frameId: draft.frameId,
+      layerId: draft.layerId,
+      pixels: points.map((point) => ({ ...point, colorId: draft.colorId })),
+    })) setStatus(`已提交${draft.tool === 'line' ? '直线' : '矩形'}：${points.length} 个像素 · 1 个撤销单元`)
+  }, [apply, brushSize, finishStroke, mirrorHorizontal, mirrorVertical])
+
+  const applySelectionOperation = useCallback((
+    operation: 'clear' | 'flip-horizontal' | 'flip-vertical' | 'move' | 'copy',
+    options: { dx?: number; dy?: number } = {},
+  ) => {
+    if (!selection) return false
+    const current = historyRef.current.document
+    const activeLayer = current.layers.find((layer) => layer.id === current.activeLayerId)
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    const cel = frame?.cels[current.activeLayerId]
+    if (!activeLayer || !cel) return false
+    if (activeLayer.locked) {
+      setStatus(`图层 ${activeLayer.name} 已锁定`)
+      return false
+    }
+    try {
+      const pixels = createSelectionPatch(cel, current.width, current.height, selection, operation, options)
+      if (pixels.length === 0) {
+        setStatus('该区域变换不会改变任何像素')
+        return false
+      }
+      const succeeded = apply('pixels.patch', {
+        frameId: current.activeFrameId,
+        layerId: current.activeLayerId,
+        pixels,
+      })
+      if (succeeded && (operation === 'move' || operation === 'copy')) {
+        setSelection((value) => value ? { ...value, x: value.x + (options.dx ?? 0), y: value.y + (options.dy ?? 0) } : value)
+      }
+      if (succeeded) setStatus(`区域${operation === 'clear' ? '清除' : operation === 'copy' ? '复制' : operation === 'move' ? '移动' : '翻转'}完成 · ${pixels.length} 个混合像素 · 1 个撤销单元`)
+      return succeeded
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '区域变换失败')
+      return false
+    }
+  }, [apply, selection])
+
   const selectedLayer = document.layers.find((layer) => layer.id === document.activeLayerId) ?? document.layers[0]
   const selectedColor = document.palette.find((color) => color.id === activeColorId) ?? document.palette[0]
+  const selectionPreview = useMemo(() => {
+    if (!dragDraft) return selection
+    return normalizePixelRect(dragDraft.start, dragDraft.current, document.width, document.height)
+  }, [document.height, document.width, dragDraft, selection])
   const spriteMetadata = useMemo(
     () => createSpriteSheetMetadata(document, { columns: Math.min(4, document.frames.length), padding: 1, spacing: 1 }),
     [document],
@@ -578,8 +805,30 @@ export function PixelModeWorkbench({
       aria-label="光阴砚像素模式工作台"
       onKeyDown={(event) => {
         if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-        if (event.key.toLowerCase() === 'b') setTool('pencil')
-        if (event.key.toLowerCase() === 'e') setTool('eraser')
+        const key = event.key.toLowerCase()
+        if (key === 'b') setTool('pencil')
+        if (key === 'e') setTool('eraser')
+        if (key === 'g') setTool('fill')
+        if (key === 'i') setTool('picker')
+        if (key === 'l') setTool('line')
+        if (key === 'r') setTool('rectangle')
+        if (key === 'm') setTool('marquee')
+        if (key === 'escape') {
+          setSelection(null)
+          setDragDraft(null)
+          dragContextRef.current = null
+          setStatus('已取消区域选择')
+        }
+        if ((key === 'delete' || key === 'backspace') && selection) {
+          event.preventDefault()
+          applySelectionOperation('clear')
+        }
+        if (selection && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
+          event.preventDefault()
+          const dx = key === 'arrowleft' ? -1 : key === 'arrowright' ? 1 : 0
+          const dy = key === 'arrowup' ? -1 : key === 'arrowdown' ? 1 : 0
+          applySelectionOperation(event.altKey ? 'copy' : 'move', { dx, dy })
+        }
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
           event.preventDefault()
           if (event.shiftKey) redo()
@@ -640,6 +889,21 @@ export function PixelModeWorkbench({
           </button>
           <button type="button" className={tool === 'eraser' ? 'is-active' : ''} onClick={() => setTool('eraser')}>
             <Eraser size={17} /> 橡皮 <kbd>E</kbd>
+          </button>
+          <button type="button" className={tool === 'fill' ? 'is-active' : ''} onClick={() => setTool('fill')}>
+            <PaintBucket size={17} /> 填充 <kbd>G</kbd>
+          </button>
+          <button type="button" className={tool === 'picker' ? 'is-active' : ''} onClick={() => setTool('picker')}>
+            <Pipette size={17} /> 吸管 <kbd>I</kbd>
+          </button>
+          <button type="button" className={tool === 'line' ? 'is-active' : ''} onClick={() => setTool('line')}>
+            <Minus size={17} className="aq-pixel-line-icon" /> 直线 <kbd>L</kbd>
+          </button>
+          <button type="button" className={tool === 'rectangle' ? 'is-active' : ''} onClick={() => setTool('rectangle')}>
+            <Square size={17} /> 矩形 <kbd>R</kbd>
+          </button>
+          <button type="button" className={tool === 'marquee' ? 'is-active' : ''} onClick={() => setTool('marquee')}>
+            <SquareDashedMousePointer size={17} /> 选区 <kbd>M</kbd>
           </button>
         </div>
         <span className="aq-pixel-toolbar-divider" />
@@ -843,33 +1107,99 @@ export function PixelModeWorkbench({
 
         <main className="aq-pixel-stage-column">
           <div className="aq-pixel-stage-wrap">
+            <div className="aq-pixel-stage-controls" aria-label="笔刷与画布控制">
+              <label className="aq-pixel-brush-size">
+                <span>画笔</span>
+                <select value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))}>
+                  {[1, 2, 3, 4, 6, 8].map((size) => <option key={size} value={size}>{size}px</option>)}
+                </select>
+              </label>
+              <span className="aq-pixel-control-divider" />
+              <button
+                type="button"
+                className={mirrorHorizontal ? 'is-active' : ''}
+                aria-pressed={mirrorHorizontal}
+                onClick={() => setMirrorHorizontal((value) => !value)}
+                title="水平对称绘制"
+              ><FlipHorizontal2 size={15} /><span>水平对称</span></button>
+              <button
+                type="button"
+                className={mirrorVertical ? 'is-active' : ''}
+                aria-pressed={mirrorVertical}
+                onClick={() => setMirrorVertical((value) => !value)}
+                title="垂直对称绘制"
+              ><FlipVertical2 size={15} /><span>垂直对称</span></button>
+              <span className="aq-pixel-control-divider" />
+              <button
+                type="button"
+                className={gridVisible ? 'is-active' : ''}
+                aria-pressed={gridVisible}
+                onClick={() => setGridVisible((value) => !value)}
+                title="显示像素网格"
+              ><Grid3X3 size={15} /><span>网格</span></button>
+              <span className="aq-pixel-control-divider" />
+              <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))} aria-label="缩小画布">
+                <ZoomOut size={15} />
+              </button>
+              <output>{Math.round(zoom * 100)}%</output>
+              <button type="button" onClick={() => setZoom((value) => Math.min(2, value + 0.25))} aria-label="放大画布">
+                <ZoomIn size={15} />
+              </button>
+            </div>
             <div
               className="aq-pixel-stage"
               style={{
                 '--aq-pixel-columns': document.width,
                 '--aq-pixel-rows': document.height,
                 aspectRatio: `${document.width} / ${document.height}`,
+                width: `min(${Math.round(62 * zoom)}vh, ${Math.round(620 * zoom)}px)`,
               } as CSSProperties}
             >
               <canvas
                 ref={canvasRef}
+                tabIndex={0}
                 aria-label={`${document.width} 乘 ${document.height} 像素绘制区，当前图层 ${selectedLayer.name}`}
                 onPointerDown={(event) => {
                   event.preventDefault()
-                  beginStroke(event)
+                  event.currentTarget.focus()
+                  beginCanvasGesture(event)
                 }}
-                onPointerMove={(event) => {
-                  if (paintingRef.current) stagePixelAtPointer(event)
-                }}
+                onPointerMove={updateCanvasGesture}
                 onPointerUp={(event) => {
-                  if (paintingRef.current) stagePixelAtPointer(event)
-                  finishStroke()
+                  updateCanvasGesture(event)
+                  finishCanvasGesture()
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
                 }}
-                onPointerCancel={finishStroke}
+                onPointerCancel={finishCanvasGesture}
               />
-              <span className="aq-pixel-grid-overlay" aria-hidden="true" />
+              {gridVisible ? <span className="aq-pixel-grid-overlay" aria-hidden="true" /> : null}
+              {selectionPreview ? (
+                <span
+                  className={`aq-pixel-marquee ${dragDraft && dragDraft.tool !== 'marquee' ? 'is-shape-preview' : ''}`.trim()}
+                  aria-hidden="true"
+                  style={{
+                    left: `${(selectionPreview.x / document.width) * 100}%`,
+                    top: `${(selectionPreview.y / document.height) * 100}%`,
+                    width: `${(selectionPreview.width / document.width) * 100}%`,
+                    height: `${(selectionPreview.height / document.height) * 100}%`,
+                  }}
+                />
+              ) : null}
             </div>
+            {selection ? (
+              <div className="aq-pixel-selection-actions" aria-label="区域变换">
+                <span><Move size={14} /> {selection.width}×{selection.height}</span>
+                <button type="button" title="向左移动一像素" onClick={() => applySelectionOperation('move', { dx: -1 })}><ArrowLeftSmall size={14} /></button>
+                <button type="button" title="向上移动一像素" onClick={() => applySelectionOperation('move', { dy: -1 })}><ArrowUp size={14} /></button>
+                <button type="button" title="向下移动一像素" onClick={() => applySelectionOperation('move', { dy: 1 })}><ArrowDown size={14} /></button>
+                <button type="button" title="向右移动一像素" onClick={() => applySelectionOperation('move', { dx: 1 })}><ArrowRight size={14} /></button>
+                <span className="aq-pixel-control-divider" />
+                <button type="button" title="复制并向右移动一像素" onClick={() => applySelectionOperation('copy', { dx: 1 })}><Copy size={14} /></button>
+                <button type="button" title="水平翻转" onClick={() => applySelectionOperation('flip-horizontal')}><FlipHorizontal2 size={14} /></button>
+                <button type="button" title="垂直翻转" onClick={() => applySelectionOperation('flip-vertical')}><FlipVertical2 size={14} /></button>
+                <button type="button" className="is-danger" title="清除选区" onClick={() => applySelectionOperation('clear')}><Trash2 size={14} /></button>
+              </div>
+            ) : null}
           </div>
 
           <section className="aq-pixel-timeline" aria-label="动画帧">
@@ -993,6 +1323,62 @@ export function PixelModeWorkbench({
                 >{layer.locked ? <Lock size={14} /> : <Unlock size={14} />}</button>
               </div>
             ))}
+          </div>
+          <div className="aq-pixel-layer-editor" aria-label="当前图层属性">
+            <label>
+              <span>图层名称</span>
+              <input
+                key={`${selectedLayer.id}-${selectedLayer.name}`}
+                defaultValue={selectedLayer.name}
+                maxLength={80}
+                onBlur={(event) => {
+                  const name = event.currentTarget.value.trim()
+                  if (name && name !== selectedLayer.name) apply('layers.patch', { layerId: selectedLayer.id, patch: { name } })
+                  else event.currentTarget.value = selectedLayer.name
+                }}
+              />
+            </label>
+            <label>
+              <span>不透明度 <strong>{Math.round(selectedLayer.opacity * 100)}%</strong></span>
+              <input
+                key={`${selectedLayer.id}-${selectedLayer.opacity}`}
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                defaultValue={Math.round(selectedLayer.opacity * 100)}
+                onBlur={(event) => {
+                  const opacity = event.currentTarget.valueAsNumber / 100
+                  if (Number.isFinite(opacity) && opacity !== selectedLayer.opacity) {
+                    apply('layers.patch', { layerId: selectedLayer.id, patch: { opacity } })
+                  }
+                }}
+              />
+            </label>
+            <div>
+              <button
+                type="button"
+                disabled={document.layers.findIndex((layer) => layer.id === selectedLayer.id) === document.layers.length - 1}
+                onClick={() => {
+                  const ids = document.layers.map((layer) => layer.id)
+                  const index = ids.indexOf(selectedLayer.id)
+                  if (index < 0 || index >= ids.length - 1) return
+                  ;[ids[index], ids[index + 1]] = [ids[index + 1], ids[index]]
+                  apply('layers.reorder', { layerIds: ids })
+                }}
+              ><ArrowUp size={14} /> 上移</button>
+              <button
+                type="button"
+                disabled={document.layers.findIndex((layer) => layer.id === selectedLayer.id) <= 0}
+                onClick={() => {
+                  const ids = document.layers.map((layer) => layer.id)
+                  const index = ids.indexOf(selectedLayer.id)
+                  if (index <= 0) return
+                  ;[ids[index], ids[index - 1]] = [ids[index - 1], ids[index]]
+                  apply('layers.reorder', { layerIds: ids })
+                }}
+              ><ArrowDown size={14} /> 下移</button>
+            </div>
           </div>
           <div className="aq-pixel-sprite-summary">
             <span>Sprite Sheet</span>
