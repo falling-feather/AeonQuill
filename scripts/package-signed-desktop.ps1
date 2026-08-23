@@ -27,7 +27,10 @@ function Find-SignTool {
 }
 
 function Ensure-CertificateDrive {
-  Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+  $certificateProvider = Get-PSProvider -PSProvider 'Certificate' -ErrorAction SilentlyContinue
+  if ($null -eq $certificateProvider) {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+  }
   if ($null -eq (Get-PSDrive -Name 'Cert' -ErrorAction SilentlyContinue)) {
     New-PSDrive -Name 'Cert' -PSProvider 'Certificate' -Root '\' -Scope Script | Out-Null
   }
