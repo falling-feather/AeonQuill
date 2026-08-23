@@ -26,6 +26,36 @@ function Find-SignTool {
   return $matches[0].FullName
 }
 
+function Ensure-CertificateDrive {
+  Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+  if ($null -eq (Get-PSDrive -Name 'Cert' -ErrorAction SilentlyContinue)) {
+    New-PSDrive -Name 'Cert' -PSProvider 'Certificate' -Root '\' -Scope Script | Out-Null
+  }
+}
+
+function Remove-TemporaryCertificate {
+  param([string]$Thumbprint)
+  if ([string]::IsNullOrWhiteSpace($Thumbprint)) { return }
+
+  $store = New-Object Security.Cryptography.X509Certificates.X509Store(
+    [Security.Cryptography.X509Certificates.StoreName]::My,
+    [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+  )
+  try {
+    $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $matches = $store.Certificates.Find(
+      [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+      $Thumbprint,
+      $false
+    )
+    foreach ($match in $matches) {
+      $store.Remove($match)
+    }
+  } finally {
+    $store.Close()
+  }
+}
+
 function Assert-SelfSignedArtifact {
   param([string]$Path, [string]$ExpectedSigner)
   $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -54,6 +84,7 @@ try {
   & (Get-Command npm.cmd).Source run build:desktop:sidecar
   if ($LASTEXITCODE -ne 0) { throw "Sidecar 构建失败：$LASTEXITCODE" }
 
+  Ensure-CertificateDrive
   $certificate = New-SelfSignedCertificate `
     -Type CodeSigningCert `
     -Subject "CN=$SignerName" `
@@ -111,6 +142,6 @@ try {
   }
   Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
   if ($null -ne $certificate -and -not [string]::IsNullOrWhiteSpace([string]$certificate.Thumbprint)) {
-    Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
+    Remove-TemporaryCertificate -Thumbprint ([string]$certificate.Thumbprint)
   }
 }
