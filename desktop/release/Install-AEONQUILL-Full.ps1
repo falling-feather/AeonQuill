@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$AcceptMiniMaxH3License,
   [switch]$UsePayloadInPlace,
