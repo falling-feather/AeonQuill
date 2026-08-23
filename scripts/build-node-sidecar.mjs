@@ -54,7 +54,6 @@ await unlink(temporaryPath).catch((error) => {
 })
 await run(process.execPath, [
   pkgCli,
-  '--sea',
   '--config', join(projectRoot, 'desktop', 'sidecar.pkg.json'),
   '--targets', 'node22-win-x64',
   '--output', temporaryPath,
