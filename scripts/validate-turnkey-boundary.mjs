@@ -107,7 +107,7 @@ const { stdout } = await execFileAsync('powershell.exe', [
   '-NoProfile',
   '-NonInteractive',
   '-Command',
-  `$s=Get-AuthenticodeSignature -LiteralPath '${escapedInstaller}'; [pscustomobject]@{Subject=if($s.SignerCertificate){$s.SignerCertificate.Subject}else{$null};Status=[string]$s.Status}|ConvertTo-Json -Compress`,
+  `$utf8=New-Object Text.UTF8Encoding($false);[Console]::OutputEncoding=$utf8;$s=Get-AuthenticodeSignature -LiteralPath '${escapedInstaller}'; [pscustomobject]@{Subject=if($s.SignerCertificate){$s.SignerCertificate.Subject}else{$null};Status=[string]$s.Status}|ConvertTo-Json -Compress`,
 ], {
   windowsHide: true,
   encoding: 'utf8',

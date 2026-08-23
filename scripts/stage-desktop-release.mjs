@@ -37,6 +37,7 @@ async function inspectAuthenticodeSignature(pathname) {
   // Node passes cwd as a native wide string; the release filename itself is ASCII.
   const escapedPath = basename(pathname).replaceAll("'", "''")
   const script = [
+    '$utf8 = New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding = $utf8;',
     `$signature = Get-AuthenticodeSignature -LiteralPath '${escapedPath}';`,
     '[pscustomobject]@{',
     'Status = [string]$signature.Status;',
