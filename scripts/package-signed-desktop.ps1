@@ -12,8 +12,11 @@ $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
 $installer = Join-Path $targetRelease 'bundle\nsis\AEONQUILL_0.6.0_x64-setup.exe'
 $signingRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-SIGNING-TEMP'
 $signingConfig = Join-Path $signingRoot 'tauri-self-signing.json'
+$buildTempRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-BUILD-TEMP'
 $certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
+$previousTemp = $env:TEMP
+$previousTmp = $env:TMP
 
 function Find-SignTool {
   $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
@@ -118,19 +121,21 @@ function Remove-TemporaryCertificate {
 
 function Assert-SelfSignedArtifact {
   param([string]$Path, [string]$ExpectedSigner)
-  $signature = Get-AuthenticodeSignature -LiteralPath $Path
-  if ($null -eq $signature.SignerCertificate) {
+  try {
+    $rawCertificate = [Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($Path)
+    $signerCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($rawCertificate)
+  } catch {
     throw "文件没有 Authenticode 签名：$Path"
   }
-  $subject = [string]$signature.SignerCertificate.Subject
+  $subject = [string]$signerCertificate.Subject
   if (-not $subject.Contains($ExpectedSigner)) {
     throw "签名主体不符合预期：$Path；实际为 $subject"
   }
   [pscustomobject]@{
     Path = $Path
-    Status = [string]$signature.Status
+    Status = 'EmbeddedSignature'
     Subject = $subject
-    Thumbprint = [string]$signature.SignerCertificate.Thumbprint
+    Thumbprint = [string]$signerCertificate.Thumbprint
   }
 }
 
@@ -139,6 +144,10 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($gitStatus)) {
     throw '签名发布必须从干净 Git 工作树构建；请先提交本任务源码与文档。'
   }
+
+  New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
+  $env:TEMP = $buildTempRoot
+  $env:TMP = $buildTempRoot
 
   Write-Host '正在构建自包含 Node sidecar 与前端…'
   & (Get-Command npm.cmd).Source run build:desktop:sidecar
@@ -171,6 +180,18 @@ try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\tauri-toolchain.ps1') bundle
   if ($LASTEXITCODE -ne 0) { throw "Tauri 签名构建失败：$LASTEXITCODE" }
 
+  try {
+    $builtSigner = [Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($builtApplication)
+    $builtSignerCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($builtSigner)
+  } catch {
+    $builtSignerCertificate = $null
+  }
+  if ($null -eq $builtSignerCertificate -or -not $builtSignerCertificate.Subject.Contains($SignerName)) {
+    Write-Host 'Tauri 构建目录主程序需要在 NSIS 收尾后补签…'
+    & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $builtApplication
+    if ($LASTEXITCODE -ne 0) { throw "主程序补签失败：$LASTEXITCODE" }
+  }
+
   $reports = @(
     Assert-SelfSignedArtifact -Path $builtApplication -ExpectedSigner $SignerName
     Assert-SelfSignedArtifact -Path $bundledSidecar -ExpectedSigner $SignerName
@@ -187,11 +208,26 @@ try {
   } else {
     $env:AEONQUILL_TAURI_CONFIG = $previousConfig
   }
+  if ([string]::IsNullOrWhiteSpace($previousTemp)) {
+    Remove-Item Env:\TEMP -ErrorAction SilentlyContinue
+  } else {
+    $env:TEMP = $previousTemp
+  }
+  if ([string]::IsNullOrWhiteSpace($previousTmp)) {
+    Remove-Item Env:\TMP -ErrorAction SilentlyContinue
+  } else {
+    $env:TMP = $previousTmp
+  }
   Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
   if ((Test-Path -LiteralPath $signingRoot) -and @((Get-ChildItem -LiteralPath $signingRoot -Force)).Count -eq 0) {
     Remove-Item -LiteralPath $signingRoot -Force -ErrorAction SilentlyContinue
   }
   if (-not [string]::IsNullOrWhiteSpace($certificateThumbprint)) {
     Remove-TemporaryCertificate -Thumbprint $certificateThumbprint
+  }
+  $resolvedBuildTemp = [IO.Path]::GetFullPath($buildTempRoot).TrimEnd('\')
+  $expectedBuildTemp = (Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-BUILD-TEMP').TrimEnd('\')
+  if ($resolvedBuildTemp -ieq $expectedBuildTemp -and (Test-Path -LiteralPath $resolvedBuildTemp)) {
+    Remove-Item -LiteralPath $resolvedBuildTemp -Recurse -Force -ErrorAction SilentlyContinue
   }
 }

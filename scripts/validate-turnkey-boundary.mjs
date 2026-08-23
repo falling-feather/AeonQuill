@@ -102,12 +102,20 @@ assert.equal(manifest.runtime.packageId, OFFLINE_RUNTIME_PACKAGE_ID)
 assert.equal(manifest.signing.privateKeyIncluded, false)
 
 const escapedInstaller = join(packageRoot, metadata.installerFilename).replaceAll("'", "''")
+const systemRoot = process.env.SystemRoot || 'C:\\Windows'
 const { stdout } = await execFileAsync('powershell.exe', [
   '-NoProfile',
   '-NonInteractive',
   '-Command',
   `$s=Get-AuthenticodeSignature -LiteralPath '${escapedInstaller}'; [pscustomobject]@{Subject=if($s.SignerCertificate){$s.SignerCertificate.Subject}else{$null};Status=[string]$s.Status}|ConvertTo-Json -Compress`,
-], { windowsHide: true, encoding: 'utf8' })
+], {
+  windowsHide: true,
+  encoding: 'utf8',
+  env: {
+    ...process.env,
+    PSModulePath: join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+  },
+})
 const signature = JSON.parse(stdout.trim())
 assert.match(signature.Subject || '', /falling feather制作/u)
 
