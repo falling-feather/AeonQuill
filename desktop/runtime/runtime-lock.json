@@ -23,6 +23,8 @@
     "pythonVersion": "3.12.10",
     "pythonDistribution": "portable-merged-cpython-no-system-python",
     "numpyVersion": "2.2.6",
+    "transformersVersion": "5.15.1",
+    "huggingfaceHubVersion": "1.28.0",
     "torchVersion": "2.12.1+cu130",
     "torchvisionVersion": "0.27.1+cu130",
     "torchaudioVersion": "2.11.0+cpu",

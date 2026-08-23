@@ -41,8 +41,8 @@ const systemOnlyPath = [
   join(systemRoot, 'System32', 'Wbem'),
 ].join(';')
 const { stdout: pythonProbe } = await execFileAsync(runtime.pythonPath, ['-c', [
-  'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,numba',
-  'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"providers":onnxruntime.get_available_providers()}))',
+  'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,numba,transformers,huggingface_hub',
+  'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"transformers":transformers.__version__,"huggingfaceHub":huggingface_hub.__version__,"providers":onnxruntime.get_available_providers()}))',
 ].join(';')], {
   cwd: runtime.comfyRoot,
   windowsHide: true,
@@ -64,6 +64,8 @@ assert.equal(python.torchvision, runtime.manifest.runtime.torchvisionVersion)
 assert.equal(python.torchaudio, runtime.manifest.runtime.torchaudioVersion)
 assert.equal(python.cuda, runtime.manifest.runtime.cudaRuntime)
 assert.equal(python.numpy, runtime.manifest.runtime.numpyVersion)
+assert.equal(python.transformers, runtime.manifest.runtime.transformersVersion)
+assert.equal(python.huggingfaceHub, runtime.manifest.runtime.huggingfaceHubVersion)
 assert.ok(python.providers.includes('CUDAExecutionProvider'))
 
 const { stdout: ffmpegVersion } = await execFileAsync(runtime.ffmpegPath, ['-version'], {

@@ -74,6 +74,10 @@ function portablePath(pathname) {
   return pathname.split(sep).join('/')
 }
 
+function canonicalDistributionName(value) {
+  return String(value || '').trim().toLowerCase().replace(/[-_.]+/g, '-')
+}
+
 async function fileExists(pathname) {
   try {
     return (await stat(pathname)).isFile()
@@ -202,13 +206,13 @@ async function overlayCandidateSitePackages({ baseRuntimeRoot, candidateRoot, de
   const candidateDistributions = new Set()
   for (const entry of entries.filter((item) => item.isDirectory() && item.name.endsWith('.dist-info'))) {
     const metadata = await readFile(join(sourceSitePackages, entry.name, 'METADATA'), 'utf8').catch(() => '')
-    const packageName = /^Name:\s*(.+)$/mi.exec(metadata)?.[1]?.trim().toLowerCase()
+    const packageName = canonicalDistributionName(/^Name:\s*(.+)$/mi.exec(metadata)?.[1])
     if (packageName && packageName !== 'numpy') candidateDistributions.add(packageName)
   }
   const destinationEntries = await readdir(destinationSitePackages, { withFileTypes: true })
   for (const entry of destinationEntries.filter((item) => item.isDirectory() && item.name.endsWith('.dist-info'))) {
     const metadata = await readFile(join(destinationSitePackages, entry.name, 'METADATA'), 'utf8').catch(() => '')
-    const packageName = /^Name:\s*(.+)$/mi.exec(metadata)?.[1]?.trim().toLowerCase()
+    const packageName = canonicalDistributionName(/^Name:\s*(.+)$/mi.exec(metadata)?.[1])
     if (packageName && candidateDistributions.has(packageName)) {
       await rm(join(destinationSitePackages, entry.name), { recursive: true, force: true })
     }
@@ -244,6 +248,17 @@ async function overlayCandidateSitePackages({ baseRuntimeRoot, candidateRoot, de
     timeout: 10 * 60_000,
     maxBuffer: 4 * 1024 * 1024,
   })
+
+  const installedDistributions = new Map()
+  for (const entry of (await readdir(destinationSitePackages, { withFileTypes: true }))) {
+    if (!entry.isDirectory() || !entry.name.endsWith('.dist-info')) continue
+    const metadata = await readFile(join(destinationSitePackages, entry.name, 'METADATA'), 'utf8').catch(() => '')
+    const packageName = canonicalDistributionName(/^Name:\s*(.+)$/mi.exec(metadata)?.[1])
+    if (!packageName) continue
+    const previous = installedDistributions.get(packageName)
+    assert.equal(previous, undefined, `Duplicate Python distribution metadata for ${packageName}: ${previous}, ${entry.name}`)
+    installedDistributions.set(packageName, entry.name)
+  }
 }
 
 async function copyRuntime({ lock, baseRuntimeRoot, candidateRoot, destination }) {
@@ -320,8 +335,8 @@ async function validateStagedPython(lock, destination) {
   const systemRoot = process.env.SystemRoot || 'C:\\Windows'
   const systemOnlyPath = [join(systemRoot, 'System32'), systemRoot, join(systemRoot, 'System32', 'Wbem')].join(';')
   const { stdout } = await execFileAsync(layout.pythonPath, ['-c', [
-    'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,PIL,aiohttp,numba',
-    'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"onnxruntime":onnxruntime.__version__,"providers":onnxruntime.get_available_providers()}))',
+    'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,PIL,aiohttp,numba,transformers,huggingface_hub',
+    'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"onnxruntime":onnxruntime.__version__,"transformers":transformers.__version__,"huggingfaceHub":huggingface_hub.__version__,"providers":onnxruntime.get_available_providers()}))',
   ].join(';')], {
     cwd: layout.comfyRoot,
     windowsHide: true,
@@ -344,6 +359,8 @@ async function validateStagedPython(lock, destination) {
   assert.equal(probe.torchaudio, lock.runtime.torchaudioVersion)
   assert.equal(probe.cuda, lock.runtime.cudaRuntime)
   assert.equal(probe.numpy, lock.runtime.numpyVersion)
+  assert.equal(probe.transformers, lock.runtime.transformersVersion)
+  assert.equal(probe.huggingfaceHub, lock.runtime.huggingfaceHubVersion)
   assert.ok(probe.providers.includes('CUDAExecutionProvider'))
   return probe
 }
