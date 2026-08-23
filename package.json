@@ -8,7 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "server": "node server/index.mjs",
     "app": "npm run build && node server/launcher.mjs",
-    "test:unit": "node --test",
+    "test:unit": "node --test \"tests/*.test.mjs\"",
     "validate": "node scripts/validate.mjs",
     "validate:quick": "node scripts/validate.mjs --quick",
     "validate:live": "node scripts/validate.mjs --live",
