@@ -12,7 +12,7 @@ $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
 $installer = Join-Path $targetRelease 'bundle\nsis\AEONQUILL_0.6.0_x64-setup.exe'
 $signingRoot = Join-Path $projectRoot '.runtime\signing'
 $signingConfig = Join-Path $signingRoot 'tauri-self-signing.json'
-$certificate = $null
+$certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
 
 function Find-SignTool {
@@ -26,13 +26,70 @@ function Find-SignTool {
   return $matches[0].FullName
 }
 
-function Ensure-CertificateDrive {
-  $certificateProvider = Get-PSProvider -PSProvider 'Certificate' -ErrorAction SilentlyContinue
-  if ($null -eq $certificateProvider) {
-    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-  }
-  if ($null -eq (Get-PSDrive -Name 'Cert' -ErrorAction SilentlyContinue)) {
-    New-PSDrive -Name 'Cert' -PSProvider 'Certificate' -Root '\' -Scope Script | Out-Null
+function New-TemporaryCodeSigningCertificate {
+  param([string]$ExpectedSigner)
+
+  $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $cleanModulePath = @(
+    (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules'),
+    (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+    (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')
+  ) -join ';'
+  $bootstrap = @'
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$certificate = New-SelfSignedCertificate `
+  -Type CodeSigningCert `
+  -Subject "CN=$env:AEONQUILL_TEMP_SIGNER_NAME" `
+  -FriendlyName 'AEONQUILL local test code signing' `
+  -CertStoreLocation 'Cert:\CurrentUser\My' `
+  -KeyAlgorithm RSA `
+  -KeyLength 3072 `
+  -HashAlgorithm SHA256 `
+  -KeyExportPolicy NonExportable `
+  -NotAfter (Get-Date).AddYears(3)
+[Console]::Out.WriteLine($certificate.Thumbprint)
+'@
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+  $previousModulePath = $env:PSModulePath
+  $previousSignerName = $env:AEONQUILL_TEMP_SIGNER_NAME
+  try {
+    $env:PSModulePath = $cleanModulePath
+    $env:AEONQUILL_TEMP_SIGNER_NAME = $ExpectedSigner
+    $output = @(& $windowsPowerShell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $encoded)
+    if ($LASTEXITCODE -ne 0) {
+      throw "隔离证书创建进程失败：$LASTEXITCODE"
+    }
+    $thumbprint = [string]($output | Where-Object { [string]$_ -match '^[0-9A-Fa-f]{40}$' } | Select-Object -Last 1)
+    if ([string]::IsNullOrWhiteSpace($thumbprint)) {
+      throw "隔离证书创建进程未返回有效 thumbprint：$($output -join ' ')"
+    }
+
+    $store = New-Object Security.Cryptography.X509Certificates.X509Store(
+      [Security.Cryptography.X509Certificates.StoreName]::My,
+      [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+    )
+    try {
+      $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+      $matches = $store.Certificates.Find(
+        [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+        $thumbprint,
+        $false
+      )
+      if ($matches.Count -ne 1 -or -not $matches[0].HasPrivateKey -or -not $matches[0].Subject.Contains($ExpectedSigner)) {
+        throw '隔离创建的签名证书无法由当前进程验证。'
+      }
+    } finally {
+      $store.Close()
+    }
+    return $thumbprint.ToUpperInvariant()
+  } finally {
+    $env:PSModulePath = $previousModulePath
+    if ([string]::IsNullOrWhiteSpace($previousSignerName)) {
+      Remove-Item Env:\AEONQUILL_TEMP_SIGNER_NAME -ErrorAction SilentlyContinue
+    } else {
+      $env:AEONQUILL_TEMP_SIGNER_NAME = $previousSignerName
+    }
   }
 }
 
@@ -87,30 +144,17 @@ try {
   & (Get-Command npm.cmd).Source run build:desktop:sidecar
   if ($LASTEXITCODE -ne 0) { throw "Sidecar 构建失败：$LASTEXITCODE" }
 
-  Ensure-CertificateDrive
-  $certificate = New-SelfSignedCertificate `
-    -Type CodeSigningCert `
-    -Subject "CN=$SignerName" `
-    -FriendlyName 'AEONQUILL local test code signing' `
-    -CertStoreLocation 'Cert:\CurrentUser\My' `
-    -KeyAlgorithm RSA `
-    -KeyLength 3072 `
-    -HashAlgorithm SHA256 `
-    -KeyExportPolicy NonExportable `
-    -NotAfter (Get-Date).AddYears(3)
-  if ($null -eq $certificate -or [string]::IsNullOrWhiteSpace([string]$certificate.Thumbprint)) {
-    throw '无法创建临时的 AEONQUILL 自签名证书。'
-  }
+  $certificateThumbprint = New-TemporaryCodeSigningCertificate -ExpectedSigner $SignerName
 
   $signTool = Find-SignTool
-  & $signTool sign /sha1 $certificate.Thumbprint /fd SHA256 /v $sourceSidecar
+  & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $sourceSidecar
   if ($LASTEXITCODE -ne 0) { throw "Sidecar 签名失败：$LASTEXITCODE" }
 
   New-Item -ItemType Directory -Force -Path $signingRoot | Out-Null
   $config = [ordered]@{
     bundle = [ordered]@{
       windows = [ordered]@{
-        certificateThumbprint = [string]$certificate.Thumbprint
+        certificateThumbprint = $certificateThumbprint
         digestAlgorithm = 'sha256'
         timestampUrl = $null
       }
@@ -144,7 +188,7 @@ try {
     $env:AEONQUILL_TAURI_CONFIG = $previousConfig
   }
   Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
-  if ($null -ne $certificate -and -not [string]::IsNullOrWhiteSpace([string]$certificate.Thumbprint)) {
-    Remove-TemporaryCertificate -Thumbprint ([string]$certificate.Thumbprint)
+  if (-not [string]::IsNullOrWhiteSpace($certificateThumbprint)) {
+    Remove-TemporaryCertificate -Thumbprint $certificateThumbprint
   }
 }
