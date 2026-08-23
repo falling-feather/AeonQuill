@@ -69,6 +69,7 @@ import {
   type JobEvent,
 } from '../../lib/videoApi'
 import type { ProcessingJob, RuntimeStatus } from '../../types'
+import { ProductionStudio, type ApprovedProductionStorySource } from './ProductionStudio'
 import './smart-video-workbench.css'
 
 const starterScript = `场景 1：雨夜·旧城书店
@@ -111,7 +112,7 @@ type PlannedShot = {
   shot: StoryProject['scenes'][number]['shots'][number]
 }
 
-type VideoWorkspaceSection = 'source' | 'plan' | 'execution'
+type VideoWorkspaceSection = 'production' | 'source' | 'plan' | 'execution'
 
 const VIDEO_EXECUTION_PRESET_GUIDANCE: Record<VideoExecutionPreset, {
   label: string
@@ -305,11 +306,15 @@ export function SmartVideoWorkbench({
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [latestJobIdByItem, setLatestJobIdByItem] = useState<Record<string, string>>({})
   const [submittedJobIds, setSubmittedJobIds] = useState<string[]>([])
-  const [activeWorkspace, setActiveWorkspace] = useState<VideoWorkspaceSection>('plan')
+  const [activeWorkspace, setActiveWorkspace] = useState<VideoWorkspaceSection>('production')
 
   function revealWorkspace(section: VideoWorkspaceSection) {
     setActiveWorkspace(section)
-    document.getElementById(`aq-video-${section}-workspace`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (section !== 'production') {
+      window.setTimeout(() => {
+        document.getElementById(`aq-video-${section}-workspace`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 0)
+    }
   }
 
   useEffect(() => {
@@ -658,6 +663,28 @@ export function SmartVideoWorkbench({
       ? runtimeStatus.ready ? 'H3 已就绪' : 'H3 依赖缺失'
       : runtimeStatus?.lifecycle?.state === 'starting' ? 'ComfyUI 启动中' : 'ComfyUI 休眠'
 
+  const bridgeProductionSource = (source: ApprovedProductionStorySource) => {
+    try {
+      const next = createPreviewPlan(source.text, source.kind, source.aspectRatio, source.frameStrategy)
+      const nextFirstShotId = next.project.scenes[0]?.shots[0]?.id ?? ''
+      setKind(source.kind)
+      setText(source.text)
+      setAspectRatio(source.aspectRatio)
+      setFrameStrategy(source.frameStrategy)
+      setResult(next)
+      setActiveSceneId(next.project.scenes[0]?.id ?? '')
+      setSelectedShotIds(nextFirstShotId ? [nextFirstShotId] : [])
+      setFrameAssets({})
+      invalidateExecution()
+      setError(null)
+      setExecutionError(null)
+      onPlanReady?.(next)
+      revealWorkspace('plan')
+    } catch (nextError) {
+      setError(errorMessage(nextError))
+    }
+  }
+
   return (
     <section className="aq-video-workbench" aria-label="智能视频工作台">
       <header className="aq-video-header">
@@ -670,7 +697,7 @@ export function SmartVideoWorkbench({
           <span className="aq-video-mode-mark"><Clapperboard size={20} /></span>
           <div>
             <p>AEONQUILL · 智能视频</p>
-            <h1>故事编排与受控执行</h1>
+            <h1>{activeWorkspace === 'production' ? '多智能体制片工作室' : '故事编排与受控执行'}</h1>
           </div>
         </div>
         <div className="aq-video-header-status">
@@ -681,6 +708,10 @@ export function SmartVideoWorkbench({
 
       <div className="aq-video-body">
         <nav className="aq-video-tool-rail" aria-label="智能视频工作区导航">
+          <button type="button" className={activeWorkspace === 'production' ? 'is-active' : ''} aria-current={activeWorkspace === 'production' ? 'page' : undefined} onClick={() => revealWorkspace('production')}>
+            <Users size={19} />
+            <span>制片</span>
+          </button>
           <button type="button" className={activeWorkspace === 'source' ? 'is-active' : ''} aria-current={activeWorkspace === 'source' ? 'page' : undefined} onClick={() => revealWorkspace('source')}>
             <ScrollText size={19} />
             <span>故事</span>
@@ -694,6 +725,13 @@ export function SmartVideoWorkbench({
             <span>执行</span>
           </button>
         </nav>
+        <ProductionStudio
+          active={activeWorkspace === 'production'}
+          runtimeLabel={liveRuntimeLabel}
+          onBridgeToStory={bridgeProductionSource}
+        />
+        {activeWorkspace !== 'production' ? (
+          <>
         <aside className="aq-video-source-panel" aria-label="故事输入">
           <div id="aq-video-source-workspace" className="aq-video-panel-title">
             <span><ScrollText size={17} /> 故事源</span>
@@ -1203,18 +1241,27 @@ export function SmartVideoWorkbench({
             ) : null}
           </section>
         </main>
+          </>
+        ) : null}
       </div>
 
-      <footer className="aq-video-footer">
-        <div>
-          <ShieldCheck size={15} />
-          {selectedShots.length} 个计划镜头 · {readyCount} 个可执行 · {blockedCount} 个阻塞 · {submittedJobs.length} 个已提交 Job
-        </div>
-        <button type="button" onClick={prepareChecklist} disabled={!selectedShots.length || actionBusy !== null}>
-          {actionBusy === 'prepare' ? <Loader2 size={15} className="is-spinning" /> : <ListChecks size={15} />}
-          检查执行依赖
-        </button>
-      </footer>
+      {activeWorkspace === 'production' ? (
+        <footer className="aq-video-footer">
+          <div><ShieldCheck size={15} /> 本地制片状态机 · 节点审批后才会继续，不会假装已调用外部模型或生成成片</div>
+          <button type="button" onClick={() => revealWorkspace('execution')}><ListChecks size={15} /> 查看 H3 执行边界</button>
+        </footer>
+      ) : (
+        <footer className="aq-video-footer">
+          <div>
+            <ShieldCheck size={15} />
+            {selectedShots.length} 个计划镜头 · {readyCount} 个可执行 · {blockedCount} 个阻塞 · {submittedJobs.length} 个已提交 Job
+          </div>
+          <button type="button" onClick={prepareChecklist} disabled={!selectedShots.length || actionBusy !== null}>
+            {actionBusy === 'prepare' ? <Loader2 size={15} className="is-spinning" /> : <ListChecks size={15} />}
+            检查执行依赖
+          </button>
+        </footer>
+      )}
     </section>
   )
 }
