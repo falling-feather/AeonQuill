@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { runtimeDirectory } from './runtime-paths.mjs'
 
-export const OFFLINE_RUNTIME_PACKAGE_ID = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
+export const OFFLINE_RUNTIME_PACKAGE_ID = 'aeonquill-comfyui-h3-cu130-win-x64-v3'
 
 const PACKAGE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{7,79}$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/

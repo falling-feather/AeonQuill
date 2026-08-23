@@ -39,6 +39,10 @@ if ($Mode -eq 'check') {
 Push-Location (Join-Path $aeonquillProjectRoot 'desktop\tauri')
 try {
   $aeonquillTauriArguments = @('build', '--ci')
+  if (-not [string]::IsNullOrWhiteSpace($env:AEONQUILL_TAURI_CONFIG)) {
+    $aeonquillSigningConfig = (Resolve-Path -LiteralPath $env:AEONQUILL_TAURI_CONFIG).Path
+    $aeonquillTauriArguments += @('--config', $aeonquillSigningConfig)
+  }
   if ($Mode -eq 'debug') {
     $aeonquillTauriArguments += @('--debug', '--no-bundle')
   } elseif ($Mode -eq 'release') {

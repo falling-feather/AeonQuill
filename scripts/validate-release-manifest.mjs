@@ -32,9 +32,21 @@ for (const line of checksumLines) {
 if (process.argv.includes('--require-clean')) {
   assert.equal(manifest.source.workingTreeDirty, false, 'Release candidate was staged from a dirty worktree')
 }
-assert.equal(manifest.artifacts[0].signature.valid, false, 'Stage package must not claim an unplanned valid signature')
+const signatures = [
+  manifest.artifacts[0].signature,
+  manifest.components.application.signature,
+  manifest.components.sidecar.signature,
+]
+if (manifest.product.distributionStatus === 'self-signed-test-package') {
+  for (const signature of signatures) {
+    assert.equal(signature.signed, true)
+    assert.match(signature.subject || '', /falling feather制作/u)
+  }
+} else {
+  for (const signature of signatures) assert.equal(signature.signed, false)
+}
 assert.equal(manifest.licensing.publicCommercialReleaseReady, false)
 
 console.log(`✓ Release manifest v${manifest.schemaVersion}: ${metadata.productName} ${metadata.version}`)
 console.log(`✓ ${checksumLines.length} staged files match SHA-256 records`)
-console.log(`✓ Signature ${manifest.artifacts[0].signature.status}; commercial-ready=false`)
+console.log(`✓ Signature ${manifest.product.distributionStatus} (${manifest.artifacts[0].signature.status}); commercial-ready=false`)

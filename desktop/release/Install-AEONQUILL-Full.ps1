@@ -11,8 +11,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$packageId = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
-$productVersion = '0.4.3'
+$packageId = 'aeonquill-comfyui-h3-cu130-win-x64-v3'
+$productVersion = '0.6.0'
+$expectedSigner = 'falling feather制作'
 $payloadRoot = Join-Path $PSScriptRoot "runtime\$packageId"
 $runtimeManifestPath = Join-Path $payloadRoot 'runtime-manifest.json'
 $releaseManifestPath = Join-Path $PSScriptRoot 'offline-release-manifest.json'
@@ -119,8 +120,15 @@ if (
 ) {
   throw '离线发布清单的产品、版本、平台或运行时标识无效。'
 }
-if ([string]$releaseManifest.distributionStatus -ne 'unsigned-local-stage-only') {
+if ([string]$releaseManifest.distributionStatus -ne 'self-signed-local-test') {
   throw '离线发布状态与当前阶段包契约不一致。'
+}
+if (
+  [string]$releaseManifest.creator -ne $expectedSigner -or
+  [string]$releaseManifest.signing.type -ne 'self-signed-authenticode' -or
+  [bool]$releaseManifest.signing.privateKeyIncluded
+) {
+  throw '离线发布签名声明无效。'
 }
 
 $aggregateLines = New-Object Collections.Generic.List[string]
@@ -164,7 +172,7 @@ if (-not $AcceptMiniMaxH3License) {
   }
 }
 
-Write-Host '正在校验离线运行时关键文件（约 40.6 GiB 模型，可能需要数分钟）…'
+Write-Host '正在校验离线运行时关键文件（包含 INT8/FP8 H3 与 SeedVR2，可能需要数分钟）…'
 Test-CriticalFiles -Root $payloadRoot -Manifest $runtimeManifest
 
 $bundleDriveRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($PSScriptRoot))
@@ -258,8 +266,12 @@ $configDirectory = Join-Path $appDataRoot 'config'
 $configPath = Join-Path $configDirectory 'local.json'
 New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
 if (Test-Path -LiteralPath $configPath) {
-  Copy-Item -LiteralPath $configPath -Destination "$configPath.pre-v041.bak" -Force
+  Copy-Item -LiteralPath $configPath -Destination "$configPath.pre-turnkey-v060.bak" -Force
+  $existingConfiguration = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 }
+$comfyUserDirectory = Join-Path $appDataRoot 'data\comfyui\user'
+New-Item -ItemType Directory -Force -Path $comfyUserDirectory | Out-Null
+$databasePath = (Join-Path $comfyUserDirectory 'comfyui.db').Replace('\', '/')
 $configuration = [ordered]@{
   comfyUrl = 'http://127.0.0.1:8188'
   comfyRoot = Join-Path $selectedRuntime 'ComfyUI'
@@ -278,8 +290,12 @@ $configuration = [ordered]@{
   }
   comfyArgs = @(
     'main.py', '--listen', '127.0.0.1', '--port', '8188', '--fast-disk', '--lowvram',
-    '--reserve-vram', '1.5', '--disable-pinned-memory', '--cache-none', '--preview-method', 'none'
+    '--reserve-vram', '1.5', '--disable-pinned-memory', '--cache-none', '--preview-method', 'none',
+    '--database-url', "sqlite:///$databasePath"
   )
+}
+if ($null -ne $existingConfiguration -and -not [string]::IsNullOrWhiteSpace([string]$existingConfiguration.outputDirectory)) {
+  $configuration['outputDirectory'] = [string]$existingConfiguration.outputDirectory
 }
 $temporaryConfig = "$configPath.installing"
 $configJson = $configuration | ConvertTo-Json -Depth 6
@@ -290,6 +306,13 @@ $installerRelativePath = [string]$releaseManifest.app.installer
 $installerArtifact = Get-BoundArtifact -ReleaseManifest $releaseManifest -RelativePath $installerRelativePath
 $installerPath = Join-Path $PSScriptRoot $installerRelativePath
 Test-BoundArtifact -Root $PSScriptRoot -Artifact $installerArtifact
+$installerSignature = Get-AuthenticodeSignature -LiteralPath $installerPath
+if (
+  $null -eq $installerSignature.SignerCertificate -or
+  -not ([string]$installerSignature.SignerCertificate.Subject).Contains($expectedSigner)
+) {
+  throw "安装器未携带预期的 Authenticode 制作者标识：$expectedSigner"
+}
 Write-Host '正在安装 AEONQUILL 应用本体…'
 $install = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$applicationDirectory") -Wait -PassThru
 if ($install.ExitCode -ne 0) {
@@ -310,7 +333,8 @@ $layoutTemporary = "$layoutPath.installing"
 $layoutJson = $layout | ConvertTo-Json -Depth 3
 [IO.File]::WriteAllText($layoutTemporary, $layoutJson + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
 Move-Item -LiteralPath $layoutTemporary -Destination $layoutPath -Force
-Write-Host 'AEONQUILL 完整离线阶段包安装完成。' -ForegroundColor Green
+Write-Host 'AEONQUILL 0.6.0 开箱即用测试包安装完成。' -ForegroundColor Green
+Write-Host "制作者签名：$expectedSigner（自签名，不等同于 Windows 商业受信任证书）"
 Write-Host "应用：$applicationDirectory"
 Write-Host "用户数据：$appDataRoot"
 Write-Host "运行时：$selectedRuntime"

@@ -20,27 +20,40 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "filename": { "type": "string", "pattern": "^[^\\\\/:]+$", "minLength": 1, "maxLength": 180 },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signed", "valid", "status", "subject"],
+      "properties": {
+        "signed": { "type": "boolean" },
+        "valid": { "type": "boolean" },
+        "status": { "type": "string" },
+        "subject": { "type": ["string", "null"] }
+      }
+    },
     "component": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["file", "bytes", "sha256"],
+      "required": ["file", "bytes", "sha256", "signature"],
       "properties": {
         "file": { "$ref": "#/$defs/filename" },
         "bytes": { "type": "integer", "minimum": 1 },
-        "sha256": { "$ref": "#/$defs/sha256" }
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "signature": { "$ref": "#/$defs/signature" }
       }
     },
     "sidecarComponent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["file", "bytes", "sha256", "nodeMajor", "systemNodeRequired", "parentControl"],
+      "required": ["file", "bytes", "sha256", "nodeMajor", "systemNodeRequired", "parentControl", "signature"],
       "properties": {
         "file": { "$ref": "#/$defs/filename" },
         "bytes": { "type": "integer", "minimum": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
         "nodeMajor": { "const": 22 },
         "systemNodeRequired": { "const": false },
-        "parentControl": { "const": "stdio" }
+        "parentControl": { "const": "stdio" },
+        "signature": { "$ref": "#/$defs/signature" }
       }
     }
   },
@@ -58,7 +71,7 @@
         "identifier": { "const": "com.miaohui.desktop" },
         "identifierMigrationStatus": { "const": "legacy-preserved-for-data-continuity" },
         "channel": { "const": "stage" },
-        "distributionStatus": { "const": "unsigned-test-package" }
+        "distributionStatus": { "enum": ["unsigned-test-package", "self-signed-test-package"] }
       }
     },
     "target": {
@@ -106,17 +119,7 @@
           "file": { "$ref": "#/$defs/filename" },
           "bytes": { "type": "integer", "minimum": 10485760 },
           "sha256": { "$ref": "#/$defs/sha256" },
-          "signature": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["signed", "valid", "status", "subject"],
-            "properties": {
-              "signed": { "type": "boolean" },
-              "valid": { "type": "boolean" },
-              "status": { "type": "string" },
-              "subject": { "type": ["string", "null"] }
-            }
-          }
+          "signature": { "$ref": "#/$defs/signature" }
         }
       }
     },

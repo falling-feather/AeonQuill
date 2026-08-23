@@ -15,10 +15,8 @@ const execFileAsync = promisify(execFile)
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const defaultRoot = join(
   projectRoot,
-  '.runtime',
-  'releases',
-  'offline',
-  'AEONQUILL_0.4.3_windows_x64_full',
+  '下载',
+  '光阴砚AEONQUILL-0.6.0-Windows-x64-开箱即用版',
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
 )
@@ -31,8 +29,10 @@ assert.ok(runtime, 'Offline runtime manifest or critical-file validation failed'
 assert.equal(runtime.packageId, OFFLINE_RUNTIME_PACKAGE_ID)
 assert.equal(runtime.manifest.platform, 'windows')
 assert.equal(runtime.manifest.architecture, 'x64')
-assert.equal(runtime.manifest.distributionStatus, 'local-stage-only')
+assert.equal(runtime.manifest.productVersion, '0.6.0')
+assert.equal(runtime.manifest.distributionStatus, 'self-contained-local-test')
 assert.equal(runtime.manifest.licensing.publicCommercialReleaseReady, false)
+assert.equal(runtime.manifest.runtime.standalone, true)
 
 const systemRoot = process.env.SystemRoot || 'C:\\Windows'
 const systemOnlyPath = [
@@ -41,8 +41,8 @@ const systemOnlyPath = [
   join(systemRoot, 'System32', 'Wbem'),
 ].join(';')
 const { stdout: pythonProbe } = await execFileAsync(runtime.pythonPath, ['-c', [
-  'import json,sys,torch,rembg,onnxruntime,segment_anything',
-  'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"cuda":torch.version.cuda,"providers":onnxruntime.get_available_providers()}))',
+  'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,numba',
+  'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"providers":onnxruntime.get_available_providers()}))',
 ].join(';')], {
   cwd: runtime.comfyRoot,
   windowsHide: true,
@@ -60,7 +60,10 @@ const { stdout: pythonProbe } = await execFileAsync(runtime.pythonPath, ['-c', [
 const python = JSON.parse(pythonProbe.trim())
 assert.equal(python.python, runtime.manifest.runtime.pythonVersion)
 assert.equal(python.torch, runtime.manifest.runtime.torchVersion)
+assert.equal(python.torchvision, runtime.manifest.runtime.torchvisionVersion)
+assert.equal(python.torchaudio, runtime.manifest.runtime.torchaudioVersion)
 assert.equal(python.cuda, runtime.manifest.runtime.cudaRuntime)
+assert.equal(python.numpy, runtime.manifest.runtime.numpyVersion)
 assert.ok(python.providers.includes('CUDAExecutionProvider'))
 
 const { stdout: ffmpegVersion } = await execFileAsync(runtime.ffmpegPath, ['-version'], {

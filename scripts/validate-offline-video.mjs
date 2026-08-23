@@ -14,12 +14,11 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const sidecarPath = resolveReleasePaths(metadata).sourceSidecar
 const sourceMode = process.env.AEONQUILL_VIDEO_QA_SOURCE === '1'
-const packageRoot = resolve(process.env.AEONQUILL_VIDEO_QA_RUNTIME || join(
+const rootArgument = process.argv.find((argument) => argument.startsWith('--root='))
+const packageRoot = resolve(rootArgument ? rootArgument.slice('--root='.length) : process.env.AEONQUILL_VIDEO_QA_RUNTIME || join(
   projectRoot,
-  '.runtime',
-  'releases',
-  'offline',
-  `AEONQUILL_${metadata.version}_windows_x64_full`,
+  '下载',
+  `光阴砚AEONQUILL-${metadata.version}-Windows-x64-开箱即用版`,
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
 ))

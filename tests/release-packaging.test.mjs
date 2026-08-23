@@ -35,6 +35,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
   assert.equal(tauriConfig.bundle.useLocalToolsDir, true)
+  assert.equal(tauriConfig.bundle.publisher, 'falling feather制作')
   assert.deepEqual(tauriConfig.bundle.resources, {
     '../../release/INSTALL.zh-CN.md': 'release/INSTALL.zh-CN.md',
     '../../release/LIMITATIONS.zh-CN.md': 'release/LIMITATIONS.zh-CN.md',
@@ -259,7 +260,12 @@ test('release manifest contract is strict, path-safe and stage-only', async () =
       signature: { signed: false, valid: false, status: 'NotSigned', subject: null },
     }],
     components: {
-      application: { file: metadata.appExecutable, bytes: 2_000_000, sha256: hash },
+      application: {
+        file: metadata.appExecutable,
+        bytes: 2_000_000,
+        sha256: hash,
+        signature: { signed: false, valid: false, status: 'NotSigned', subject: null },
+      },
       sidecar: {
         file: metadata.sidecarRuntimeFilename,
         bytes: 30_000_000,
@@ -267,6 +273,7 @@ test('release manifest contract is strict, path-safe and stage-only', async () =
         nodeMajor: 22,
         systemNodeRequired: false,
         parentControl: 'stdio',
+        signature: { signed: false, valid: false, status: 'NotSigned', subject: null },
       },
     },
     externalDependencies: [],
@@ -318,7 +325,7 @@ test('stage package carries installation, limitation, notice and manifest-schema
     'release-manifest.schema.json',
   ]
   const sources = await Promise.all(files.map((file) => readFile(join(projectRoot, 'desktop', 'release', file), 'utf8')))
-  assert.match(sources[0], /未签名阶段测试包/)
+  assert.match(sources[0], /自签名阶段测试包/)
   assert.match(sources[1], /不能标注为正式商业发行版/)
   assert.match(sources[2], /not approved for public commercial release/)
   const schema = JSON.parse(sources[3])
@@ -340,7 +347,9 @@ test('full offline installer binds the application and runtime before installati
     'aggregateSha256',
     'Test-BoundArtifact',
     'Test-CriticalFiles',
-    'unsigned-local-stage-only',
+    'self-signed-local-test',
+    'falling feather制作',
+    'Get-AuthenticodeSignature',
     'AcceptMiniMaxH3License',
     'UsePayloadInPlace',
     'RepairRuntime',
@@ -351,7 +360,7 @@ test('full offline installer binds the application and runtime before installati
     'aeonquill-layout.json',
     'sibling-user-data',
   ]) assert.match(installer, new RegExp(requiredToken))
-  assert.match(installer, /productVersion = '0\.4\.3'/)
+  assert.match(installer, /productVersion = '0\.6\.0'/)
   assert.match(installer, /RemoveLegacyAfterMigration -and \(Test-Path/)
   assert.match(installer, /Start-Process -FilePath \$installerPath/)
   assert.match(installer, /"\/D=\$applicationDirectory"/)

@@ -95,7 +95,19 @@ await Promise.all([
   cp(join(releaseSourceRoot, stagedFiles.schema), join(paths.stageDirectory, stagedFiles.schema)),
 ])
 
-const [installerStats, appStats, sidecarStats, installerHash, appHash, sidecarHash, gitCommit, gitStatus, signature] = await Promise.all([
+const [
+  installerStats,
+  appStats,
+  sidecarStats,
+  installerHash,
+  appHash,
+  sidecarHash,
+  gitCommit,
+  gitStatus,
+  installerSignature,
+  applicationSignature,
+  sidecarSignature,
+] = await Promise.all([
   stat(paths.installer),
   stat(paths.builtApp),
   stat(paths.bundledSidecar),
@@ -105,7 +117,13 @@ const [installerStats, appStats, sidecarStats, installerHash, appHash, sidecarHa
   gitOutput(['rev-parse', 'HEAD']),
   gitOutput(['status', '--porcelain=v1', '--untracked-files=all']),
   inspectAuthenticodeSignature(paths.installer),
+  inspectAuthenticodeSignature(paths.builtApp),
+  inspectAuthenticodeSignature(paths.bundledSidecar),
 ])
+const signedComponents = [installerSignature, applicationSignature, sidecarSignature]
+const selfSigned = signedComponents.every((signature) => (
+  signature.signed && /falling feather制作/u.test(signature.subject || '')
+))
 
 const manifest = {
   schemaVersion: 1,
@@ -117,7 +135,7 @@ const manifest = {
     identifier: metadata.identifier,
     identifierMigrationStatus: metadata.identifierMigrationStatus,
     channel: metadata.channel,
-    distributionStatus: 'unsigned-test-package',
+    distributionStatus: selfSigned ? 'self-signed-test-package' : 'unsigned-test-package',
   },
   target: {
     platform: metadata.platform,
@@ -142,7 +160,7 @@ const manifest = {
       file: stagedFiles.installer,
       bytes: installerStats.size,
       sha256: installerHash,
-      signature,
+      signature: installerSignature,
     },
   ],
   components: {
@@ -150,6 +168,7 @@ const manifest = {
       file: metadata.appExecutable,
       bytes: appStats.size,
       sha256: appHash,
+      signature: applicationSignature,
     },
     sidecar: {
       file: metadata.sidecarRuntimeFilename,
@@ -158,6 +177,7 @@ const manifest = {
       nodeMajor: 22,
       systemNodeRequired: false,
       parentControl: 'stdio',
+      signature: sidecarSignature,
     },
   },
   externalDependencies: [
@@ -174,11 +194,11 @@ const manifest = {
     unresolved: [
       'Complete Node.js transitive third-party notice review',
       'Commercial redistribution review for every optional external processor and model',
-      'Windows code-signing certificate and timestamp policy',
+      'Trusted Windows code-signing certificate and RFC 3161 timestamp policy',
     ],
   },
   excluded: [
-    'code-signing-certificate',
+    'trusted-code-signing-private-key-and-certificate',
     'automatic-updater-and-rollback',
     'ComfyUI-Python-custom-nodes-and-model-weights',
     'cloud-accounts-payments-and-API-credentials',
@@ -214,4 +234,4 @@ await writeFile(
 
 console.log(`✓ AEONQUILL release stage: ${paths.stageDirectory}`)
 console.log(`✓ Installer ${(installerStats.size / 1024 / 1024).toFixed(1)} MiB, SHA-256 ${installerHash}`)
-console.log(`✓ Authenticode: ${signature.status}; source dirty=${Boolean(gitStatus)}`)
+console.log(`✓ Authenticode: installer=${installerSignature.status}, app=${applicationSignature.status}, sidecar=${sidecarSignature.status}; source dirty=${Boolean(gitStatus)}`)

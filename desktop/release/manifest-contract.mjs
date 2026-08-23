@@ -38,6 +38,14 @@ function assertNoAbsolutePaths(value, location = 'manifest') {
   }
 }
 
+function assertSignature(value, location) {
+  assertExactKeys(value, ['signed', 'valid', 'status', 'subject'], location)
+  assert.equal(typeof value.signed, 'boolean')
+  assert.equal(typeof value.valid, 'boolean')
+  assert.equal(typeof value.status, 'string')
+  assert.ok(value.subject === null || typeof value.subject === 'string')
+}
+
 export function validateReleaseManifestShape(manifest, metadata) {
   assertExactKeys(manifest, [
     'schemaVersion',
@@ -53,6 +61,10 @@ export function validateReleaseManifestShape(manifest, metadata) {
     'files',
   ], 'manifest')
   assert.equal(manifest.schemaVersion, 1)
+  assert.ok(
+    ['unsigned-test-package', 'self-signed-test-package'].includes(manifest.product.distributionStatus),
+    'manifest.product.distributionStatus is unsupported',
+  )
   assert.deepEqual(manifest.product, {
     name: metadata.productName,
     displayName: metadata.displayName,
@@ -61,7 +73,7 @@ export function validateReleaseManifestShape(manifest, metadata) {
     identifier: metadata.identifier,
     identifierMigrationStatus: metadata.identifierMigrationStatus,
     channel: metadata.channel,
-    distributionStatus: 'unsigned-test-package',
+    distributionStatus: manifest.product.distributionStatus,
   })
   assert.deepEqual(manifest.target, {
     platform: metadata.platform,
@@ -88,15 +100,12 @@ export function validateReleaseManifestShape(manifest, metadata) {
   assert.equal(installer.file, metadata.installerFilename)
   assert.ok(Number.isSafeInteger(installer.bytes) && installer.bytes > 10 * 1024 * 1024)
   assert.match(installer.sha256, SHA256_PATTERN)
-  assertExactKeys(installer.signature, ['signed', 'valid', 'status', 'subject'], 'manifest.artifacts[0].signature')
-  assert.equal(typeof installer.signature.signed, 'boolean')
-  assert.equal(typeof installer.signature.valid, 'boolean')
-  assert.equal(typeof installer.signature.status, 'string')
+  assertSignature(installer.signature, 'manifest.artifacts[0].signature')
   assertExactKeys(manifest.components, ['application', 'sidecar'], 'manifest.components')
-  assertExactKeys(manifest.components.application, ['file', 'bytes', 'sha256'], 'manifest.components.application')
+  assertExactKeys(manifest.components.application, ['file', 'bytes', 'sha256', 'signature'], 'manifest.components.application')
   assertExactKeys(
     manifest.components.sidecar,
-    ['file', 'bytes', 'sha256', 'nodeMajor', 'systemNodeRequired', 'parentControl'],
+    ['file', 'bytes', 'sha256', 'nodeMajor', 'systemNodeRequired', 'parentControl', 'signature'],
     'manifest.components.sidecar',
   )
   assert.equal(manifest.components.application.file, metadata.appExecutable)
@@ -104,6 +113,21 @@ export function validateReleaseManifestShape(manifest, metadata) {
   assert.equal(manifest.components.sidecar.systemNodeRequired, false)
   assert.match(manifest.components.application.sha256, SHA256_PATTERN)
   assert.match(manifest.components.sidecar.sha256, SHA256_PATTERN)
+  assertSignature(manifest.components.application.signature, 'manifest.components.application.signature')
+  assertSignature(manifest.components.sidecar.signature, 'manifest.components.sidecar.signature')
+  const signatures = [
+    installer.signature,
+    manifest.components.application.signature,
+    manifest.components.sidecar.signature,
+  ]
+  if (manifest.product.distributionStatus === 'self-signed-test-package') {
+    for (const signature of signatures) {
+      assert.equal(signature.signed, true, 'self-signed release components must carry Authenticode signatures')
+      assert.match(signature.subject || '', /falling feather制作/u)
+    }
+  } else {
+    for (const signature of signatures) assert.equal(signature.signed, false)
+  }
   assertExactKeys(
     manifest.files,
     ['installGuide', 'limitations', 'notices', 'schema', 'checksums'],

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
@@ -13,15 +13,15 @@ const execFileAsync = promisify(execFile)
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const sidecarPath = resolveReleasePaths(metadata).sourceSidecar
-const runtimePackageRoot = join(
+const defaultRuntimePackageRoot = join(
   projectRoot,
-  '.runtime',
-  'releases',
-  'offline',
-  `AEONQUILL_${metadata.version}_windows_x64_full`,
+  '下载',
+  `光阴砚AEONQUILL-${metadata.version}-Windows-x64-开箱即用版`,
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
 )
+const rootArgument = process.argv.find((argument) => argument.startsWith('--root='))
+const runtimePackageRoot = resolve(rootArgument ? rootArgument.slice('--root='.length) : defaultRuntimePackageRoot)
 const qaRoot = join(projectRoot, '.runtime', 'qa')
 const reportPath = join(qaRoot, 'offline-sidecar-final.json')
 const sourceImagePath = join(projectRoot, 'src', 'assets', 'sample-summer-character.png')

@@ -7,6 +7,7 @@ import {
   mkdtemp,
   opendir,
   readFile,
+  readdir,
   rename,
   rm,
   stat,
@@ -14,7 +15,6 @@ import {
 } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import {
@@ -25,17 +25,14 @@ import {
 
 const execFileAsync = promisify(execFile)
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
-const runtimeRoot = resolve(projectRoot, '.runtime')
+const internalRuntimeRoot = resolve(projectRoot, '.runtime')
+const downloadRoot = resolve(projectRoot, '下载')
 const lockPath = join(projectRoot, 'desktop', 'runtime', 'runtime-lock.json')
-const downloadsRoot = join(runtimeRoot, 'downloads', 'rel004')
-const defaultOutput = join(
-  runtimeRoot,
-  'releases',
-  'offline',
-  'AEONQUILL_0.4.3_windows_x64_full',
-  'runtime',
-  OFFLINE_RUNTIME_PACKAGE_ID,
-)
+const dependencyCacheRoot = join(internalRuntimeRoot, 'downloads', 'rel012')
+const defaultBaseRuntimeRoot = 'D:\\AEONQUILL-Package\\runtime\\aeonquill-comfyui-h3-cu129-win-x64-v1'
+const defaultCandidateRoot = 'D:\\AEONQUILL-Package\\runtime-candidates\\aeonquill-comfyui-h3-cu130-win-x64-v2'
+const defaultFullRoot = join(downloadRoot, '光阴砚AEONQUILL-0.6.0-Windows-x64-开箱即用版')
+const defaultOutput = join(defaultFullRoot, 'runtime', OFFLINE_RUNTIME_PACKAGE_ID)
 const WEIGHT_EXTENSION = /\.(?:bin|ckpt|onnx|pt|pth|safetensors)$/i
 const GENERIC_EXCLUDED_DIRECTORIES = new Set(['.git', '.github', '__pycache__', '.pytest_cache'])
 const COMFY_EXCLUDED_TOP_LEVEL = new Set([
@@ -49,6 +46,7 @@ const COMFY_EXCLUDED_TOP_LEVEL = new Set([
   'tests-unit',
   'user',
 ])
+const BASE_RUNTIME_PACKAGE_ID = 'aeonquill-comfyui-h3-cu129-win-x64-v1'
 
 function parseArgs(argv) {
   const values = {}
@@ -60,9 +58,16 @@ function parseArgs(argv) {
   return values
 }
 
-function assertRuntimeTarget(target) {
-  const relation = relative(runtimeRoot, resolve(target))
-  assert.ok(relation && !relation.startsWith('..') && !isAbsolute(relation), `Unsafe runtime staging target: ${target}`)
+function isInside(root, target) {
+  const relation = relative(resolve(root), resolve(target))
+  return Boolean(relation) && !relation.startsWith('..') && !isAbsolute(relation)
+}
+
+function assertStagingTarget(target) {
+  assert.ok(
+    isInside(internalRuntimeRoot, target) || isInside(downloadRoot, target),
+    `Unsafe runtime staging target: ${target}`,
+  )
 }
 
 function portablePath(pathname) {
@@ -85,11 +90,6 @@ async function directoryExists(pathname) {
   }
 }
 
-async function loadSourceConfig() {
-  const pathname = join(projectRoot, 'config', 'local.json')
-  return JSON.parse(await readFile(pathname, 'utf8'))
-}
-
 async function gitOutput(directory, args) {
   const { stdout } = await execFileAsync('git.exe', ['-C', directory, ...args], {
     windowsHide: true,
@@ -99,41 +99,10 @@ async function gitOutput(directory, args) {
   return stdout.trim()
 }
 
-async function validateSourceRuntime({ lock, comfyRoot, pythonRoot, ffmpegRoot }) {
-  assert.equal(await gitOutput(comfyRoot, ['rev-parse', 'HEAD']), lock.runtime.comfyuiCommit, 'ComfyUI commit does not match runtime lock')
-  assert.equal(await gitOutput(comfyRoot, ['status', '--porcelain=v1']), '', 'ComfyUI source worktree must be clean')
-  for (const node of lock.customNodes) {
-    const nodeRoot = join(comfyRoot, 'custom_nodes', node.directory)
-    assert.equal(await gitOutput(nodeRoot, ['rev-parse', 'HEAD']), node.commit, `${node.directory} commit does not match runtime lock`)
-    assert.equal(await gitOutput(nodeRoot, ['status', '--porcelain=v1']), '', `${node.directory} source worktree must be clean`)
-  }
-  const pythonPath = join(pythonRoot, 'python.exe')
-  const { stdout: pythonProbe } = await execFileAsync(pythonPath, ['-c', [
-    'import json,sys,torch,rembg,onnxruntime,segment_anything',
-    'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"cuda":torch.version.cuda,"providers":onnxruntime.get_available_providers()}))',
-  ].join(';')], { windowsHide: true, encoding: 'utf8', timeout: 60_000 })
-  const python = JSON.parse(pythonProbe.trim())
-  assert.equal(python.python, lock.runtime.pythonVersion)
-  assert.equal(python.torch, lock.runtime.torchVersion)
-  assert.equal(python.cuda, lock.runtime.cudaRuntime)
-  assert.ok(python.providers.includes('CUDAExecutionProvider'), 'ONNX Runtime CUDA provider is missing')
-  for (const model of lock.models.filter((entry) => entry.path.startsWith('ComfyUI/'))) {
-    const sourcePath = join(dirname(comfyRoot), model.path)
-    const sourceStats = await stat(sourcePath)
-    assert.equal(sourceStats.size, model.bytes, `${model.path} byte size does not match runtime lock`)
-    assert.equal(await sha256File(sourcePath), model.sha256, `${model.path} SHA-256 does not match runtime lock`)
-  }
-  const ffmpegPath = join(ffmpegRoot, 'bin', 'ffmpeg.exe')
-  const { stdout: ffmpegVersion } = await execFileAsync(ffmpegPath, ['-version'], {
-    windowsHide: true,
-    encoding: 'utf8',
-    timeout: 30_000,
-  })
-  assert.match(ffmpegVersion, /8\.0\.1-essentials_build-www\.gyan\.dev/)
-}
-
 function createComfyFilter(comfyRoot, lock) {
-  const allowedNodes = new Set(lock.customNodes.map((entry) => entry.directory))
+  const allowedNodes = new Set(
+    lock.customNodes.filter((entry) => entry.source === 'candidate').map((entry) => entry.directory),
+  )
   const allowedWeights = new Set(
     lock.models
       .filter((entry) => entry.path.startsWith('ComfyUI/models/'))
@@ -152,6 +121,7 @@ function createComfyFilter(comfyRoot, lock) {
     const parts = relativePath.split('/')
     if (parts.some((part) => GENERIC_EXCLUDED_DIRECTORIES.has(part))) return false
     if (COMFY_EXCLUDED_TOP_LEVEL.has(parts[0])) return false
+    if (relativePath === 'extra_model_paths.yaml' || relativePath === 'extra_model_paths.yaml.example') return false
     if (parts[0] === 'custom_nodes') {
       if (parts.length === 1) return true
       if (!allowedNodes.has(parts[1])) return false
@@ -165,80 +135,217 @@ function createComfyFilter(comfyRoot, lock) {
   }
 }
 
-function createPythonFilter(pythonRoot) {
+function createPortableFilter(sourceRoot) {
   return (source) => {
-    const relativePath = portablePath(relative(pythonRoot, source))
+    const relativePath = portablePath(relative(sourceRoot, source))
     if (!relativePath) return true
     const parts = relativePath.split('/')
     if (parts.some((part) => GENERIC_EXCLUDED_DIRECTORIES.has(part))) return false
+    if (parts.includes('pyvenv.cfg')) return false
     return !/\.py[co]$/i.test(relativePath)
   }
 }
 
-async function copyRuntime({ lock, comfyRoot, pythonRoot, ffmpegRoot, destination }) {
-  const layout = offlineRuntimeLayout(destination)
-  console.log('→ Copying frozen ComfyUI core, required nodes and allowlisted weights')
-  await cp(comfyRoot, layout.comfyRoot, {
+async function validateSourceRuntime({ lock, baseRuntimeRoot, candidateRoot, wheelPath }) {
+  const candidateComfyRoot = join(candidateRoot, 'ComfyUI')
+  const candidatePython = join(candidateRoot, '.venv', 'Scripts', 'python.exe')
+  const candidateNodeRoot = join(candidateComfyRoot, 'custom_nodes', 'ComfyUI-MiniMax-H3-Turbo')
+  assert.equal(await gitOutput(candidateComfyRoot, ['rev-parse', 'HEAD']), lock.runtime.comfyuiCommit)
+  assert.equal(await gitOutput(candidateComfyRoot, ['status', '--porcelain=v1']), '', 'Candidate ComfyUI must be clean')
+  const candidateNode = lock.customNodes.find((entry) => entry.source === 'candidate')
+  assert.equal(await gitOutput(candidateNodeRoot, ['rev-parse', 'HEAD']), candidateNode.commit)
+  assert.equal(await gitOutput(candidateNodeRoot, ['status', '--porcelain=v1']), '', 'MiniMax node must be clean')
+
+  const baseManifest = JSON.parse(await readFile(join(baseRuntimeRoot, 'runtime-manifest.json'), 'utf8'))
+  assert.equal(baseManifest.packageId, BASE_RUNTIME_PACKAGE_ID, 'Unexpected base runtime package')
+  const impactInit = 'ComfyUI/custom_nodes/ComfyUI-Impact-Pack/__init__.py'
+  const recordedImpact = baseManifest.criticalFiles.find((entry) => entry.path === impactInit)
+  assert.ok(recordedImpact, 'Base runtime does not bind Impact Pack')
+  assert.equal(await sha256File(join(baseRuntimeRoot, ...impactInit.split('/'))), recordedImpact.sha256)
+
+  const { stdout: candidateProbe } = await execFileAsync(candidatePython, ['-c', [
+    'import json,sys,torch,torchvision,torchaudio',
+    'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda}))',
+  ].join(';')], { windowsHide: true, encoding: 'utf8', timeout: 180_000 })
+  const candidate = JSON.parse(candidateProbe.trim())
+  assert.equal(candidate.python, lock.runtime.pythonVersion)
+  assert.equal(candidate.torch, lock.runtime.torchVersion)
+  assert.equal(candidate.torchvision, lock.runtime.torchvisionVersion)
+  assert.equal(candidate.torchaudio, lock.runtime.torchaudioVersion)
+  assert.equal(candidate.cuda, lock.runtime.cudaRuntime)
+
+  for (const model of lock.models) {
+    const sourcePath = join(baseRuntimeRoot, ...model.path.split('/'))
+    const sourceStats = await stat(sourcePath)
+    assert.equal(sourceStats.size, model.bytes, `${model.path} byte size does not match lock`)
+    assert.equal(await sha256File(sourcePath), model.sha256, `${model.path} SHA-256 does not match lock`)
+  }
+  const wheel = lock.pythonPackages.find((entry) => entry.name === 'numpy')
+  assert.ok(wheel)
+  assert.equal(await sha256File(wheelPath), wheel.sha256, 'Pinned NumPy wheel SHA-256 changed')
+}
+
+async function overlayCandidateSitePackages({ baseRuntimeRoot, candidateRoot, destination }) {
+  const sourcePythonRoot = join(baseRuntimeRoot, 'python')
+  const destinationPythonRoot = join(destination, 'python')
+  console.log('→ Copying the portable Python base with image-processing dependencies')
+  await cp(sourcePythonRoot, destinationPythonRoot, {
     recursive: true,
     force: true,
     preserveTimestamps: true,
-    filter: createComfyFilter(comfyRoot, lock),
+    filter: createPortableFilter(sourcePythonRoot),
+  })
+
+  const sourceSitePackages = join(candidateRoot, '.venv', 'Lib', 'site-packages')
+  const destinationSitePackages = join(destinationPythonRoot, 'Lib', 'site-packages')
+  const entries = await readdir(sourceSitePackages, { withFileTypes: true })
+  const candidateDistributions = new Set()
+  for (const entry of entries.filter((item) => item.isDirectory() && item.name.endsWith('.dist-info'))) {
+    const metadata = await readFile(join(sourceSitePackages, entry.name, 'METADATA'), 'utf8').catch(() => '')
+    const packageName = /^Name:\s*(.+)$/mi.exec(metadata)?.[1]?.trim().toLowerCase()
+    if (packageName && packageName !== 'numpy') candidateDistributions.add(packageName)
+  }
+  const destinationEntries = await readdir(destinationSitePackages, { withFileTypes: true })
+  for (const entry of destinationEntries.filter((item) => item.isDirectory() && item.name.endsWith('.dist-info'))) {
+    const metadata = await readFile(join(destinationSitePackages, entry.name, 'METADATA'), 'utf8').catch(() => '')
+    const packageName = /^Name:\s*(.+)$/mi.exec(metadata)?.[1]?.trim().toLowerCase()
+    if (packageName && candidateDistributions.has(packageName)) {
+      await rm(join(destinationSitePackages, entry.name), { recursive: true, force: true })
+    }
+  }
+  console.log(`→ Overlaying ${entries.length} cu130 site-packages entries without venv path inheritance`)
+  for (const entry of entries) {
+    if (/^numpy(?:$|[-.])|^numpy\.libs$/i.test(entry.name)) continue
+    const source = join(sourceSitePackages, entry.name)
+    const target = join(destinationSitePackages, entry.name)
+    await rm(target, { recursive: true, force: true })
+    await cp(source, target, {
+      recursive: entry.isDirectory(),
+      force: true,
+      preserveTimestamps: true,
+      filter: entry.isDirectory() ? createPortableFilter(source) : undefined,
+    })
+  }
+
+  const wheelDirectory = dependencyCacheRoot
+  const pythonPath = join(destinationPythonRoot, 'python.exe')
+  await execFileAsync(pythonPath, [
+    '-m', 'pip', 'install',
+    '--disable-pip-version-check',
+    '--no-input',
+    '--no-index',
+    '--find-links', wheelDirectory,
+    '--force-reinstall',
+    '--no-deps',
+    `numpy==2.2.6`,
+  ], {
+    windowsHide: true,
+    encoding: 'utf8',
+    timeout: 10 * 60_000,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+}
+
+async function copyRuntime({ lock, baseRuntimeRoot, candidateRoot, destination }) {
+  const layout = offlineRuntimeLayout(destination)
+  const candidateComfyRoot = join(candidateRoot, 'ComfyUI')
+  console.log('→ Copying frozen ComfyUI 0.31 core and the cu130 MiniMax node')
+  await cp(candidateComfyRoot, layout.comfyRoot, {
+    recursive: true,
+    force: true,
+    preserveTimestamps: true,
+    filter: createComfyFilter(candidateComfyRoot, lock),
+  })
+
+  const impactSource = join(baseRuntimeRoot, 'ComfyUI', 'custom_nodes', 'ComfyUI-Impact-Pack')
+  const impactDestination = join(layout.comfyRoot, 'custom_nodes', 'ComfyUI-Impact-Pack')
+  await cp(impactSource, impactDestination, {
+    recursive: true,
+    force: true,
+    preserveTimestamps: true,
+    filter: createPortableFilter(impactSource),
   })
   for (const directory of ['input', 'output', 'temp']) {
     await mkdir(join(layout.comfyRoot, directory), { recursive: true })
   }
-  console.log('→ Copying self-contained Python 3.12 / CUDA 12.9 environment')
-  await cp(pythonRoot, join(destination, 'python'), {
-    recursive: true,
-    force: true,
-    preserveTimestamps: true,
-    filter: createPythonFilter(pythonRoot),
+
+  console.log(`→ Copying ${lock.models.length} allowlisted H3, SeedVR2, SAM and rembg weights`)
+  for (const model of lock.models) {
+    const source = join(baseRuntimeRoot, ...model.path.split('/'))
+    const target = join(destination, ...model.path.split('/'))
+    await mkdir(dirname(target), { recursive: true })
+    await cp(source, target, { force: true, preserveTimestamps: true })
+  }
+
+  await overlayCandidateSitePackages({ baseRuntimeRoot, candidateRoot, destination })
+
+  console.log('→ Copying fixed FFmpeg and Real-ESRGAN portable tools')
+  for (const relativePath of [
+    'tools/ffmpeg/bin/ffmpeg.exe',
+    'tools/ffmpeg/bin/ffprobe.exe',
+    'tools/ffmpeg/LICENSE',
+    'tools/ffmpeg/README.txt',
+    'tools/realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe',
+    'tools/realesrgan-ncnn-vulkan/vcomp140.dll',
+    'tools/realesrgan-ncnn-vulkan/README_windows.md',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x2.bin',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x2.param',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x3.bin',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x3.param',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x4.bin',
+    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x4.param',
+    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus-anime.bin',
+    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus-anime.param',
+    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus.bin',
+    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus.param',
+  ]) {
+    const source = join(baseRuntimeRoot, ...relativePath.split('/'))
+    const target = join(destination, ...relativePath.split('/'))
+    await mkdir(dirname(target), { recursive: true })
+    await cp(source, target, { force: true, preserveTimestamps: true })
+  }
+
+  const sourceLicenses = join(baseRuntimeRoot, 'licenses')
+  const destinationLicenses = join(destination, 'licenses')
+  await cp(sourceLicenses, destinationLicenses, { recursive: true, force: true, preserveTimestamps: true })
+  await cp(
+    join(sourceLicenses, 'H3-Turbo-Apache-2.0.txt'),
+    join(destinationLicenses, 'SeedVR2-Apache-2.0.txt'),
+    { force: true },
+  )
+}
+
+async function validateStagedPython(lock, destination) {
+  const layout = offlineRuntimeLayout(destination)
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows'
+  const systemOnlyPath = [join(systemRoot, 'System32'), systemRoot, join(systemRoot, 'System32', 'Wbem')].join(';')
+  const { stdout } = await execFileAsync(layout.pythonPath, ['-c', [
+    'import json,sys,torch,torchvision,torchaudio,numpy,scipy,cv2,rembg,onnxruntime,segment_anything,PIL,aiohttp,numba',
+    'print(json.dumps({"python":sys.version.split()[0],"torch":torch.__version__,"torchvision":torchvision.__version__,"torchaudio":torchaudio.__version__,"cuda":torch.version.cuda,"numpy":numpy.__version__,"scipy":scipy.__version__,"cv2":cv2.__version__,"numba":numba.__version__,"onnxruntime":onnxruntime.__version__,"providers":onnxruntime.get_available_providers()}))',
+  ].join(';')], {
+    cwd: layout.comfyRoot,
+    windowsHide: true,
+    encoding: 'utf8',
+    timeout: 180_000,
+    env: {
+      SystemRoot: systemRoot,
+      WINDIR: systemRoot,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      PATH: systemOnlyPath,
+      PATHEXT: process.env.PATHEXT,
+      PYTHONNOUSERSITE: '1',
+    },
   })
-  console.log('→ Copying FFmpeg, rembg model and Real-ESRGAN portable runtime')
-  for (const filename of ['ffmpeg.exe', 'ffprobe.exe']) {
-    await mkdir(join(destination, 'tools', 'ffmpeg', 'bin'), { recursive: true })
-    await cp(join(ffmpegRoot, 'bin', filename), join(destination, 'tools', 'ffmpeg', 'bin', filename))
-  }
-  for (const filename of ['LICENSE', 'README.txt']) {
-    await cp(join(ffmpegRoot, filename), join(destination, 'tools', 'ffmpeg', filename))
-  }
-  const u2netSource = join(downloadsRoot, 'u2netp.onnx')
-  await mkdir(layout.rembgModelsPath, { recursive: true })
-  await cp(u2netSource, join(layout.rembgModelsPath, 'u2netp.onnx'))
-  const realEsrganSource = join(downloadsRoot, 'realesrgan-v0.2.5.0')
-  await mkdir(layout.realEsrganModelsPath, { recursive: true })
-  for (const filename of ['realesrgan-ncnn-vulkan.exe', 'vcomp140.dll', 'README_windows.md']) {
-    await cp(join(realEsrganSource, filename), join(dirname(layout.realEsrganModelsPath), filename))
-  }
-  const realEsrganModelFiles = [
-    'realesr-animevideov3-x2.bin',
-    'realesr-animevideov3-x2.param',
-    'realesr-animevideov3-x3.bin',
-    'realesr-animevideov3-x3.param',
-    'realesr-animevideov3-x4.bin',
-    'realesr-animevideov3-x4.param',
-    'realesrgan-x4plus-anime.bin',
-    'realesrgan-x4plus-anime.param',
-    'realesrgan-x4plus.bin',
-    'realesrgan-x4plus.param',
-  ]
-  for (const filename of realEsrganModelFiles) {
-    await cp(join(realEsrganSource, 'models', filename), join(layout.realEsrganModelsPath, filename))
-  }
-  const licensesDirectory = join(destination, 'licenses')
-  await mkdir(licensesDirectory, { recursive: true })
-  const licenseCopies = [
-    [join(comfyRoot, 'LICENSE'), 'ComfyUI-GPL-3.0.txt'],
-    [join(comfyRoot, 'custom_nodes', 'ComfyUI-Impact-Pack', 'LICENSE.txt'), 'ComfyUI-Impact-Pack-GPL-3.0.txt'],
-    [join(downloadsRoot, 'H3-Turbo-LICENSE.txt'), 'H3-Turbo-Apache-2.0.txt'],
-    [join(downloadsRoot, 'MiniMax-H3-LICENSE.txt'), 'MiniMax-H3-Community-License.txt'],
-    [join(downloadsRoot, 'Python-3.12.10-LICENSE.txt'), 'Python-3.12.10-License.txt'],
-    [join(downloadsRoot, 'Real-ESRGAN-LICENSE.txt'), 'Real-ESRGAN-BSD-3-Clause.txt'],
-    [join(downloadsRoot, 'rembg-LICENSE.txt'), 'rembg-MIT.txt'],
-    [join(downloadsRoot, 'Segment-Anything-LICENSE.txt'), 'Segment-Anything-Apache-2.0.txt'],
-    [join(ffmpegRoot, 'LICENSE'), 'FFmpeg-GPL-3.0.txt'],
-  ]
-  for (const [source, filename] of licenseCopies) await cp(source, join(licensesDirectory, filename))
+  const probe = JSON.parse(stdout.trim())
+  assert.equal(probe.python, lock.runtime.pythonVersion)
+  assert.equal(probe.torch, lock.runtime.torchVersion)
+  assert.equal(probe.torchvision, lock.runtime.torchvisionVersion)
+  assert.equal(probe.torchaudio, lock.runtime.torchaudioVersion)
+  assert.equal(probe.cuda, lock.runtime.cudaRuntime)
+  assert.equal(probe.numpy, lock.runtime.numpyVersion)
+  assert.ok(probe.providers.includes('CUDAExecutionProvider'))
+  return probe
 }
 
 async function listFiles(root) {
@@ -278,11 +385,10 @@ async function createInventory(root) {
   })
   await Promise.all(workers)
   const lines = entries.map((entry) => `${entry.sha256}  ${entry.path}`)
-  const treeSha256 = createHash('sha256').update(`${lines.join('\n')}\n`).digest('hex')
   return {
     entries,
     lines,
-    treeSha256,
+    treeSha256: createHash('sha256').update(`${lines.join('\n')}\n`).digest('hex'),
     bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
   }
 }
@@ -295,54 +401,46 @@ function criticalPaths(lock) {
     'ComfyUI/custom_nodes/ComfyUI-Impact-Pack/__init__.py',
     'python/python.exe',
     'python/python312.dll',
+    'python/Lib/site-packages/torch/__init__.py',
+    'python/Lib/site-packages/numpy/__init__.py',
+    'python/Lib/site-packages/rembg/__init__.py',
     'tools/ffmpeg/bin/ffmpeg.exe',
     'tools/ffmpeg/bin/ffprobe.exe',
     'tools/realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x2.bin',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x2.param',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x3.bin',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x3.param',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x4.bin',
-    'tools/realesrgan-ncnn-vulkan/models/realesr-animevideov3-x4.param',
-    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus-anime.bin',
-    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus-anime.param',
-    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus.bin',
-    'tools/realesrgan-ncnn-vulkan/models/realesrgan-x4plus.param',
     ...lock.models.map((entry) => entry.path),
   ]
 }
 
 const args = parseArgs(process.argv.slice(2))
-const [lock, localConfig] = await Promise.all([
-  readFile(lockPath, 'utf8').then(JSON.parse),
-  loadSourceConfig(),
-])
+const lock = JSON.parse(await readFile(lockPath, 'utf8'))
 assert.equal(lock.packageId, OFFLINE_RUNTIME_PACKAGE_ID)
-const comfyRoot = resolve(args['comfy-root'] || localConfig.comfyRoot)
-const pythonRoot = resolve(args['python-root'] || dirname(localConfig.pythonPath))
-const ffmpegRoot = resolve(args['ffmpeg-root'] || dirname(dirname(localConfig.imageTools?.ffmpegPath || '')))
+const baseRuntimeRoot = resolve(args['base-runtime-root'] || process.env.AEONQUILL_BASE_RUNTIME_SOURCE || defaultBaseRuntimeRoot)
+const candidateRoot = resolve(args['candidate-root'] || process.env.AEONQUILL_CU130_CANDIDATE_SOURCE || defaultCandidateRoot)
 const output = resolve(args.output || defaultOutput)
-assertRuntimeTarget(output)
+const numpyPackage = lock.pythonPackages.find((entry) => entry.name === 'numpy')
+const wheelPath = join(dependencyCacheRoot, numpyPackage.wheel)
+assertStagingTarget(output)
 await mkdir(dirname(output), { recursive: true })
-for (const pathname of [comfyRoot, pythonRoot, ffmpegRoot]) {
+for (const pathname of [baseRuntimeRoot, candidateRoot]) {
   assert.equal(await directoryExists(pathname), true, `Runtime source directory is missing: ${pathname}`)
 }
 for (const pathname of [
-  join(downloadsRoot, 'u2netp.onnx'),
-  join(downloadsRoot, 'realesrgan-v0.2.5.0', 'realesrgan-ncnn-vulkan.exe'),
-  join(downloadsRoot, 'MiniMax-H3-LICENSE.txt'),
-]) assert.equal(await fileExists(pathname), true, `Fetched runtime dependency is missing: ${pathname}`)
+  join(candidateRoot, 'ComfyUI', 'main.py'),
+  join(candidateRoot, '.venv', 'Scripts', 'python.exe'),
+  join(baseRuntimeRoot, 'python', 'python.exe'),
+  wheelPath,
+]) assert.equal(await fileExists(pathname), true, `Required runtime dependency is missing: ${pathname}`)
 
-console.log(`→ Validating REL-004 source runtime against ${lock.packageId}`)
-await validateSourceRuntime({ lock, comfyRoot, pythonRoot, ffmpegRoot })
-const sourceU2net = lock.models.find((entry) => entry.path === 'models/rembg/u2netp.onnx')
-assert.equal(await sha256File(join(downloadsRoot, 'u2netp.onnx')), sourceU2net.sha256)
-
+console.log(`→ Validating standalone runtime sources for ${lock.packageId}`)
+await validateSourceRuntime({ lock, baseRuntimeRoot, candidateRoot, wheelPath })
 const temporary = await mkdtemp(join(dirname(output), `${OFFLINE_RUNTIME_PACKAGE_ID}.building-`))
-assertRuntimeTarget(temporary)
+assertStagingTarget(temporary)
 try {
-  await copyRuntime({ lock, comfyRoot, pythonRoot, ffmpegRoot, destination: temporary })
-  console.log('→ Hashing complete offline runtime inventory')
+  await copyRuntime({ lock, baseRuntimeRoot, candidateRoot, destination: temporary })
+  const pythonProbe = await validateStagedPython(lock, temporary)
+  console.log(`✓ Portable Python probe: Torch ${pythonProbe.torch} · CUDA ${pythonProbe.cuda} · NumPy ${pythonProbe.numpy}`)
+
+  console.log('→ Hashing complete standalone runtime inventory')
   const inventory = await createInventory(temporary)
   const byPath = new Map(inventory.entries.map((entry) => [entry.path, entry]))
   const criticalFiles = criticalPaths(lock).map((pathname) => {
@@ -365,6 +463,10 @@ try {
     createdAt: new Date().toISOString(),
     runtime: lock.runtime,
     entrypoints: lock.entrypoints,
+    customNodes: lock.customNodes,
+    models: lock.models,
+    tools: lock.tools,
+    pythonPackages: lock.pythonPackages,
     criticalFiles,
     inventory: {
       file: 'runtime-SHA256SUMS.txt',
@@ -379,7 +481,7 @@ try {
   await writeFile(join(temporary, 'runtime-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   await rm(output, { recursive: true, force: true })
   await rename(temporary, output)
-  console.log(`✓ Offline runtime: ${output}`)
+  console.log(`✓ Standalone runtime: ${output}`)
   console.log(`✓ ${(inventory.bytes / 1024 ** 3).toFixed(2)} GiB · ${inventory.entries.length} files · tree ${inventory.treeSha256}`)
 } catch (error) {
   await rm(temporary, { recursive: true, force: true }).catch(() => undefined)

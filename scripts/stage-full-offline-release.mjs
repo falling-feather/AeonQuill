@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
@@ -13,23 +13,26 @@ import {
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const releasePaths = resolveReleasePaths(metadata)
-const runtimeRoot = resolve(projectRoot, '.runtime')
 const fullRoot = join(
-  runtimeRoot,
-  'releases',
-  'offline',
-  `AEONQUILL_${metadata.version}_windows_x64_full`,
+  projectRoot,
+  '下载',
+  `光阴砚AEONQUILL-${metadata.version}-Windows-x64-开箱即用版`,
 )
 const runtimePackageRoot = join(fullRoot, 'runtime', OFFLINE_RUNTIME_PACKAGE_ID)
 const sourceReleaseRoot = join(projectRoot, 'desktop', 'release')
 
 function assertRuntimeTarget(target) {
-  const relation = relative(runtimeRoot, resolve(target))
+  const allowedRoot = resolve(projectRoot, '下载')
+  const relation = relative(allowedRoot, resolve(target))
   assert.ok(relation && !relation.startsWith('..') && !isAbsolute(relation), `Unsafe offline release target: ${target}`)
 }
 
 assertRuntimeTarget(fullRoot)
 await mkdir(fullRoot, { recursive: true })
+for (const entry of await readdir(fullRoot, { withFileTypes: true })) {
+  if (entry.name === 'runtime') continue
+  await rm(join(fullRoot, entry.name), { recursive: true, force: true })
+}
 const runtime = await probeOfflineRuntimePackage({ packageRoot: runtimePackageRoot, verifyCriticalHashes: true })
 assert.ok(runtime, 'Validated offline runtime payload is missing; run npm run stage:desktop:runtime first')
 assert.equal(runtime.productVersion, metadata.version)
@@ -38,6 +41,9 @@ const appManifestPath = join(releasePaths.stageDirectory, 'release-manifest.json
 const appManifest = JSON.parse(await readFile(appManifestPath, 'utf8'))
 assert.equal(appManifest.product.version, metadata.version)
 assert.equal(appManifest.source.workingTreeDirty, false, 'Full offline release requires a clean application candidate')
+assert.equal(appManifest.product.distributionStatus, 'self-signed-test-package')
+assert.equal(appManifest.artifacts[0].signature.signed, true)
+assert.match(appManifest.artifacts[0].signature.subject || '', /falling feather制作/u)
 
 const stagedAppFiles = await readdir(releasePaths.stageDirectory, { withFileTypes: true })
 for (const entry of stagedAppFiles) {
@@ -53,6 +59,11 @@ for (const filename of [
 const boundFiles = [
   metadata.installerFilename,
   'release-manifest.json',
+  'SHA256SUMS.txt',
+  'INSTALL.zh-CN.md',
+  'LIMITATIONS.zh-CN.md',
+  'THIRD-PARTY-NOTICES.md',
+  'release-manifest.schema.json',
   'Install-AEONQUILL-Full.ps1',
   'Install-AEONQUILL-Full.cmd',
   'OFFLINE-FULL-INSTALL.zh-CN.md',
@@ -70,7 +81,15 @@ const manifest = {
   schemaVersion: 1,
   product: { name: 'AEONQUILL', version: metadata.version },
   target: { platform: 'windows', architecture: 'x64', format: 'split-offline-bundle' },
-  distributionStatus: 'unsigned-local-stage-only',
+  distributionStatus: 'self-signed-local-test',
+  creator: 'falling feather制作',
+  signing: {
+    type: 'self-signed-authenticode',
+    subject: appManifest.artifacts[0].signature.subject,
+    trustedByWindows: false,
+    buildMachineStatus: appManifest.artifacts[0].signature.status,
+    privateKeyIncluded: false,
+  },
   app: {
     installer: metadata.installerFilename,
     releaseManifest: 'release-manifest.json',

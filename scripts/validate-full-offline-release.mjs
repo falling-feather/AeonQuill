@@ -10,15 +10,19 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const fullRoot = join(
   projectRoot,
-  '.runtime',
-  'releases',
-  'offline',
-  `AEONQUILL_${metadata.version}_windows_x64_full`,
+  '下载',
+  `光阴砚AEONQUILL-${metadata.version}-Windows-x64-开箱即用版`,
 )
 const manifest = JSON.parse(await readFile(join(fullRoot, 'offline-release-manifest.json'), 'utf8'))
 assert.equal(manifest.schemaVersion, 1)
 assert.deepEqual(manifest.product, { name: 'AEONQUILL', version: metadata.version })
-assert.equal(manifest.distributionStatus, 'unsigned-local-stage-only')
+assert.equal(manifest.distributionStatus, 'self-signed-local-test')
+assert.equal(manifest.creator, 'falling feather制作')
+assert.equal(manifest.signing.type, 'self-signed-authenticode')
+assert.match(manifest.signing.subject, /falling feather制作/u)
+assert.equal(manifest.signing.trustedByWindows, false)
+assert.equal(typeof manifest.signing.buildMachineStatus, 'string')
+assert.equal(manifest.signing.privateKeyIncluded, false)
 assert.equal(manifest.licensing.publicCommercialReleaseReady, false)
 assert.equal(manifest.install.systemNodeRequired, false)
 assert.equal(manifest.install.systemPythonRequired, false)

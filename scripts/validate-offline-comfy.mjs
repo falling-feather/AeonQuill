@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -11,15 +11,15 @@ import { REQUIRED_NODE_TYPES } from '../server/workflow-builder.mjs'
 
 const execFileAsync = promisify(execFile)
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
-const packageRoot = join(
+const defaultPackageRoot = join(
   projectRoot,
-  '.runtime',
-  'releases',
-  'offline',
-  'AEONQUILL_0.4.3_windows_x64_full',
+  '下载',
+  '光阴砚AEONQUILL-0.6.0-Windows-x64-开箱即用版',
   'runtime',
   OFFLINE_RUNTIME_PACKAGE_ID,
 )
+const rootArgument = process.argv.find((argument) => argument.startsWith('--root='))
+const packageRoot = resolve(rootArgument ? rootArgument.slice('--root='.length) : defaultPackageRoot)
 const qaRoot = join(projectRoot, '.runtime', 'qa')
 const reportPath = join(qaRoot, 'offline-comfy-final.json')
 
@@ -116,6 +116,7 @@ try {
     '--output-directory', join(runRoot, 'output'),
     '--temp-directory', join(runRoot, 'temp'),
     '--user-directory', join(runRoot, 'user'),
+    '--database-url', `sqlite:///${join(runRoot, 'user', 'comfyui.db').replaceAll('\\', '/')}`,
   ], {
     cwd: runtime.comfyRoot,
     windowsHide: true,

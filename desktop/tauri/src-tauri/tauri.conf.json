@@ -17,8 +17,8 @@
     "active": true,
     "useLocalToolsDir": true,
     "targets": ["nsis"],
-    "publisher": "AEONQUILL Project",
-    "copyright": "Copyright © 2026 AEONQUILL contributors",
+    "publisher": "falling feather制作",
+    "copyright": "Copyright © 2026 falling feather制作",
     "shortDescription": "Local-first image, pixel art and AI video creative workstation",
     "longDescription": "光阴砚 AEONQUILL brings image editing, pixel-art creation and controlled local video workflows into one local-first creative workstation.",
     "icon": [

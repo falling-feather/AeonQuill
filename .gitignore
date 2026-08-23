@@ -7,6 +7,7 @@ dist/
 .codex/
 .runtime/
 .runtime-qa/
+下载/
 config/local.json
 vite.config.js
 vite.config.d.ts
