@@ -2186,7 +2186,7 @@
   z-index: 4;
   top: 58px;
   right: 0;
-  width: 168px;
+  width: 186px;
   padding: 5px;
   border: 1px solid var(--aq-line-strong);
   border-radius: 7px;
@@ -2212,6 +2212,12 @@
 
 .aq-project-action-menu button { cursor: pointer; }
 .aq-project-action-menu button:hover { background: var(--aq-paper-soft); color: var(--aq-ink); }
+
+.aq-project-action-menu__modes {
+  margin-bottom: 5px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--aq-line);
+}
 
 .aq-project-empty {
   min-height: 270px;

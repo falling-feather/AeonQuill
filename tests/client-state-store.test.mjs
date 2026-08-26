@@ -6,6 +6,7 @@ import test from 'node:test'
 import { mkdtemp } from 'node:fs/promises'
 import { ClientStateStore } from '../server/client-state-store.mjs'
 import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
+import { createProjectCatalog, createWorkspaceProject, serializeProjectCatalog } from '../src/lib/project/projectCatalog.mjs'
 import { serializeSmartVideoSession } from '../src/shell/productShellState.mjs'
 
 async function withStore(run) {
@@ -21,7 +22,7 @@ async function withStore(run) {
   }
 }
 
-test('client state store round-trips strict shell, pixel and smart-video state', async () => {
+test('client state store round-trips strict shell, project catalog, pixel and smart-video state', async () => {
   await withStore(async (store) => {
     const shellValue = JSON.stringify({
       version: 1,
@@ -45,12 +46,19 @@ test('client state store round-trips strict shell, pixel and smart-video state',
       sceneCount: 1,
       taskCount: 3,
     })
+    const projectCatalogValue = serializeProjectCatalog(createWorkspaceProject(
+      createProjectCatalog(),
+      { title: '纸上光阴', initialModeId: 'balanced' },
+      { now: 1_723_600_000_000, projectId: 'project-7', documentId: 'balanced-7' },
+    ).catalog)
 
     await store.put('shell-preferences', shellValue)
+    await store.put('project-catalog', projectCatalogValue)
     await store.put('pixel-document', pixelValue)
     await store.put('smart-video-session', videoValue)
 
     assert.deepEqual(JSON.parse((await store.get('shell-preferences')).value), JSON.parse(shellValue))
+    assert.deepEqual(JSON.parse((await store.get('project-catalog')).value), JSON.parse(projectCatalogValue))
     assert.deepEqual(JSON.parse((await store.get('pixel-document')).value), JSON.parse(pixelValue))
     assert.deepEqual(JSON.parse((await store.get('smart-video-session')).value), JSON.parse(videoValue))
   })
@@ -65,6 +73,12 @@ test('client state store rejects unknown kinds, unknown fields and oversize valu
       balancedProjectId: 'local-project',
       secretPath: 'C:\\Users\\private',
     })), { code: 'UNKNOWN_CLIENT_STATE_FIELD' })
+    await assert.rejects(() => store.put('project-catalog', JSON.stringify({
+      schemaVersion: 1,
+      revision: 0,
+      projects: [],
+      privatePath: 'D:\\private',
+    })), { code: 'INVALID_CLIENT_STATE' })
     await assert.rejects(() => store.put('shell-preferences', 'x'.repeat(64 * 1024 + 1)), {
       code: 'CLIENT_STATE_TOO_LARGE',
       status: 413,

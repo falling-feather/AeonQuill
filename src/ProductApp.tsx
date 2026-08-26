@@ -108,6 +108,7 @@ type ProductNotice = {
 
 const PIXEL_STORAGE_KEY = 'aeonquill:pixel-document:v1'
 const PROJECT_CATALOG_STORAGE_KEY = 'aeonquill:project-catalog:v1'
+const PROJECT_CATALOG_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
 
 type ProjectCatalogSnapshot = {
   catalog: ProjectCatalog
@@ -142,6 +143,17 @@ function videoStorageKey(documentId?: string) {
   return documentId ? `${SMART_VIDEO_SESSION_KEY}:${documentId}` : SMART_VIDEO_SESSION_KEY
 }
 
+function hasCatalogDocument(catalog: ProjectCatalog, documentId: string) {
+  return catalog.projects.some((project) => project.documents.some((document) => document.id === documentId))
+}
+
+function availableLegacyProjectId(catalog: ProjectCatalog, base: string) {
+  if (!catalog.projects.some((project) => project.id === base)) return base
+  let suffix = 2
+  while (catalog.projects.some((project) => project.id === `${base}-${suffix}`)) suffix += 1
+  return `${base}-${suffix}`
+}
+
 function readProjectCatalog(): ProjectCatalogSnapshot {
   try {
     const catalog = deserializeProjectCatalog(localStorage.getItem(PROJECT_CATALOG_STORAGE_KEY))
@@ -154,39 +166,54 @@ function readProjectCatalog(): ProjectCatalogSnapshot {
   }
 }
 
-function readPixelDraft(storageKey: string = PIXEL_STORAGE_KEY): PixelDraftSnapshot {
-  try {
-    const stored = localStorage.getItem(storageKey)
-    if (!stored) return { status: 'empty' }
-    const document = deserializePixelDocument(stored)
-    return isMeaningfulPixelDraft(document)
-      ? { status: 'ready', document }
-      : { status: 'empty' }
-  } catch {
-    return {
-      status: 'error',
-      error: '现有像素草稿未通过格式校验。原数据仍保留，可重试读取或明确开始新草稿。',
+function readPixelDraft(storageKey: string = PIXEL_STORAGE_KEY, expectedDocumentId?: string): PixelDraftSnapshot {
+  let invalid = false
+  const keys = storageKey === PIXEL_STORAGE_KEY ? [storageKey] : [storageKey, PIXEL_STORAGE_KEY]
+  for (const key of keys) {
+    try {
+      const stored = localStorage.getItem(key)
+      if (!stored) continue
+      const document = deserializePixelDocument(stored)
+      if (expectedDocumentId && document.id !== expectedDocumentId) continue
+      return isMeaningfulPixelDraft(document)
+        ? { status: 'ready', document }
+        : { status: 'empty' }
+    } catch {
+      invalid = true
     }
   }
+  return invalid
+    ? {
+        status: 'error',
+        error: '现有像素草稿未通过格式校验。原数据仍保留，可重试读取或明确开始新草稿。',
+      }
+    : { status: 'empty' }
 }
 
-function readVideoSession(storageKey: string = SMART_VIDEO_SESSION_KEY): VideoSessionSnapshot {
-  try {
-    const stored = sessionStorage.getItem(storageKey)
-    if (!stored) return { status: 'empty' }
-    const session = parseSmartVideoSession(stored)
-    return session
-      ? { status: 'ready', session }
-      : {
-          status: 'error',
-          error: '此标签页中的智能视频会话摘要无效。未把它伪装成可恢复项目。',
-        }
-  } catch {
-    return {
-      status: 'error',
-      error: '浏览器拒绝读取智能视频会话存储。当前仍可开始新故事，但刷新后不会恢复。',
+function readVideoSession(storageKey: string = SMART_VIDEO_SESSION_KEY, expectedDocumentId?: string): VideoSessionSnapshot {
+  let invalid = false
+  const keys = storageKey === SMART_VIDEO_SESSION_KEY ? [storageKey] : [storageKey, SMART_VIDEO_SESSION_KEY]
+  for (const key of keys) {
+    try {
+      const stored = sessionStorage.getItem(key)
+      if (!stored) continue
+      const session = parseSmartVideoSession(stored)
+      if (!session) {
+        invalid = true
+        continue
+      }
+      if (expectedDocumentId && session.projectId !== expectedDocumentId) continue
+      return { status: 'ready', session }
+    } catch {
+      invalid = true
     }
   }
+  return invalid
+    ? {
+        status: 'error',
+        error: '此标签页中的智能视频会话摘要无效。原数据仍保留，不会被伪装成项目。',
+      }
+    : { status: 'empty' }
 }
 
 function formatBytes(value?: number) {
@@ -493,16 +520,20 @@ export default function ProductApp() {
   })
   const [pixelDraft, setPixelDraft] = useState<PixelDraftSnapshot>(initialPixelDraft.current)
   const [videoSession, setVideoSession] = useState<VideoSessionSnapshot>(initialVideoSession.current)
+  const [clientStateReady, setClientStateReady] = useState(false)
   const [entryIntentKey, setEntryIntentKey] = useState<string | null>(null)
   const [modeNotice, setModeNotice] = useState<ProductNotice | null>(null)
   const projectRequestRef = useRef(0)
   const announcedRecoveryRef = useRef<string | null>(null)
+  const legacyBrowserMigrationRef = useRef(false)
   const clientStateHydratedRef = useRef(false)
   const clientStateDirtyRef = useRef(new Set<string>())
   const bridgeReadyRef = useRef(false)
   const projectCatalogRef = useRef(projectCatalog)
   const preferencesRef = useRef(preferences)
   const videoSessionRef = useRef(videoSession)
+  const catalogBridgeSaveTimerRef = useRef<number | undefined>(undefined)
+  const catalogBridgeSaveRef = useRef<string | undefined>(undefined)
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
   const currentRouteKey = routeKey(route)
@@ -534,8 +565,28 @@ export default function ProductApp() {
     videoSessionRef.current = videoSession
   }, [videoSession])
 
+  const queueProjectCatalogBridgeSave = useCallback((serialized: string) => {
+    catalogBridgeSaveRef.current = serialized
+    if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
+    catalogBridgeSaveTimerRef.current = window.setTimeout(() => {
+      catalogBridgeSaveTimerRef.current = undefined
+      const value = catalogBridgeSaveRef.current
+      if (!value || !bridgeReadyRef.current) return
+      void saveClientState('project-catalog', value).then(() => {
+        if (catalogBridgeSaveRef.current !== value) return
+        catalogBridgeSaveRef.current = undefined
+        clientStateDirtyRef.current.delete('project-catalog')
+        setProjectCatalogError(undefined)
+      }).catch(() => {
+        setProjectCatalogError('项目目录仍保留在浏览器副本，但未能写入本机用户数据；请检查桥接后重试。')
+      })
+    }, 260)
+  }, [])
+
   const commitProjectCatalog = useCallback((next: ProjectCatalog) => {
     const serialized = serializeProjectCatalog(next)
+    clientStateDirtyRef.current.add('project-catalog')
+    catalogBridgeSaveRef.current = serialized
     projectCatalogRef.current = next
     setProjectCatalog(next)
     try {
@@ -544,7 +595,62 @@ export default function ProductApp() {
     } catch {
       setProjectCatalogError('项目目录仍保留在当前页面，但浏览器本机存储写入失败。刷新前请勿关闭页面。')
     }
+    if (bridgeReadyRef.current) queueProjectCatalogBridgeSave(serialized)
+  }, [queueProjectCatalogBridgeSave])
+
+  useEffect(() => () => {
+    if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
+    const value = catalogBridgeSaveRef.current
+    if (value && bridgeReadyRef.current) void saveClientState('project-catalog', value).catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    if (!clientStateReady || legacyBrowserMigrationRef.current) return
+    legacyBrowserMigrationRef.current = true
+    let nextCatalog = projectCatalogRef.current
+    let migrated = false
+    const pixel = pixelDraft.document
+    if (
+      pixelDraft.status === 'ready'
+      && pixel
+      && PROJECT_CATALOG_ID_PATTERN.test(pixel.id)
+      && !hasCatalogDocument(nextCatalog, pixel.id)
+    ) {
+      const created = createWorkspaceProject(nextCatalog, {
+        title: pixel.name,
+        description: '从旧像素单例非破坏迁移；原存储键继续保留。',
+        color: 'blue',
+        initialModeId: 'pixel',
+        documentTitle: pixel.name,
+      }, {
+        projectId: availableLegacyProjectId(nextCatalog, 'legacy-pixel-project'),
+        documentId: pixel.id,
+      })
+      nextCatalog = created.catalog
+      migrated = true
+    }
+    const session = videoSession.session
+    if (
+      videoSession.status === 'ready'
+      && session
+      && PROJECT_CATALOG_ID_PATTERN.test(session.projectId)
+      && !hasCatalogDocument(nextCatalog, session.projectId)
+    ) {
+      const created = createWorkspaceProject(nextCatalog, {
+        title: session.title,
+        description: '从旧智能视频会话摘要非破坏迁移；原存储键继续保留。',
+        color: 'violet',
+        initialModeId: 'smart-video',
+        documentTitle: session.title,
+      }, {
+        projectId: availableLegacyProjectId(nextCatalog, 'legacy-video-project'),
+        documentId: session.projectId,
+      })
+      nextCatalog = created.catalog
+      migrated = true
+    }
+    if (migrated) commitProjectCatalog(nextCatalog)
+  }, [clientStateReady, commitProjectCatalog, pixelDraft, videoSession])
 
   const updatePreferences = useCallback((patch: Partial<ShellPreferences>) => {
     setPreferences((current) => {
@@ -696,7 +802,8 @@ export default function ProductApp() {
       fetchClientState('shell-preferences'),
       fetchClientState('pixel-document'),
       fetchClientState('smart-video-session'),
-    ]).then(([shellResult, pixelResult, videoResult]) => {
+      fetchClientState('project-catalog'),
+    ]).then(([shellResult, pixelResult, videoResult, catalogResult]) => {
       if (disposed) return
 
       if (shellResult.status === 'fulfilled') {
@@ -747,14 +854,57 @@ export default function ProductApp() {
           void saveClientState('smart-video-session', serializeSmartVideoSession(initialVideoSession.current.session)).catch(() => undefined)
         }
       }
+
+      if (catalogResult.status === 'fulfilled') {
+        const state = catalogResult.value
+        const current = projectCatalogRef.current
+        if (state) {
+          try {
+            const restored = purgeExpiredProjects(deserializeProjectCatalog(state.value))
+            const currentSerialized = serializeProjectCatalog(current)
+            const restoredSerialized = serializeProjectCatalog(restored)
+            const dirty = clientStateDirtyRef.current.has('project-catalog')
+            if (dirty && currentSerialized === restoredSerialized) {
+              clientStateDirtyRef.current.delete('project-catalog')
+              catalogBridgeSaveRef.current = undefined
+              setProjectCatalogError(undefined)
+            } else if (dirty && current.revision > restored.revision) {
+              queueProjectCatalogBridgeSave(currentSerialized)
+            } else if (dirty) {
+              setProjectCatalogError('项目目录在页面打开期间已于本机发生变化；已保留浏览器副本，未自动覆盖本机数据。')
+            } else if (restored.revision > current.revision) {
+              projectCatalogRef.current = restored
+              setProjectCatalog(restored)
+              try { localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, restoredSerialized) } catch { /* bridge remains canonical */ }
+              setProjectCatalogError(undefined)
+            } else if (current.revision > restored.revision) {
+              queueProjectCatalogBridgeSave(currentSerialized)
+            } else if (currentSerialized !== restoredSerialized) {
+              setProjectCatalogError('浏览器与本机桥接存在同 revision 的项目目录冲突；已保留浏览器副本，未自动覆盖任一侧。')
+            }
+          } catch {
+            setProjectCatalogError('本机桥接返回的项目目录未通过严格格式校验；已保留浏览器副本。')
+          }
+        } else if (!state) {
+          queueProjectCatalogBridgeSave(serializeProjectCatalog(current))
+        }
+      } else {
+        setProjectCatalogError('读取本机项目目录失败；已保留浏览器副本，未执行覆盖。')
+      }
+    }).finally(() => {
+      if (!disposed) setClientStateReady(true)
     })
 
     return () => { disposed = true }
-  }, [runtimeProbe.bridgeReady])
+  }, [queueProjectCatalogBridgeSave, runtimeProbe.bridgeReady])
 
   useEffect(() => {
-    if (route.modeId === 'balanced') return
+    if (!runtimeProbe.checking && !runtimeProbe.bridgeReady) setClientStateReady(true)
+  }, [runtimeProbe.bridgeReady, runtimeProbe.checking])
+
+  useEffect(() => {
     void refreshRuntime()
+    if (route.modeId === 'balanced') return
     const timer = window.setInterval(() => void refreshRuntime(true), 15_000)
     return () => window.clearInterval(timer)
   }, [refreshRuntime, route.modeId])
@@ -795,13 +945,40 @@ export default function ProductApp() {
   }, [activeModeDocument?.id, preferences.balancedProjectId, refreshProject, route.modeId, route.projectId])
 
   useEffect(() => {
+    if (
+      !clientStateReady
+      || projectProbe.status !== 'ready'
+      || !projectProbe.project
+      || projectProbe.project.revision <= 0
+      || !PROJECT_CATALOG_ID_PATTERN.test(projectProbe.project.id)
+      || hasCatalogDocument(projectCatalogRef.current, projectProbe.project.id)
+    ) return
+
+    try {
+      const created = createWorkspaceProject(projectCatalogRef.current, {
+        title: projectProbe.project.title,
+        description: '从旧均衡画布非破坏迁移；原 ProjectStore 文档继续保留。',
+        color: 'amber',
+        initialModeId: 'balanced',
+        documentTitle: projectProbe.project.title,
+      }, {
+        projectId: availableLegacyProjectId(projectCatalogRef.current, 'legacy-balanced-project'),
+        documentId: projectProbe.project.id,
+      })
+      commitProjectCatalog(created.catalog)
+    } catch (error) {
+      setProjectCatalogError(error instanceof Error ? error.message : '旧均衡项目迁移失败')
+    }
+  }, [clientStateReady, commitProjectCatalog, projectProbe.project, projectProbe.status])
+
+  useEffect(() => {
     if (route.modeId !== 'pixel') return
-    setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocument?.id)))
+    setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocument?.id), activeModeDocument?.id))
   }, [activeModeDocument?.id, route.modeId])
 
   useEffect(() => {
     if (route.modeId !== 'smart-video') return
-    setVideoSession(readVideoSession(videoStorageKey(activeModeDocument?.id)))
+    setVideoSession(readVideoSession(videoStorageKey(activeModeDocument?.id), activeModeDocument?.id))
   }, [activeModeDocument?.id, route.modeId])
 
   const retryLocalContexts = useCallback(() => {
@@ -809,8 +986,14 @@ export default function ProductApp() {
     projectCatalogRef.current = snapshot.catalog
     setProjectCatalog(snapshot.catalog)
     setProjectCatalogError(snapshot.error)
-    setPixelDraft(readPixelDraft(activeModeDocument?.modeId === 'pixel' ? pixelStorageKey(activeModeDocument.id) : PIXEL_STORAGE_KEY))
-    setVideoSession(readVideoSession(activeModeDocument?.modeId === 'smart-video' ? videoStorageKey(activeModeDocument.id) : SMART_VIDEO_SESSION_KEY))
+    setPixelDraft(readPixelDraft(
+      activeModeDocument?.modeId === 'pixel' ? pixelStorageKey(activeModeDocument.id) : PIXEL_STORAGE_KEY,
+      activeModeDocument?.modeId === 'pixel' ? activeModeDocument.id : undefined,
+    ))
+    setVideoSession(readVideoSession(
+      activeModeDocument?.modeId === 'smart-video' ? videoStorageKey(activeModeDocument.id) : SMART_VIDEO_SESSION_KEY,
+      activeModeDocument?.modeId === 'smart-video' ? activeModeDocument.id : undefined,
+    ))
     void refreshProject(preferences.balancedProjectId)
   }, [activeModeDocument, preferences.balancedProjectId, refreshProject])
 
@@ -1108,18 +1291,18 @@ export default function ProductApp() {
       route.modeId === 'pixel' &&
       pixelDraft.status === 'ready' &&
       pixelDraft.document &&
-      (!route.projectId || route.projectId === pixelDraft.document.id)
+      (!(activeModeDocument?.id ?? route.projectId) || (activeModeDocument?.id ?? route.projectId) === pixelDraft.document.id)
     ) message = `已恢复像素草稿“${pixelDraft.document.name}”。`
     if (
       route.modeId === 'smart-video' &&
       videoSession.status === 'ready' &&
       videoSession.session &&
-      (!route.projectId || route.projectId === videoSession.session.projectId)
+      (!(activeModeDocument?.id ?? route.projectId) || (activeModeDocument?.id ?? route.projectId) === videoSession.session.projectId)
     ) message = `已恢复本机剧本输入“${videoSession.session.title}”。`
     if (!message) return
     announcedRecoveryRef.current = currentRouteKey
     setModeNotice({ tone: 'info', message })
-  }, [currentRouteKey, pixelDraft, preferences.balancedProjectId, projectProbe, route.modeId, route.projectId, videoSession])
+  }, [activeModeDocument?.id, currentRouteKey, pixelDraft, preferences.balancedProjectId, projectProbe, route.modeId, route.projectId, videoSession])
 
   const goHome = useCallback(() => navigate({ modeId: 'home' }), [navigate])
 
@@ -1216,7 +1399,7 @@ export default function ProductApp() {
             actionLabel: '重试读取',
             secondaryActionLabel: '返回主页',
           }}
-          onAction={() => setPixelDraft(readPixelDraft())}
+          onAction={() => setPixelDraft(readPixelDraft(pixelStorageKey(requestedProjectId), requestedProjectId))}
           onSecondaryAction={goHome}
           onBack={goHome}
         />
@@ -1233,7 +1416,7 @@ export default function ProductApp() {
             actionLabel: '重试读取',
             secondaryActionLabel: '忽略并开始新草稿',
           }}
-          onAction={() => setPixelDraft(readPixelDraft())}
+          onAction={() => setPixelDraft(readPixelDraft(pixelStorageKey(requestedProjectId), requestedProjectId))}
           onSecondaryAction={() => setEntryIntentKey(currentRouteKey)}
           onBack={goHome}
         />
@@ -1287,7 +1470,7 @@ export default function ProductApp() {
             actionLabel: '重试读取',
             secondaryActionLabel: '返回主页',
           }}
-          onAction={() => setVideoSession(readVideoSession())}
+          onAction={() => setVideoSession(readVideoSession(videoStorageKey(requestedProjectId), requestedProjectId))}
           onSecondaryAction={goHome}
           onBack={goHome}
         />
@@ -1304,7 +1487,7 @@ export default function ProductApp() {
             actionLabel: '重试读取',
             secondaryActionLabel: '忽略并开始新故事',
           }}
-          onAction={() => setVideoSession(readVideoSession())}
+          onAction={() => setVideoSession(readVideoSession(videoStorageKey(requestedProjectId), requestedProjectId))}
           onSecondaryAction={() => setEntryIntentKey(currentRouteKey)}
           onBack={goHome}
         />

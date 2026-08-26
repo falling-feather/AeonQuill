@@ -59,7 +59,7 @@ export async function fetchRuntimeStatus(refresh = false) {
   return api<RuntimeStatus>(`/api/runtime/status${refresh ? '?refresh=1' : ''}`)
 }
 
-export type ClientStateKind = 'shell-preferences' | 'pixel-document' | 'smart-video-session'
+export type ClientStateKind = 'shell-preferences' | 'pixel-document' | 'smart-video-session' | 'project-catalog'
 
 export type ClientStateRecord = {
   kind: ClientStateKind

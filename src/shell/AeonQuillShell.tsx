@@ -238,6 +238,19 @@ export function AeonQuillShell({
                         <button type="button" className="aq-project-more" aria-label={`打开${project.title}项目操作`} aria-expanded={menuOpen} onClick={() => setActionProjectId(menuOpen ? null : project.id)}><MoreHorizontal size={18} /></button>
                         {menuOpen ? (
                           <div className="aq-project-action-menu">
+                            {status === 'active' ? (
+                              <div className="aq-project-action-menu__modes" role="group" aria-label={`${project.title}模式文档`}>
+                                {modes.map((mode) => {
+                                  const Icon = MODE_ICONS[mode.id]
+                                  const exists = documentCount(project, mode.id) > 0
+                                  return (
+                                    <button key={mode.id} type="button" onClick={() => { onOpenProject?.(project.id, mode.id); setActionProjectId(null) }}>
+                                      <Icon size={14} /> {exists ? '打开' : '新建'}{mode.title}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            ) : null}
                             {status === 'active' ? <button type="button" onClick={() => { onProjectStatusChange?.(project.id, 'archived'); setActionProjectId(null) }}><Archive size={14} /> 归档</button> : null}
                             {status !== 'trashed' ? <button type="button" onClick={() => { onProjectStatusChange?.(project.id, 'trashed'); setActionProjectId(null) }}><Trash2 size={14} /> 移入回收站</button> : null}
                             {status === 'trashed' ? <span><Check size={14} /> 15 天后自动清理</span> : null}

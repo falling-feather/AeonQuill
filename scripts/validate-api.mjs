@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { createProjectCatalog, createWorkspaceProject, serializeProjectCatalog } from '../src/lib/project/projectCatalog.mjs'
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
 const sourcePath = fileURLToPath(new URL('../src/assets/sample-summer-character.png', import.meta.url))
@@ -105,7 +106,7 @@ try {
   assert.deepEqual(workflows.modes.map(({ id }) => id), ['text-to-video', 'image-to-video'])
   assert.ok(workflows.presets.some(({ id }) => id === 'delivery720'))
   assert.equal(workflows.registry.defaultModelProfile, 'fp8Scaled4060')
-  assert.equal(workflows.promptAgent.version, 'aeonquill-h3-context-lite-v1')
+  assert.equal(workflows.promptAgent.version, 'aeonquill-h3-shot-planner-v2')
 
   const promptPlan = await requestJson(bridge.baseUrl, '/api/video/prompt/compile', {
     method: 'POST',
@@ -179,6 +180,18 @@ try {
   assert.equal(savedShellState.state.kind, 'shell-preferences')
   const loadedShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences')
   assert.equal(JSON.parse(loadedShellState.state.value).balancedProjectId, 'qa-project')
+  const projectCatalogValue = serializeProjectCatalog(createWorkspaceProject(
+    createProjectCatalog(),
+    { title: 'QA 多项目目录', initialModeId: 'balanced' },
+    { now: 1_728_000_000_000, projectId: 'qa-workspace', documentId: 'qa-balanced-document' },
+  ).catalog)
+  const savedProjectCatalog = await requestJson(bridge.baseUrl, '/api/client-state/project-catalog', {
+    method: 'PUT',
+    body: JSON.stringify({ value: projectCatalogValue }),
+  })
+  assert.equal(savedProjectCatalog.state.kind, 'project-catalog')
+  const loadedProjectCatalog = await requestJson(bridge.baseUrl, '/api/client-state/project-catalog')
+  assert.deepEqual(JSON.parse(loadedProjectCatalog.state.value), JSON.parse(projectCatalogValue))
   const unknownStateKind = await requestJson(bridge.baseUrl, '/api/client-state/..%2Fescape', {}, 404)
   assert.equal(unknownStateKind.error.code, 'UNKNOWN_CLIENT_STATE_KIND')
   const invalidShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences', {

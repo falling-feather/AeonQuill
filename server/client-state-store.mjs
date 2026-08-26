@@ -11,6 +11,10 @@ import {
   deserializePixelDocument,
   serializePixelDocument,
 } from '../src/lib/pixel/pixelCore.mjs'
+import {
+  deserializeProjectCatalog,
+  serializeProjectCatalog,
+} from '../src/lib/project/projectCatalog.mjs'
 
 export const CLIENT_STATE_SCHEMA_VERSION = 1
 
@@ -59,6 +63,13 @@ const STATE_DEFINITIONS = Object.freeze({
       const normalized = parseSmartVideoSession(value)
       if (!normalized) throw stateError('INVALID_CLIENT_STATE', '智能视频会话未通过严格格式校验')
       return serializeSmartVideoSession(normalized)
+    },
+  },
+  'project-catalog': {
+    filename: 'project-catalog.json',
+    maxBytes: 2 * 1024 * 1024,
+    normalize(value) {
+      return serializeProjectCatalog(deserializeProjectCatalog(value))
     },
   },
 })
