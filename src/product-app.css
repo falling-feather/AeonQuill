@@ -22,7 +22,8 @@
   font-size: 13px;
 }
 
-.aq-product-library-launcher {
+.aq-product-library-launcher,
+.aq-product-workflow-launcher {
   position: fixed;
   z-index: 180;
   right: 18px;
@@ -42,12 +43,18 @@
   cursor: pointer;
 }
 
-.aq-product-library-launcher:hover {
+.aq-product-workflow-launcher {
+  right: 108px;
+}
+
+.aq-product-library-launcher:hover,
+.aq-product-workflow-launcher:hover {
   border-color: #6553ad;
   background: #f7f4ff;
 }
 
-.aq-product-library-launcher:focus-visible {
+.aq-product-library-launcher:focus-visible,
+.aq-product-workflow-launcher:focus-visible {
   outline: 2px solid #286fc5;
   outline-offset: 3px;
 }
@@ -155,7 +162,8 @@
     margin-top: 28px;
   }
 
-  .aq-product-library-launcher {
+  .aq-product-library-launcher,
+  .aq-product-workflow-launcher {
     right: 10px;
     top: 66px;
     width: 38px;
@@ -163,7 +171,12 @@
     justify-content: center;
   }
 
-  .aq-product-library-launcher span {
+  .aq-product-workflow-launcher {
+    right: 54px;
+  }
+
+  .aq-product-library-launcher span,
+  .aq-product-workflow-launcher span {
     display: none;
   }
 }

@@ -68,6 +68,7 @@ import {
   assertAllowedVideoPostprocessWorkflow,
   buildSeedVr2VideoWorkflow,
 } from './video-postprocess-workflow.mjs'
+import { WorkflowCenterService } from './workflow-center.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -97,6 +98,10 @@ const store = new JobStore(join(dataDirectory, 'jobs.json'))
 const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
 const workspaceStore = new WorkspaceStore(join(dataDirectory, 'workspaces'))
 const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'))
+const workflowCenter = new WorkflowCenterService({
+  rootDirectory: join(dataDirectory, 'workflow-center'),
+  getComfyRoot: () => localRuntimeConfig.comfyRoot,
+})
 const assetPreviewService = new AssetPreviewService({
   rootDirectory: join(cacheDirectory, 'previews'),
   ffmpegPath,
@@ -127,6 +132,7 @@ await Promise.all([
   projectStore.open(),
   workspaceStore.open(),
   clientStateStore.open(),
+  workflowCenter.open(),
   assetPreviewService.open(),
 ])
 
@@ -462,6 +468,42 @@ async function inspectSemanticWorkflows(force = false) {
     objectInfo,
     runtime,
   })
+}
+
+async function inspectWorkflowCenterContext({ force = false, startRuntime = false } = {}) {
+  let runtime = await inspectRuntime(force)
+  if (startRuntime && !runtime.connected) {
+    const gpuSchedule = scheduler.snapshot().resources.gpu
+    const imageGpuBusy = [...gpuSchedule.activeJobs, ...gpuSchedule.queuedJobs]
+      .some((jobId) => store.get(jobId)?.kind === 'image')
+    if (imageGpuBusy) {
+      throw Object.assign(new Error('本机图片模型正在使用显卡，请等待任务结束后再复检自定义工作流'), {
+        status: 409,
+        code: 'GPU_RESOURCE_BUSY',
+      })
+    }
+    try {
+      await runtimeManager.ensureReady({ reason: 'workflow-center-inspection' })
+    } catch (error) {
+      throw Object.assign(new Error(`无法启动 ComfyUI 完成节点复检：${redactSensitiveText(error.message)}`), {
+        status: 409,
+        code: 'CUSTOM_WORKFLOW_RUNTIME_UNAVAILABLE',
+      })
+    }
+    runtimeCache = null
+    runtime = await inspectRuntime(true)
+  }
+  const [objectInfo, hardware] = await Promise.all([
+    runtime.connected ? comfy.objectInfo() : Promise.resolve(null),
+    hardwareHint ? Promise.resolve(hardwareHint) : scheduleHardwareHint(),
+  ])
+  if (startRuntime && !objectInfo) {
+    throw Object.assign(new Error('ComfyUI 启动后仍无法取得节点注册表，已拒绝导入'), {
+      status: 409,
+      code: 'CUSTOM_WORKFLOW_RUNTIME_UNAVAILABLE',
+    })
+  }
+  return { runtime, objectInfo, hardware }
 }
 
 async function inspectRuntimeDiagnostics(force = false, persistedConfig) {
@@ -1697,6 +1739,7 @@ function broadcast(payload) {
 }
 
 store.subscribe((job) => broadcast({ type: 'job.updated', job }))
+workflowCenter.subscribe((job) => broadcast({ type: 'workflow.install.updated', job }))
 runtimeManager.subscribe(() => {
   runtimeCache = null
   void inspectRuntime(true)
@@ -2004,6 +2047,119 @@ const server = createServer(async (request, response) => {
       await scheduleRuntimeIdleStop()
       runtimeCache = null
       return sendJson(response, 200, await inspectRuntime(true))
+    }
+    if (request.method === 'GET' && pathname === '/api/workflow-center/catalog') {
+      const context = await inspectWorkflowCenterContext({ force: url.searchParams.get('refresh') === '1' })
+      return sendJson(response, 200, await workflowCenter.catalog(context))
+    }
+    if (request.method === 'GET' && pathname === '/api/workflow-center/jobs') {
+      return sendJson(response, 200, { jobs: workflowCenter.jobs() })
+    }
+    const workflowPackInstallMatch = /^\/api\/workflow-center\/packs\/([^/]+)\/install$/u.exec(pathname)
+    if (request.method === 'POST' && workflowPackInstallMatch) {
+      const body = await readJsonBody(request, 32 * 1024)
+      const job = await workflowCenter.startInstall(decodeURIComponent(workflowPackInstallMatch[1]), body)
+      return sendJson(response, 202, { job })
+    }
+    const workflowPackEnableMatch = /^\/api\/workflow-center\/packs\/([^/]+)\/enable$/u.exec(pathname)
+    if (request.method === 'POST' && workflowPackEnableMatch) {
+      const body = await readJsonBody(request, 4 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+        return sendError(response, 400, 'WORKFLOW_ENABLE_REQUEST_INVALID', '启用请求必须是空对象')
+      }
+      const context = await inspectWorkflowCenterContext({ force: true })
+      return sendJson(response, 200, {
+        result: await workflowCenter.enablePack(decodeURIComponent(workflowPackEnableMatch[1]), context),
+      })
+    }
+    const workflowPackDisableMatch = /^\/api\/workflow-center\/packs\/([^/]+)\/disable$/u.exec(pathname)
+    if (request.method === 'POST' && workflowPackDisableMatch) {
+      const body = await readJsonBody(request, 4 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+        return sendError(response, 400, 'WORKFLOW_DISABLE_REQUEST_INVALID', '停用请求必须是空对象')
+      }
+      return sendJson(response, 200, {
+        result: await workflowCenter.disablePack(decodeURIComponent(workflowPackDisableMatch[1])),
+      })
+    }
+    const workflowInstallCancelMatch = /^\/api\/workflow-center\/jobs\/([^/]+)\/cancel$/u.exec(pathname)
+    if (request.method === 'POST' && workflowInstallCancelMatch) {
+      const body = await readJsonBody(request, 4 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+        return sendError(response, 400, 'WORKFLOW_CANCEL_REQUEST_INVALID', '取消请求必须是空对象')
+      }
+      return sendJson(response, 200, {
+        job: await workflowCenter.cancelInstall(decodeURIComponent(workflowInstallCancelMatch[1])),
+      })
+    }
+    if (request.method === 'POST' && pathname === '/api/workflow-center/custom/inspect') {
+      const body = await readJsonBody(request, 3 * 1024 * 1024)
+      const allowed = new Set(['workflow', 'mappings'])
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key)) || !('workflow' in body)) {
+        return sendError(response, 400, 'CUSTOM_WORKFLOW_INSPECT_REQUEST_INVALID', '自定义工作流检查字段无效')
+      }
+      const context = await inspectWorkflowCenterContext({ force: false })
+      const inspection = workflowCenter.inspectCustom({
+        workflow: body.workflow,
+        mappings: body.mappings,
+        registeredNodeTypes: context.objectInfo || undefined,
+      })
+      if (!context.objectInfo) {
+        inspection.runtimeRecheckRequired = true
+        inspection.findings.unshift({
+          severity: 'warning',
+          code: 'CUSTOM_WORKFLOW_RUNTIME_RECHECK_REQUIRED',
+          message: 'ComfyUI 当前休眠；导入时将按策略启动并以真实节点表再次检查。',
+        })
+      }
+      return sendJson(response, 200, { inspection })
+    }
+    if (request.method === 'POST' && pathname === '/api/workflow-center/custom') {
+      const body = await readJsonBody(request, 3 * 1024 * 1024)
+      const allowed = new Set(['title', 'workflow', 'mappings'])
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key)) || !('title' in body) || !('workflow' in body)) {
+        return sendError(response, 400, 'CUSTOM_WORKFLOW_IMPORT_REQUEST_INVALID', '自定义工作流导入字段无效')
+      }
+      try {
+        const context = await inspectWorkflowCenterContext({ force: true, startRuntime: true })
+        const customWorkflow = await workflowCenter.importCustom({
+          title: body.title,
+          workflow: body.workflow,
+          mappings: body.mappings,
+          registeredNodeTypes: context.objectInfo,
+        })
+        return sendJson(response, 201, { customWorkflow })
+      } finally {
+        await scheduleRuntimeIdleStop().catch(() => {})
+      }
+    }
+    const customWorkflowEnableMatch = /^\/api\/workflow-center\/custom\/([^/]+)\/enabled$/u.exec(pathname)
+    if (request.method === 'POST' && customWorkflowEnableMatch) {
+      const body = await readJsonBody(request, 4 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'enabled') || typeof body.enabled !== 'boolean') {
+        return sendError(response, 400, 'CUSTOM_WORKFLOW_ENABLE_REQUEST_INVALID', '自定义工作流启用字段无效')
+      }
+      try {
+        let objectInfo
+        if (body.enabled) {
+          const context = await inspectWorkflowCenterContext({ force: true, startRuntime: true })
+          objectInfo = context.objectInfo
+        }
+        const customWorkflow = await workflowCenter.setCustomEnabled(
+          decodeURIComponent(customWorkflowEnableMatch[1]),
+          body.enabled,
+          objectInfo,
+        )
+        return sendJson(response, 200, { customWorkflow })
+      } finally {
+        if (body.enabled) await scheduleRuntimeIdleStop().catch(() => {})
+      }
+    }
+    const customWorkflowMatch = /^\/api\/workflow-center\/custom\/([^/]+)$/u.exec(pathname)
+    if (request.method === 'DELETE' && customWorkflowMatch) {
+      return sendJson(response, 200, {
+        result: await workflowCenter.removeCustom(decodeURIComponent(customWorkflowMatch[1])),
+      })
     }
     if (request.method === 'GET' && pathname === '/api/workspace/catalog') {
       return sendJson(response, 200, workspaceStore.getCatalog())
@@ -2466,7 +2622,7 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     const safeMessage = redactSensitiveText(error.message || 'Request failed')
     console.error(`[${error.code || 'REQUEST_FAILED'}] ${safeMessage}`)
-    sendError(response, error.status || 500, error.code || 'REQUEST_FAILED', safeMessage)
+    sendError(response, error.status || 500, error.code || 'REQUEST_FAILED', safeMessage, error.details)
   }
 })
 
@@ -2481,6 +2637,7 @@ async function shutdown() {
   shutdownStarted = true
   clearInterval(heartbeat)
   for (const response of sseClients) response.end()
+  await workflowCenter.close().catch(() => {})
   await runtimeManager.dispose().catch(() => {})
   workspaceStore.close()
   projectStore.close()

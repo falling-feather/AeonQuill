@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Library } from 'lucide-react'
+import { Library, Workflow } from 'lucide-react'
 import BalancedWorkbench from './App'
 import { ProjectRecoveryDialog, RuntimeSettingsDialog, SurfaceState } from './components/Home'
 import { AssetLibraryDialog } from './components/Library'
+import { WorkflowCenterDialog } from './components/WorkflowCenter'
 import type { CanvasDocument } from './lib/canvasCore'
 import {
   deserializePixelDocument,
@@ -516,10 +517,11 @@ interface ProductModeHostProps {
   notice: ProductNotice | null
   onBack: () => void
   onOpenLibrary: () => void
+  onOpenWorkflowCenter: () => void
   children: ReactNode
 }
 
-function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice, onBack, onOpenLibrary, children }: ProductModeHostProps) {
+function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice, onBack, onOpenLibrary, onOpenWorkflowCenter, children }: ProductModeHostProps) {
   const hostRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -537,6 +539,10 @@ function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice,
       <button type="button" className="aq-product-library-launcher" onClick={onOpenLibrary} aria-label="打开跨模式资源库">
         <Library size={16} />
         <span>资源库</span>
+      </button>
+      <button type="button" className="aq-product-workflow-launcher" onClick={onOpenWorkflowCenter} aria-label="打开工作流中心">
+        <Workflow size={16} />
+        <span>工作流</span>
       </button>
       {notice ? (
         <div className={`aq-product-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>
@@ -567,6 +573,7 @@ export default function ProductApp() {
   })
   const [refreshingRuntime, setRefreshingRuntime] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [workflowCenterOpen, setWorkflowCenterOpen] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState<string>()
   const [settingsMessage, setSettingsMessage] = useState<string>()
@@ -1281,6 +1288,10 @@ export default function ProductApp() {
     void refreshRuntime()
   }, [refreshRuntime])
 
+  const openWorkflowCenter = useCallback(() => {
+    setWorkflowCenterOpen(true)
+  }, [])
+
   const handleRuntimeConfigure = useCallback(async (request: RuntimeConfigurationRequest) => {
     if (settingsSaving) return
     setSettingsSaving(true)
@@ -1699,6 +1710,13 @@ export default function ProductApp() {
       onUseAsset={route.modeId === 'home' ? undefined : handleUseLibraryAsset}
     />
   )
+  const workflowCenterDialog = (
+    <WorkflowCenterDialog
+      open={workflowCenterOpen}
+      onClose={() => setWorkflowCenterOpen(false)}
+      onOpenRuntimeSettings={openRuntimeSettings}
+    />
+  )
 
   if (route.modeId === 'balanced') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
@@ -1762,7 +1780,7 @@ export default function ProductApp() {
     }
     return (
       <>
-      <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
+      <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
         <BalancedWorkbench
           key={requestedProjectId}
           projectId={requestedProjectId}
@@ -1775,6 +1793,7 @@ export default function ProductApp() {
         />
       </ProductModeHost>
       {libraryDialog}
+      {workflowCenterDialog}
       </>
     )
   }
@@ -1852,7 +1871,7 @@ export default function ProductApp() {
     }
     return (
       <>
-      <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
+      <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
         <PixelModeWorkbench
           key={requestedProjectId ?? 'pixel-legacy'}
           initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
@@ -1866,6 +1885,7 @@ export default function ProductApp() {
         />
       </ProductModeHost>
       {libraryDialog}
+      {workflowCenterDialog}
       </>
     )
   }
@@ -1940,7 +1960,7 @@ export default function ProductApp() {
     }
     return (
       <>
-      <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
+      <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
         <SmartVideoWorkbench
           key={requestedProjectId ?? 'video-legacy'}
           initialText={videoSession.status === 'ready' ? videoSession.session?.sourceText : undefined}
@@ -1956,6 +1976,7 @@ export default function ProductApp() {
         />
       </ProductModeHost>
       {libraryDialog}
+      {workflowCenterDialog}
       </>
     )
   }
@@ -1976,11 +1997,13 @@ export default function ProductApp() {
         onOpenProjectRecovery={handleOpenProjectRecovery}
         onRetryProjects={retryLocalContexts}
         onOpenLibrary={openLibrary}
+        onOpenWorkflowCenter={openWorkflowCenter}
         onOpenSettings={openRuntimeSettings}
         onRefreshRuntime={() => void refreshRuntime()}
         onRuntimeItemAction={(item) => void handleRuntimeAction(item)}
       />
       {libraryDialog}
+      {workflowCenterDialog}
       <RuntimeSettingsDialog
         open={settingsOpen}
         diagnostics={runtimeProbe.diagnostics}

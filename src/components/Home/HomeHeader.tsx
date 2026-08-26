@@ -1,12 +1,13 @@
-import { Feather, FilePlus2, Library, Settings } from 'lucide-react'
+import { Feather, FilePlus2, Library, Settings, Workflow } from 'lucide-react'
 
 interface HomeHeaderProps {
   onOpenSettings?: () => void
   onOpenLibrary?: () => void
+  onOpenWorkflowCenter?: () => void
   onCreateProject?: () => void
 }
 
-export function HomeHeader({ onOpenSettings, onOpenLibrary, onCreateProject }: HomeHeaderProps) {
+export function HomeHeader({ onOpenSettings, onOpenLibrary, onOpenWorkflowCenter, onCreateProject }: HomeHeaderProps) {
   return (
     <header className="aq-home-header">
       <div className="aq-home-header__brand" aria-label="光阴砚 AEONQUILL">
@@ -25,6 +26,15 @@ export function HomeHeader({ onOpenSettings, onOpenLibrary, onCreateProject }: H
         >
           <Library size={17} strokeWidth={1.8} aria-hidden="true" />
           <span>资源库</span>
+        </button>
+        <button
+          type="button"
+          className="aq-header-action"
+          onClick={onOpenWorkflowCenter}
+          aria-label="打开工作流中心"
+        >
+          <Workflow size={17} strokeWidth={1.8} aria-hidden="true" />
+          <span>工作流</span>
         </button>
         <button
           type="button"

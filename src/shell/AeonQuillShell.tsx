@@ -69,6 +69,7 @@ export interface AeonQuillShellProps {
   onOpenProjectRecovery?: (projectId: string) => void
   onRetryProjects?: () => void
   onOpenLibrary?: () => void
+  onOpenWorkflowCenter?: () => void
   onOpenSettings?: () => void
   onRefreshRuntime?: () => void
   onRuntimeItemAction?: (item: RuntimeSurfaceSummary) => void
@@ -89,6 +90,7 @@ export function AeonQuillShell({
   onOpenProjectRecovery,
   onRetryProjects,
   onOpenLibrary,
+  onOpenWorkflowCenter,
   onOpenSettings,
   onRefreshRuntime,
   onRuntimeItemAction,
@@ -133,7 +135,7 @@ export function AeonQuillShell({
 
   return (
     <div className="aq-shell aq-project-center-shell">
-      <HomeHeader onOpenSettings={onOpenSettings} onOpenLibrary={onOpenLibrary} onCreateProject={() => setDialogOpen(true)} />
+      <HomeHeader onOpenSettings={onOpenSettings} onOpenLibrary={onOpenLibrary} onOpenWorkflowCenter={onOpenWorkflowCenter} onCreateProject={() => setDialogOpen(true)} />
 
       <main className="aq-project-center">
         <aside className="aq-project-sidebar" aria-label="项目导航">

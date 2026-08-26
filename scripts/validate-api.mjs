@@ -111,6 +111,49 @@ try {
   assert.equal(workflows.registry.defaultModelProfile, 'fp8Scaled4060')
   assert.equal(workflows.promptAgent.version, 'aeonquill-h3-shot-planner-v2')
 
+  const workflowCenter = await requestJson(bridge.baseUrl, '/api/workflow-center/catalog?refresh=1')
+  assert.equal(workflowCenter.version, 'aeonquill-workflow-center-v1')
+  assert.equal(workflowCenter.packs.length, 5)
+  const h3QualityPack = workflowCenter.packs.find(({ id }) => id === 'h3-quality-int8')
+  assert.equal(h3QualityPack.minVramGb, 8)
+  assert.equal(h3QualityPack.license.acceptanceRequired, true)
+  assert.equal(h3QualityPack.license.redistribution, 'not-bundled-by-aeonquill')
+  assert.doesNotMatch(JSON.stringify(workflowCenter), /[A-Z]:\\\\|\\\\Users\\\\|"targetPath"/iu)
+
+  const safeCustomInspection = await requestJson(bridge.baseUrl, '/api/workflow-center/custom/inspect', {
+    method: 'POST',
+    body: JSON.stringify({
+      workflow: {
+        1: { class_type: 'CLIPTextEncode', inputs: { text: '水墨产品镜头' } },
+        2: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+      },
+      mappings: {
+        prompt: { nodeId: '1', inputName: 'text' },
+        output: { nodeId: '2' },
+      },
+    }),
+  })
+  assert.equal(safeCustomInspection.inspection.canImport, true)
+  assert.equal(safeCustomInspection.inspection.runtimeRecheckRequired, true)
+
+  const unsafeCustomInspection = await requestJson(bridge.baseUrl, '/api/workflow-center/custom/inspect', {
+    method: 'POST',
+    body: JSON.stringify({
+      workflow: {
+        1: { class_type: 'HttpDownloadNode', inputs: { url: 'https://evil.example/payload', output: 'D:\\escape' } },
+      },
+    }),
+  })
+  assert.equal(unsafeCustomInspection.inspection.canImport, false)
+  assert.ok(unsafeCustomInspection.inspection.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_NETWORK_NODE'))
+  assert.ok(unsafeCustomInspection.inspection.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_UNSAFE_PATH'))
+
+  const missingWorkflowLicense = await requestJson(bridge.baseUrl, '/api/workflow-center/packs/h3-quality-int8/install', {
+    method: 'POST',
+    body: JSON.stringify({ acceptedLicenseIds: [], acknowledgedDiskBytes: h3QualityPack.downloadBytes }),
+  }, 409)
+  assert.equal(missingWorkflowLicense.error.code, 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED')
+
   const promptPlan = await requestJson(bridge.baseUrl, '/api/video/prompt/compile', {
     method: 'POST',
     body: JSON.stringify({
