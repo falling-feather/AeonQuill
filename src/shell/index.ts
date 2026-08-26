@@ -4,6 +4,7 @@ export type {
   LocalRuntimeSummary,
   ModeAvailability,
   ModeAvailabilitySummary,
+  ProjectCreateInput,
   RecentProjectSummary,
   RuntimeHealth,
   RuntimeSurfaceId,

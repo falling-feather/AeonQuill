@@ -77,23 +77,32 @@ function cloneElements(elements: CanvasElement[]) {
   }))
 }
 
-function loadProject(): CanvasDocument {
-  for (const key of [APP_STORAGE_KEY, ...LEGACY_APP_STORAGE_KEYS]) {
+function loadProject(input: {
+  projectId: string
+  projectTitle: string
+  storageKey: string
+  initialDocument?: CanvasDocument
+}): CanvasDocument {
+  if (input.initialDocument) return assertCanvasDocument(cloneCanvasDocument(input.initialDocument))
+  const compatibleKeys = input.projectId === 'local-project'
+    ? [input.storageKey, APP_STORAGE_KEY, ...LEGACY_APP_STORAGE_KEYS]
+    : [input.storageKey]
+  for (const key of [...new Set(compatibleKeys)]) {
     try {
       const stored = localStorage.getItem(key)
       if (!stored) continue
       return migrateCanvasDocument(JSON.parse(stored), {
-        id: 'local-project',
-        title: '光阴砚本地画布',
+        id: input.projectId,
+        title: input.projectTitle,
       })
     } catch {
       // Try the next compatible storage generation before falling back to seed data.
     }
   }
   return createCanvasDocument({
-    id: 'local-project',
-    title: '光阴砚本地项目',
-    elements: cloneElements(seedElements),
+    id: input.projectId,
+    title: input.projectTitle,
+    elements: input.projectId === 'local-project' ? cloneElements(seedElements) : [],
     camera: { ...seedCamera },
   })
 }
@@ -132,10 +141,21 @@ const imageOperationLabels: Record<ImageOperationId, string> = {
 
 export type BalancedWorkbenchProps = {
   onBack?: () => void
+  projectId?: string
+  projectTitle?: string
+  initialDocument?: CanvasDocument
+  onDocumentChange?: (document: CanvasDocument) => void
 }
 
-function App({ onBack }: BalancedWorkbenchProps) {
-  const initialProject = useRef(loadProject())
+function App({
+  onBack,
+  projectId = 'local-project',
+  projectTitle = '光阴砚本地项目',
+  initialDocument,
+  onDocumentChange,
+}: BalancedWorkbenchProps) {
+  const storageKey = projectId === 'local-project' ? APP_STORAGE_KEY : `${APP_STORAGE_KEY}:${projectId}`
+  const initialProject = useRef(loadProject({ projectId, projectTitle, storageKey, initialDocument }))
   const [canvasDocument, setCanvasDocument] = useState<CanvasDocument>(initialProject.current)
   const documentRef = useRef(canvasDocument)
   const elements = canvasDocument.elements
@@ -301,7 +321,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
     const timeout = window.setTimeout(() => {
       void (async () => {
         try {
-          localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(canvasDocument))
+          localStorage.setItem(storageKey, JSON.stringify(canvasDocument))
           lastPersistedRevisionRef.current = canvasDocument.revision
         } catch {
           if (!disposed) showToast('图片较大，本地自动保存空间不足')
@@ -313,7 +333,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
             documentRef.current.revision === canvasDocument.revision &&
             JSON.stringify(stored.document) !== JSON.stringify(documentRef.current)
           ) {
-            localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(stored.document))
+            localStorage.setItem(storageKey, JSON.stringify(stored.document))
             lastPersistedRevisionRef.current = stored.document.revision
             replaceDocument(assertCanvasDocument(stored.document))
           }
@@ -323,12 +343,13 @@ function App({ onBack }: BalancedWorkbenchProps) {
           if (!disposed && documentRef.current.revision === canvasDocument.revision) setSaveStatus('saved')
         }
       })()
+      onDocumentChange?.(canvasDocument)
     }, 260)
     return () => {
       disposed = true
       window.clearTimeout(timeout)
     }
-  }, [canvasDocument, replaceDocument, showToast])
+  }, [canvasDocument, onDocumentChange, replaceDocument, showToast, storageKey])
 
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => elements.some((element) => element.id === id)))
@@ -620,7 +641,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
       pastRef.current = []
       futureRef.current = []
       syncHistoryCounts()
-      localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(restored))
+      localStorage.setItem(storageKey, JSON.stringify(restored))
       lastPersistedRevisionRef.current = restored.revision
       persistenceReadyRef.current = true
       replaceDocument(restored)
@@ -630,7 +651,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
     } catch (reason) {
       showToast(reason instanceof Error ? reason.message : '项目包导入失败')
     }
-  }, [replaceDocument, showToast, syncHistoryCounts])
+  }, [replaceDocument, showToast, storageKey, syncHistoryCounts])
 
   const shareProject = useCallback(async () => {
     try {
@@ -745,7 +766,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
             pastRef.current = []
             futureRef.current = []
             syncHistoryCounts()
-            localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(restored))
+            localStorage.setItem(storageKey, JSON.stringify(restored))
             lastPersistedRevisionRef.current = restored.revision
             persistenceReadyRef.current = true
             replaceDocument(restored)
@@ -788,7 +809,7 @@ function App({ onBack }: BalancedWorkbenchProps) {
       unsubscribe()
       window.clearInterval(runtimeTimer)
     }
-  }, [refreshRuntime, replaceDocument, replaceVideoJobs, syncHistoryCounts, updateJob])
+  }, [refreshRuntime, replaceDocument, replaceVideoJobs, storageKey, syncHistoryCounts, updateJob])
 
   useEffect(() => {
     const videoJobs = new Map(

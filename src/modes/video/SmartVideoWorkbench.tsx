@@ -96,6 +96,8 @@ export type SmartVideoPlanResult = {
 export type SmartVideoWorkbenchProps = {
   initialText?: string
   initialKind?: StorySourceKind
+  projectId?: string
+  projectTitle?: string
   runtime?: SmartVideoRuntimeSummary
   onBack?: () => void
   onPlanReady?: (result: SmartVideoPlanResult) => void
@@ -198,11 +200,15 @@ function createPreviewPlan(
   kind: StorySourceKind,
   aspectRatio: StoryAspectRatio,
   frameStrategy: FrameStrategy,
+  projectId?: string,
+  projectTitle?: string,
 ): SmartVideoPlanResult {
   const now = Date.now()
   const project = compileStoryProject({
     kind,
     text,
+    projectId,
+    title: projectTitle,
     aspectRatio,
     frameStrategy,
     defaultShotSeconds: 5,
@@ -273,6 +279,8 @@ function runtimeSnapshotFromFailure(message: string): ExecutionRuntimeSnapshot {
 export function SmartVideoWorkbench({
   initialText = starterScript,
   initialKind = 'script',
+  projectId,
+  projectTitle,
   runtime = { state: 'offline', label: 'ComfyUI 休眠', detail: '生成阶段才会按策略启动' },
   onBack,
   onPlanReady,
@@ -282,7 +290,7 @@ export function SmartVideoWorkbench({
   const [aspectRatio, setAspectRatio] = useState<StoryAspectRatio>('16:9')
   const [frameStrategy, setFrameStrategy] = useState<FrameStrategy>('start-end')
   const [result, setResult] = useState<SmartVideoPlanResult>(() =>
-    createPreviewPlan(initialText, initialKind, '16:9', 'start-end'),
+    createPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle),
   )
   const firstShotId = result.project.scenes[0]?.shots[0]?.id ?? ''
   const [error, setError] = useState<string | null>(null)
@@ -401,7 +409,7 @@ export function SmartVideoWorkbench({
 
   const compile = () => {
     try {
-      const next = createPreviewPlan(text, kind, aspectRatio, frameStrategy)
+      const next = createPreviewPlan(text, kind, aspectRatio, frameStrategy, projectId, projectTitle)
       const nextFirstShotId = next.project.scenes[0]?.shots[0]?.id ?? ''
       setResult(next)
       setActiveSceneId(next.project.scenes[0]?.id ?? '')
@@ -665,7 +673,14 @@ export function SmartVideoWorkbench({
 
   const bridgeProductionSource = (source: ApprovedProductionStorySource) => {
     try {
-      const next = createPreviewPlan(source.text, source.kind, source.aspectRatio, source.frameStrategy)
+      const next = createPreviewPlan(
+        source.text,
+        source.kind,
+        source.aspectRatio,
+        source.frameStrategy,
+        projectId,
+        projectTitle,
+      )
       const nextFirstShotId = next.project.scenes[0]?.shots[0]?.id ?? ''
       setKind(source.kind)
       setText(source.text)

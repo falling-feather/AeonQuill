@@ -14,6 +14,7 @@
     "validate:live": "node scripts/validate.mjs --live",
     "validate:api": "node scripts/validate-api.mjs",
     "validate:browser": "node scripts/validate-browser.mjs",
+    "validate:project-center": "node scripts/validate-project-center.mjs",
     "benchmark:canvas": "node scripts/benchmark-canvas.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
     "validate:workflows": "node server/validate-workflows.mjs",

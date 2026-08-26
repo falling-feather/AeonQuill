@@ -31,9 +31,12 @@ function observePage(page, issues) {
 
 async function assertHealthyShell(page) {
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
-  assert.equal(await page.getByText('Shape Light. Weave Time.', { exact: true }).count(), 1)
+  assert.equal(await page.getByRole('heading', { name: '项目中心', exact: true }).count(), 1)
+  assert.equal(await page.locator('.aq-home-header__brand').getAttribute('aria-label'), '光阴砚 AEONQUILL')
   assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
-  await page.locator('button[aria-describedby="balanced-mode-description"]').click()
+  const balancedTarget = new URL(bridge.baseUrl)
+  balancedTarget.hash = '/balanced?project=local-project'
+  await page.goto(balancedTarget.href, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   const canvas = page.getByLabel('无限画布')
   const createCanvas = page.getByRole('button', { name: '创建本机画布', exact: true })
   await canvas.or(createCanvas).first().waitFor({ state: 'visible' })

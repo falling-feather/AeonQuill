@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import BalancedWorkbench from './App'
 import { RuntimeSettingsDialog, SurfaceState } from './components/Home'
+import type { CanvasDocument } from './lib/canvasCore'
 import {
   deserializePixelDocument,
   serializePixelDocument,
   type PixelDocument,
 } from './lib/pixel'
+import {
+  addProjectDocument,
+  createProjectCatalog,
+  createWorkspaceProject,
+  deserializeProjectCatalog,
+  openWorkspaceProject,
+  projectModeDocument,
+  purgeExpiredProjects,
+  serializeProjectCatalog,
+  setProjectStatus,
+  touchProjectDocument,
+  type ProjectCatalog,
+  type ProjectModeDocument,
+  type WorkspaceProject,
+} from './lib/project'
 import { loadLocalProject, type StoredProject } from './lib/projectApi'
 import {
   configureRuntime,
@@ -34,7 +50,6 @@ import {
   parseShellPreferences,
   parseSmartVideoSession,
   PRODUCT_SHELL_PREFERENCES_KEY,
-  resolveCollectionState,
   resolvePixelDraftEntry,
   serializeShellPreferences,
   serializeSmartVideoSession,
@@ -42,6 +57,7 @@ import {
   type LocalRuntimeSummary,
   type ModeAvailabilitySummary,
   type ProductLocation,
+  type ProjectCreateInput,
   type ProductModeId,
   type RecentProjectSummary,
   type RuntimeHealth,
@@ -91,6 +107,12 @@ type ProductNotice = {
 }
 
 const PIXEL_STORAGE_KEY = 'aeonquill:pixel-document:v1'
+const PROJECT_CATALOG_STORAGE_KEY = 'aeonquill:project-catalog:v1'
+
+type ProjectCatalogSnapshot = {
+  catalog: ProjectCatalog
+  error?: string
+}
 
 function readRoute(): ProductLocation {
   return parseProductHash(window.location.hash)
@@ -112,9 +134,29 @@ function isMeaningfulPixelDraft(document: PixelDocument) {
   return document.id !== 'aeonquill-pixel-starter' || document.revision > 0
 }
 
-function readPixelDraft(): PixelDraftSnapshot {
+function pixelStorageKey(documentId?: string) {
+  return documentId ? `${PIXEL_STORAGE_KEY}:${documentId}` : PIXEL_STORAGE_KEY
+}
+
+function videoStorageKey(documentId?: string) {
+  return documentId ? `${SMART_VIDEO_SESSION_KEY}:${documentId}` : SMART_VIDEO_SESSION_KEY
+}
+
+function readProjectCatalog(): ProjectCatalogSnapshot {
   try {
-    const stored = localStorage.getItem(PIXEL_STORAGE_KEY)
+    const catalog = deserializeProjectCatalog(localStorage.getItem(PROJECT_CATALOG_STORAGE_KEY))
+    return { catalog: purgeExpiredProjects(catalog) }
+  } catch {
+    return {
+      catalog: createProjectCatalog(),
+      error: '项目目录未通过格式校验。原始数据仍保留；新建项目前请先重试读取或导出诊断。',
+    }
+  }
+}
+
+function readPixelDraft(storageKey: string = PIXEL_STORAGE_KEY): PixelDraftSnapshot {
+  try {
+    const stored = localStorage.getItem(storageKey)
     if (!stored) return { status: 'empty' }
     const document = deserializePixelDocument(stored)
     return isMeaningfulPixelDraft(document)
@@ -128,9 +170,9 @@ function readPixelDraft(): PixelDraftSnapshot {
   }
 }
 
-function readVideoSession(): VideoSessionSnapshot {
+function readVideoSession(storageKey: string = SMART_VIDEO_SESSION_KEY): VideoSessionSnapshot {
   try {
-    const stored = sessionStorage.getItem(SMART_VIDEO_SESSION_KEY)
+    const stored = sessionStorage.getItem(storageKey)
     if (!stored) return { status: 'empty' }
     const session = parseSmartVideoSession(stored)
     return session
@@ -425,8 +467,11 @@ export default function ProductApp() {
   const initialPreferences = useRef<ShellPreferences>(readShellPreferences())
   const initialPixelDraft = useRef<PixelDraftSnapshot>(readPixelDraft())
   const initialVideoSession = useRef<VideoSessionSnapshot>(readVideoSession())
+  const initialProjectCatalog = useRef<ProjectCatalogSnapshot>(readProjectCatalog())
   const [route, setRoute] = useState<ProductLocation>(readRoute)
   const [preferences, setPreferences] = useState<ShellPreferences>(initialPreferences.current)
+  const [projectCatalog, setProjectCatalog] = useState<ProjectCatalog>(initialProjectCatalog.current.catalog)
+  const [projectCatalogError, setProjectCatalogError] = useState<string | undefined>(initialProjectCatalog.current.error)
   const [selectedModeId, setSelectedModeId] = useState<ProductModeId>(() =>
     route.modeId === 'home' ? initialPreferences.current.selectedModeId : route.modeId,
   )
@@ -455,15 +500,31 @@ export default function ProductApp() {
   const clientStateHydratedRef = useRef(false)
   const clientStateDirtyRef = useRef(new Set<string>())
   const bridgeReadyRef = useRef(false)
+  const projectCatalogRef = useRef(projectCatalog)
   const preferencesRef = useRef(preferences)
   const videoSessionRef = useRef(videoSession)
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
   const currentRouteKey = routeKey(route)
+  const activeWorkspaceProject = useMemo<WorkspaceProject | null>(() => {
+    if (!route.projectId) return null
+    return projectCatalog.projects.find((project) => project.id === route.projectId) ?? null
+  }, [projectCatalog.projects, route.projectId])
+  const activeModeDocument = useMemo<ProjectModeDocument | null>(() => {
+    if (!activeWorkspaceProject || route.modeId === 'home') return null
+    return projectModeDocument(activeWorkspaceProject, route.modeId)
+  }, [activeWorkspaceProject, route.modeId])
+  const activeWorkspaceProjectId = activeWorkspaceProject?.id
+  const activeModeDocumentId = activeModeDocument?.id
+  const activeModeDocumentMode = activeModeDocument?.modeId
 
   useEffect(() => {
     bridgeReadyRef.current = runtimeProbe.bridgeReady
   }, [runtimeProbe.bridgeReady])
+
+  useEffect(() => {
+    projectCatalogRef.current = projectCatalog
+  }, [projectCatalog])
 
   useEffect(() => {
     preferencesRef.current = preferences
@@ -472,6 +533,18 @@ export default function ProductApp() {
   useEffect(() => {
     videoSessionRef.current = videoSession
   }, [videoSession])
+
+  const commitProjectCatalog = useCallback((next: ProjectCatalog) => {
+    const serialized = serializeProjectCatalog(next)
+    projectCatalogRef.current = next
+    setProjectCatalog(next)
+    try {
+      localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, serialized)
+      setProjectCatalogError(undefined)
+    } catch {
+      setProjectCatalogError('项目目录仍保留在当前页面，但浏览器本机存储写入失败。刷新前请勿关闭页面。')
+    }
+  }, [])
 
   const updatePreferences = useCallback((patch: Partial<ShellPreferences>) => {
     setPreferences((current) => {
@@ -501,11 +574,55 @@ export default function ProductApp() {
     setEntryIntentKey(null)
     if (next.modeId !== 'home') {
       chooseMode(next.modeId)
-      if (next.modeId === 'balanced' && next.projectId) {
-        updatePreferences({ balancedProjectId: next.projectId })
-      }
     }
-  }, [chooseMode, updatePreferences])
+  }, [chooseMode])
+
+  const handleCreateProject = useCallback((input: ProjectCreateInput) => {
+    try {
+      const created = createWorkspaceProject(projectCatalogRef.current, input)
+      commitProjectCatalog(created.catalog)
+      const nextRoute = { modeId: input.initialModeId, projectId: created.project.id } as const
+      navigate(nextRoute)
+      setEntryIntentKey(routeKey(nextRoute))
+      setModeNotice({ tone: 'success', message: `已创建项目“${created.project.title}”，三种创作模式可在项目内继续扩展。` })
+    } catch (error) {
+      setProjectCatalogError(error instanceof Error ? error.message : '创建项目失败')
+    }
+  }, [commitProjectCatalog, navigate])
+
+  const handleOpenProject = useCallback((projectId: string, modeId: ProductModeId) => {
+    try {
+      let nextCatalog = projectCatalogRef.current
+      let project = nextCatalog.projects.find((candidate) => candidate.id === projectId)
+      if (!project) throw new Error(`找不到项目 ${projectId}`)
+      let document = projectModeDocument(project, modeId)
+      if (!document) {
+        const added = addProjectDocument(nextCatalog, projectId, {
+          modeId,
+          title: `${project.title} · ${modeId === 'balanced' ? '均衡画布' : modeId === 'pixel' ? '像素画布' : '智能视频'}`,
+        })
+        nextCatalog = added.catalog
+        project = added.project
+        document = added.document
+      }
+      nextCatalog = openWorkspaceProject(nextCatalog, projectId)
+      commitProjectCatalog(nextCatalog)
+      const nextRoute = { modeId, projectId } as const
+      navigate(nextRoute)
+      setEntryIntentKey(routeKey(nextRoute))
+      if (modeId === 'balanced') updatePreferences({ balancedProjectId: document.id })
+    } catch (error) {
+      setProjectCatalogError(error instanceof Error ? error.message : '打开项目失败')
+    }
+  }, [commitProjectCatalog, navigate, updatePreferences])
+
+  const handleProjectStatusChange = useCallback((projectId: string, status: 'active' | 'archived' | 'trashed') => {
+    try {
+      commitProjectCatalog(setProjectStatus(projectCatalogRef.current, projectId, status))
+    } catch (error) {
+      setProjectCatalogError(error instanceof Error ? error.message : '项目状态更新失败')
+    }
+  }, [commitProjectCatalog])
 
   const replaceModeProjectReference = useCallback((modeId: ProductModeId, projectId: string) => {
     const next = { modeId, projectId }
@@ -672,16 +789,30 @@ export default function ProductApp() {
 
   useEffect(() => {
     const projectId = route.modeId === 'balanced'
-      ? route.projectId ?? preferences.balancedProjectId
+      ? activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId
       : preferences.balancedProjectId
     void refreshProject(projectId)
-  }, [preferences.balancedProjectId, refreshProject, route.modeId, route.projectId])
+  }, [activeModeDocument?.id, preferences.balancedProjectId, refreshProject, route.modeId, route.projectId])
+
+  useEffect(() => {
+    if (route.modeId !== 'pixel') return
+    setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocument?.id)))
+  }, [activeModeDocument?.id, route.modeId])
+
+  useEffect(() => {
+    if (route.modeId !== 'smart-video') return
+    setVideoSession(readVideoSession(videoStorageKey(activeModeDocument?.id)))
+  }, [activeModeDocument?.id, route.modeId])
 
   const retryLocalContexts = useCallback(() => {
-    setPixelDraft(readPixelDraft())
-    setVideoSession(readVideoSession())
+    const snapshot = readProjectCatalog()
+    projectCatalogRef.current = snapshot.catalog
+    setProjectCatalog(snapshot.catalog)
+    setProjectCatalogError(snapshot.error)
+    setPixelDraft(readPixelDraft(activeModeDocument?.modeId === 'pixel' ? pixelStorageKey(activeModeDocument.id) : PIXEL_STORAGE_KEY))
+    setVideoSession(readVideoSession(activeModeDocument?.modeId === 'smart-video' ? videoStorageKey(activeModeDocument.id) : SMART_VIDEO_SESSION_KEY))
     void refreshProject(preferences.balancedProjectId)
-  }, [preferences.balancedProjectId, refreshProject])
+  }, [activeModeDocument, preferences.balancedProjectId, refreshProject])
 
   const openRuntimeSettings = useCallback(() => {
     setSettingsOpen(true)
@@ -761,76 +892,47 @@ export default function ProductApp() {
       : { status: 'degraded', label: '规划模式', reason: 'ComfyUI 将在实际生成阶段按需启动' },
   }), [runtimeProbe])
 
-  const recentProjects = useMemo<RecentProjectSummary[]>(() => {
-    const projects: RecentProjectSummary[] = []
-    if (projectProbe.status === 'ready' && projectProbe.project && projectProbe.project.revision > 0) {
-      projects.push({
-        id: projectProbe.project.id,
-        title: projectProbe.project.title,
-        modeId: 'balanced',
-        updatedLabel: relativeTime(projectProbe.project.updatedAt),
-        description: `${projectProbe.project.document.elements.length} 个画布元件 · revision ${projectProbe.project.revision}`,
-      })
+  const recentProjects = useMemo<RecentProjectSummary[]>(() => projectCatalog.projects.map((project) => {
+    const latestDocument = [...project.documents].sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    const documentCounts = project.documents.reduce<NonNullable<RecentProjectSummary['documentCounts']>>((counts, document) => {
+      counts[document.modeId] = (counts[document.modeId] ?? 0) + 1
+      return counts
+    }, {})
+    return {
+      id: project.id,
+      title: project.title,
+      description: project.description || `${project.documents.length} 份创作文档`,
+      modeId: latestDocument?.modeId ?? project.initialModeId,
+      initialModeId: project.initialModeId,
+      status: project.status,
+      color: project.color,
+      documentCounts,
+      storageLabel: '浏览器本机',
+      updatedAt: project.updatedAt,
+      lastOpenedAt: project.lastOpenedAt,
+      trashedAt: project.trashedAt,
+      updatedLabel: relativeTime(project.updatedAt),
     }
-    if (pixelDraft.status === 'ready' && pixelDraft.document) {
-      projects.push({
-        id: pixelDraft.document.id,
-        title: pixelDraft.document.name,
-        modeId: 'pixel',
-        updatedLabel: '本机草稿',
-        description: `${pixelDraft.document.width} × ${pixelDraft.document.height} · ${pixelDraft.document.frames.length} 帧 · ${pixelDraft.document.layers.length} 图层`,
-      })
-    }
-    if (videoSession.status === 'ready' && videoSession.session) {
-      projects.push({
-        id: videoSession.session.projectId,
-        title: videoSession.session.title,
-        modeId: 'smart-video',
-        updatedLabel: relativeTime(videoSession.session.updatedAt),
-        description: `${videoSession.session.sceneCount} 个场景 · ${videoSession.session.taskCount} 个受控任务 · 本机会话摘要`,
-      })
-    }
-    return projects.sort((left, right) => left.modeId === 'balanced' ? -1 : right.modeId === 'balanced' ? 1 : 0)
-  }, [pixelDraft, projectProbe, videoSession])
+  }), [projectCatalog.projects])
 
   const recentProjectsFeedback = useMemo<ShellFeedback | undefined>(() => {
-    const contextErrors = [projectProbe.error, pixelDraft.error, videoSession.error].filter(Boolean) as string[]
-    const recoveredCount = recentProjects.length
-    const state = resolveCollectionState({
-      loading: projectProbe.status === 'idle' || projectProbe.status === 'loading',
-      error: contextErrors.length > 0,
-      itemCount: recentProjects.length,
-      recoveredCount,
-    })
-    if (state === 'ready') return undefined
-    if (state === 'loading') {
-      return {
-        status: 'loading',
-        title: '正在读取本机项目',
-        detail: '最近项目只来自 ProjectStore 与已存在的模式草稿，不会插入演示项目。',
-      }
-    }
-    if (state === 'error') {
+    if (projectCatalogError) {
       return {
         status: 'error',
-        title: recentProjects.length ? '部分本机上下文未能读取' : '无法读取最近项目',
-        detail: contextErrors.join('；'),
+        title: recentProjects.length ? '项目目录存在未保存变更' : '无法读取项目目录',
+        detail: projectCatalogError,
         actionLabel: '重试读取',
       }
     }
-    if (state === 'empty') {
+    if (recentProjects.length === 0) {
       return {
         status: 'empty',
-        title: '尚无可恢复的项目或草稿',
-        detail: '进入上方模式后，只有真实保存或产生修改的内容才会出现在这里。',
+        title: '尚未创建项目',
+        detail: '创建一个项目后，可从同一项目进入均衡、像素与智能视频模式。',
       }
     }
-    return {
-      status: 'recovered',
-      title: `已恢复 ${recoveredCount} 条本机创作上下文`,
-      detail: '均衡项目来自 ProjectStore；像素草稿与智能视频会话由当前用户数据目录和浏览器回退共同恢复。',
-    }
-  }, [pixelDraft.error, projectProbe.error, projectProbe.status, recentProjects.length, videoSession.error])
+    return undefined
+  }, [projectCatalogError, recentProjects.length])
 
   const queuePixelBridgeSave = useCallback((serialized: string) => {
     pixelBridgeSaveRef.current = serialized
@@ -857,41 +959,63 @@ export default function ProductApp() {
   }, [])
 
   const handlePixelChange = useCallback((next: PixelDocument) => {
+    const catalogDocumentId = activeWorkspaceProjectId && activeModeDocumentMode === 'pixel'
+      ? activeModeDocumentId
+      : undefined
+    const storageKey = pixelStorageKey(catalogDocumentId)
+    const usesLegacyBridge = !catalogDocumentId
     if (!isMeaningfulPixelDraft(next)) {
       const serialized = serializePixelDocument(next)
-      clientStateDirtyRef.current.add('pixel-document')
-      try { localStorage.setItem(PIXEL_STORAGE_KEY, serialized) } catch { /* bridge remains canonical */ }
-      queuePixelBridgeSave(serialized)
+      if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
+      try { localStorage.setItem(storageKey, serialized) } catch { /* surfaced after the first meaningful edit */ }
+      if (usesLegacyBridge) queuePixelBridgeSave(serialized)
       setPixelDraft({ status: 'empty', document: next })
       return
     }
     const serialized = serializePixelDocument(next)
-    clientStateDirtyRef.current.add('pixel-document')
+    if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
     let browserStored = true
     try {
-      localStorage.setItem(PIXEL_STORAGE_KEY, serialized)
+      localStorage.setItem(storageKey, serialized)
     } catch {
       browserStored = false
     }
-    queuePixelBridgeSave(serialized)
-    setPixelDraft(bridgeReadyRef.current || browserStored
+    if (usesLegacyBridge) queuePixelBridgeSave(serialized)
+    const durablyStored = browserStored || (usesLegacyBridge && bridgeReadyRef.current)
+    setPixelDraft(durablyStored
       ? { status: 'ready', document: next }
       : {
           status: 'error',
           document: next,
-          error: '像素草稿仍在当前页面，但浏览器存储失败且本机桥接离线；刷新前请先导出。',
+          error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
         })
-    if (route.modeId === 'pixel' && route.projectId !== next.id) {
+    if (catalogDocumentId && activeWorkspaceProjectId) {
+      try {
+        commitProjectCatalog(touchProjectDocument(
+          projectCatalogRef.current,
+          activeWorkspaceProjectId,
+          catalogDocumentId,
+          { title: next.name, revision: next.revision },
+        ))
+      } catch (error) {
+        setProjectCatalogError(error instanceof Error ? error.message : '像素文档索引更新失败')
+      }
+    } else if (route.modeId === 'pixel' && route.projectId !== next.id) {
       replaceModeProjectReference('pixel', next.id)
     }
     if (!browserStored) {
-      setModeNotice(bridgeReadyRef.current
+      setModeNotice(usesLegacyBridge && bridgeReadyRef.current
         ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到本机用户数据。' }
         : { tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
     }
-  }, [queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
+  }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog, queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
 
   const handleVideoPlanReady = useCallback((result: SmartVideoPlanResult) => {
+    const catalogDocumentId = activeWorkspaceProjectId && activeModeDocumentMode === 'smart-video'
+      ? activeModeDocumentId
+      : undefined
+    const storageKey = videoStorageKey(catalogDocumentId)
+    const usesLegacyBridge = !catalogDocumentId
     const session: SmartVideoSessionSummary = {
       version: 1,
       projectId: result.project.id,
@@ -903,32 +1027,58 @@ export default function ProductApp() {
       taskCount: result.plan.tasks.length,
     }
     const serialized = serializeSmartVideoSession(session)
-    clientStateDirtyRef.current.add('smart-video-session')
+    if (usesLegacyBridge) clientStateDirtyRef.current.add('smart-video-session')
     let browserStored = true
     try {
-      sessionStorage.setItem(SMART_VIDEO_SESSION_KEY, serialized)
+      sessionStorage.setItem(storageKey, serialized)
     } catch {
       browserStored = false
     }
-    setVideoSession(bridgeReadyRef.current || browserStored
+    const durablyStored = browserStored || (usesLegacyBridge && bridgeReadyRef.current)
+    setVideoSession(durablyStored
       ? { status: 'ready', session }
       : {
           status: 'error',
           session,
           error: '智能视频计划仍在当前页面，但浏览器存储失败且本机桥接离线；刷新后无法恢复。',
         })
-    if (route.modeId === 'smart-video' && route.projectId !== session.projectId) {
+    if (catalogDocumentId && activeWorkspaceProjectId) {
+      try {
+        commitProjectCatalog(touchProjectDocument(
+          projectCatalogRef.current,
+          activeWorkspaceProjectId,
+          catalogDocumentId,
+          { title: result.project.title, revision: result.project.revision },
+        ))
+      } catch (error) {
+        setProjectCatalogError(error instanceof Error ? error.message : '智能视频文档索引更新失败')
+      }
+    } else if (route.modeId === 'smart-video' && route.projectId !== session.projectId) {
       replaceModeProjectReference('smart-video', session.projectId)
     }
-    setModeNotice(bridgeReadyRef.current || browserStored
+    setModeNotice(durablyStored
       ? { tone: 'success', message: '剧本输入与计划摘要已保存到本机创作会话。' }
       : { tone: 'error', message: '当前计划未能持久化；刷新后无法恢复。' })
-    if (bridgeReadyRef.current) {
+    if (usesLegacyBridge && bridgeReadyRef.current) {
       void saveClientState('smart-video-session', serialized).catch(() => {
         setModeNotice({ tone: 'error', message: '智能视频会话未能写入本机用户数据；当前页面内容仍保留。' })
       })
     }
-  }, [replaceModeProjectReference, route.modeId, route.projectId])
+  }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog, replaceModeProjectReference, route.modeId, route.projectId])
+
+  const handleBalancedDocumentChange = useCallback((document: CanvasDocument) => {
+    if (!activeWorkspaceProjectId || activeModeDocumentMode !== 'balanced' || !activeModeDocumentId) return
+    try {
+      commitProjectCatalog(touchProjectDocument(
+        projectCatalogRef.current,
+        activeWorkspaceProjectId,
+        activeModeDocumentId,
+        { title: document.title, revision: document.revision },
+      ))
+    } catch (error) {
+      setProjectCatalogError(error instanceof Error ? error.message : '均衡文档索引更新失败')
+    }
+  }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog])
 
   const handleSpriteSheetExport = useCallback(async (payload: PixelSpriteSheetPayload) => {
     try {
@@ -973,31 +1123,8 @@ export default function ProductApp() {
 
   const goHome = useCallback(() => navigate({ modeId: 'home' }), [navigate])
 
-  const openMode = useCallback((modeId: ProductModeId) => {
-    if (modeId === 'balanced') {
-      navigate({
-        modeId,
-        projectId: projectProbe.status === 'ready' && projectProbe.project
-          ? projectProbe.project.id
-          : undefined,
-      })
-      return
-    }
-    if (modeId === 'pixel') {
-      navigate({
-        modeId,
-        projectId: pixelDraft.status === 'ready' ? pixelDraft.document?.id : undefined,
-      })
-      return
-    }
-    navigate({
-      modeId,
-      projectId: videoSession.status === 'ready' ? videoSession.session?.projectId : undefined,
-    })
-  }, [navigate, pixelDraft, projectProbe, videoSession])
-
   if (route.modeId === 'balanced') {
-    const requestedProjectId = route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
+    const requestedProjectId = activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
     const matchingProbe = projectProbe.projectId === requestedProjectId
     if (!matchingProbe || projectProbe.status === 'idle' || projectProbe.status === 'loading') {
       return (
@@ -1033,7 +1160,7 @@ export default function ProductApp() {
       )
     }
     if (projectProbe.status === 'empty' && entryIntentKey !== currentRouteKey) {
-      const canCreate = requestedProjectId === DEFAULT_BALANCED_PROJECT_ID
+      const canCreate = requestedProjectId === DEFAULT_BALANCED_PROJECT_ID || Boolean(activeWorkspaceProject && activeModeDocument)
       return (
         <ModeGate
           modeLabel="均衡模式"
@@ -1058,13 +1185,20 @@ export default function ProductApp() {
     }
     return (
       <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
-        <BalancedWorkbench onBack={goHome} />
+        <BalancedWorkbench
+          key={requestedProjectId}
+          projectId={requestedProjectId}
+          projectTitle={activeWorkspaceProject?.title}
+          initialDocument={projectProbe.project?.id === requestedProjectId ? projectProbe.project.document : undefined}
+          onBack={goHome}
+          onDocumentChange={handleBalancedDocumentChange}
+        />
       </ProductModeHost>
     )
   }
 
   if (route.modeId === 'pixel') {
-    const requestedProjectId = route.projectId
+    const requestedProjectId = activeModeDocument?.id ?? route.projectId
     const pixelEntry = resolvePixelDraftEntry({
       requestedProjectId,
       status: pixelDraft.status,
@@ -1125,7 +1259,10 @@ export default function ProductApp() {
     return (
       <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
         <PixelModeWorkbench
+          key={requestedProjectId ?? 'pixel-legacy'}
           initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
+          projectId={requestedProjectId}
+          projectName={activeWorkspaceProject?.title}
           onBack={goHome}
           onDocumentChange={handlePixelChange}
           onSpriteSheetReady={handleSpriteSheetExport}
@@ -1135,7 +1272,7 @@ export default function ProductApp() {
   }
 
   if (route.modeId === 'smart-video') {
-    const requestedProjectId = route.projectId
+    const requestedProjectId = activeModeDocument?.id ?? route.projectId
     const requestedSessionMissing = requestedProjectId && (
       videoSession.status !== 'ready' || videoSession.session?.projectId !== requestedProjectId
     )
@@ -1193,8 +1330,11 @@ export default function ProductApp() {
     return (
       <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
         <SmartVideoWorkbench
+          key={requestedProjectId ?? 'video-legacy'}
           initialText={videoSession.status === 'ready' ? videoSession.session?.sourceText : undefined}
           initialKind={videoSession.status === 'ready' ? videoSession.session?.sourceKind : undefined}
+          projectId={requestedProjectId}
+          projectTitle={activeWorkspaceProject?.title}
           runtime={smartVideoRuntime}
           onBack={goHome}
           onPlanReady={handleVideoPlanReady}
@@ -1213,9 +1353,9 @@ export default function ProductApp() {
         recentProjectsFeedback={recentProjectsFeedback}
         refreshingRuntime={refreshingRuntime}
         onModeSelect={chooseMode}
-        onModeOpen={openMode}
-        onCreateProject={openMode}
-        onOpenProject={(projectId, modeId) => navigate({ modeId, projectId })}
+        onCreateProject={handleCreateProject}
+        onOpenProject={handleOpenProject}
+        onProjectStatusChange={handleProjectStatusChange}
         onRetryProjects={retryLocalContexts}
         onOpenSettings={openRuntimeSettings}
         onRefreshRuntime={() => void refreshRuntime()}

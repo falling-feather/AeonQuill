@@ -28,9 +28,24 @@ export interface RecentProjectSummary {
   id: string
   title: string
   modeId: ProductModeId
+  initialModeId?: ProductModeId
+  status?: 'active' | 'archived' | 'trashed'
+  color?: 'ink' | 'amber' | 'sage' | 'blue' | 'violet' | 'rose'
+  documentCounts?: Partial<Record<ProductModeId, number>>
+  storageLabel?: string
+  updatedAt?: number
+  lastOpenedAt?: number
+  trashedAt?: number | null
   updatedLabel: string
   previewUrl?: string
   description?: string
+}
+
+export interface ProjectCreateInput {
+  title: string
+  description: string
+  initialModeId: ProductModeId
+  color: 'ink' | 'amber' | 'sage' | 'blue' | 'violet' | 'rose'
 }
 
 export type ModeAvailability = 'available' | 'degraded' | 'unavailable'

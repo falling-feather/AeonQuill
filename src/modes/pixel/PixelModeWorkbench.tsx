@@ -138,16 +138,18 @@ export type PixelSpriteSheetPayload = {
 
 export type PixelModeWorkbenchProps = {
   initialDocument?: PixelDocument
+  projectId?: string
+  projectName?: string
   className?: string
   onBack?: () => void
   onDocumentChange?: (document: PixelDocument) => void
   onSpriteSheetReady?: (payload: PixelSpriteSheetPayload) => void | Promise<void>
 }
 
-function makeStarterDocument() {
+export function createDefaultPixelProject(input: { id?: string; name?: string } = {}) {
   const base = createPixelDocument({
-    id: 'aeonquill-pixel-starter',
-    name: '光羽练习',
+    id: input.id ?? 'aeonquill-pixel-starter',
+    name: input.name ?? '光羽练习',
     width: 16,
     height: 16,
   })
@@ -243,13 +245,17 @@ function readablePixelError(error: unknown, fallback: string) {
 
 export function PixelModeWorkbench({
   initialDocument,
+  projectId = 'aeonquill-pixel-starter',
+  projectName = '光羽练习',
   className = '',
   onBack,
   onDocumentChange,
   onSpriteSheetReady,
 }: PixelModeWorkbenchProps) {
   const [history, setHistory] = useState<HistoryState>(() => ({
-    document: initialDocument ? migratePixelDocument(initialDocument) : makeStarterDocument(),
+    document: initialDocument
+      ? migratePixelDocument(initialDocument)
+      : createDefaultPixelProject({ id: projectId, name: projectName }),
     undo: [],
     redo: [],
   }))
@@ -1397,6 +1403,6 @@ export const pixelModeModule = {
   summary: '确定性的图层、帧、调色板与 Sprite 工作流。',
   maturity: 'preview' as const,
   runtimeRequirements: [] as string[],
-  createDefaultProject: makeStarterDocument,
+  createDefaultProject: createDefaultPixelProject,
   View: PixelModeWorkbench,
 }
