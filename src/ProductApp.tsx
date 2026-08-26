@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import BalancedWorkbench from './App'
-import { RuntimeSettingsDialog, SurfaceState } from './components/Home'
+import { ProjectRecoveryDialog, RuntimeSettingsDialog, SurfaceState } from './components/Home'
 import type { CanvasDocument } from './lib/canvasCore'
 import {
   deserializePixelDocument,
@@ -22,7 +22,21 @@ import {
   type ProjectModeDocument,
   type WorkspaceProject,
 } from './lib/project'
-import { loadLocalProject, type StoredProject } from './lib/projectApi'
+import {
+  ProjectApiError,
+  createWorkspaceRecoveryPoint,
+  deserializeSmartVideoDocument,
+  listWorkspaceRecoveryPoints,
+  loadLocalProject,
+  loadWorkspaceCatalog,
+  loadWorkspaceModeDocument,
+  saveWorkspaceCatalog,
+  saveWorkspaceModeDocument,
+  serializeSmartVideoDocument,
+  restoreWorkspaceRecoveryPoint,
+  type StoredProject,
+  type WorkspaceRecoveryPoint,
+} from './lib/projectApi'
 import {
   configureRuntime,
   fetchClientState,
@@ -98,6 +112,7 @@ type PixelDraftSnapshot = {
 type VideoSessionSnapshot = {
   status: 'empty' | 'ready' | 'error'
   session?: SmartVideoSessionSummary
+  result?: SmartVideoPlanResult
   error?: string
 }
 
@@ -113,6 +128,16 @@ const PROJECT_CATALOG_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
 type ProjectCatalogSnapshot = {
   catalog: ProjectCatalog
   error?: string
+}
+
+type RecoveryDialogState = {
+  projectId: string
+  projectTitle: string
+  loading: boolean
+  recoveryPoints: WorkspaceRecoveryPoint[]
+  busyId?: string
+  error?: string
+  message?: string
 }
 
 function readRoute(): ProductLocation {
@@ -214,6 +239,19 @@ function readVideoSession(storageKey: string = SMART_VIDEO_SESSION_KEY, expected
         error: '此标签页中的智能视频会话摘要无效。原数据仍保留，不会被伪装成项目。',
       }
     : { status: 'empty' }
+}
+
+function smartVideoSessionFromResult(result: SmartVideoPlanResult): SmartVideoSessionSummary {
+  return {
+    version: 1,
+    projectId: result.project.id,
+    title: result.project.title,
+    sourceKind: result.project.source.kind,
+    sourceText: result.project.source.text,
+    updatedAt: result.project.updatedAt,
+    sceneCount: result.project.scenes.length,
+    taskCount: result.plan.tasks.length,
+  }
 }
 
 function formatBytes(value?: number) {
@@ -513,6 +551,7 @@ export default function ProductApp() {
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState<string>()
   const [settingsMessage, setSettingsMessage] = useState<string>()
+  const [recoveryDialog, setRecoveryDialog] = useState<RecoveryDialogState | null>(null)
   const [projectProbe, setProjectProbe] = useState<ProjectProbe>({
     projectId: initialPreferences.current.balancedProjectId,
     status: 'idle',
@@ -534,8 +573,11 @@ export default function ProductApp() {
   const videoSessionRef = useRef(videoSession)
   const catalogBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const catalogBridgeSaveRef = useRef<string | undefined>(undefined)
+  const catalogBridgeBaseRevisionRef = useRef<number | undefined>(undefined)
+  const catalogBridgeSavePromiseRef = useRef<Promise<void> | null>(null)
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
+  const [workspaceDocumentResolvedKey, setWorkspaceDocumentResolvedKey] = useState<string | null>(null)
   const currentRouteKey = routeKey(route)
   const activeWorkspaceProject = useMemo<WorkspaceProject | null>(() => {
     if (!route.projectId) return null
@@ -565,25 +607,54 @@ export default function ProductApp() {
     videoSessionRef.current = videoSession
   }, [videoSession])
 
+  const flushProjectCatalogBridgeSave = useCallback((): Promise<void> => {
+    if (!bridgeReadyRef.current) return Promise.resolve()
+    const running = catalogBridgeSavePromiseRef.current
+    if (running) {
+      return running.then(() => catalogBridgeSaveRef.current ? flushProjectCatalogBridgeSave() : undefined)
+    }
+    const operation = (async () => {
+      try {
+        while (catalogBridgeSaveRef.current && bridgeReadyRef.current) {
+          const value = catalogBridgeSaveRef.current
+          const catalog = deserializeProjectCatalog(value)
+          const baseRevision = catalogBridgeBaseRevisionRef.current ?? Math.max(0, catalog.revision - 1)
+          const saved = await saveWorkspaceCatalog(catalog, baseRevision)
+          catalogBridgeBaseRevisionRef.current = saved.catalog.revision
+          await saveClientState('project-catalog', serializeProjectCatalog(saved.catalog)).catch(() => undefined)
+          if (catalogBridgeSaveRef.current === value) {
+            catalogBridgeSaveRef.current = undefined
+            catalogBridgeBaseRevisionRef.current = undefined
+            clientStateDirtyRef.current.delete('project-catalog')
+            setProjectCatalogError(undefined)
+          }
+        }
+      } catch (error) {
+        const conflict = error instanceof ProjectApiError && error.code === 'WORKSPACE_CATALOG_CONFLICT'
+        setProjectCatalogError(conflict
+          ? '项目目录已在另一页面发生变化；当前浏览器副本仍保留，未覆盖 SQLite 权威数据。'
+          : '项目目录仍保留在浏览器副本，但未能写入 SQLite 工作区；请检查桥接后重试。')
+      }
+    })()
+    catalogBridgeSavePromiseRef.current = operation
+    return operation.finally(() => {
+      if (catalogBridgeSavePromiseRef.current === operation) catalogBridgeSavePromiseRef.current = null
+    })
+  }, [])
+
   const queueProjectCatalogBridgeSave = useCallback((serialized: string) => {
     catalogBridgeSaveRef.current = serialized
     if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
     catalogBridgeSaveTimerRef.current = window.setTimeout(() => {
       catalogBridgeSaveTimerRef.current = undefined
-      const value = catalogBridgeSaveRef.current
-      if (!value || !bridgeReadyRef.current) return
-      void saveClientState('project-catalog', value).then(() => {
-        if (catalogBridgeSaveRef.current !== value) return
-        catalogBridgeSaveRef.current = undefined
-        clientStateDirtyRef.current.delete('project-catalog')
-        setProjectCatalogError(undefined)
-      }).catch(() => {
-        setProjectCatalogError('项目目录仍保留在浏览器副本，但未能写入本机用户数据；请检查桥接后重试。')
-      })
+      void flushProjectCatalogBridgeSave()
     }, 260)
-  }, [])
+  }, [flushProjectCatalogBridgeSave])
 
   const commitProjectCatalog = useCallback((next: ProjectCatalog) => {
+    if (catalogBridgeBaseRevisionRef.current === undefined) {
+      catalogBridgeBaseRevisionRef.current = projectCatalogRef.current.revision
+    }
     const serialized = serializeProjectCatalog(next)
     clientStateDirtyRef.current.add('project-catalog')
     catalogBridgeSaveRef.current = serialized
@@ -600,8 +671,7 @@ export default function ProductApp() {
 
   useEffect(() => () => {
     if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
-    const value = catalogBridgeSaveRef.current
-    if (value && bridgeReadyRef.current) void saveClientState('project-catalog', value).catch(() => undefined)
+    if (catalogBridgeSaveRef.current && bridgeReadyRef.current) void flushProjectCatalogBridgeSave()
   }, [])
 
   useEffect(() => {
@@ -730,6 +800,102 @@ export default function ProductApp() {
     }
   }, [commitProjectCatalog])
 
+  const refreshRecoveryDialog = useCallback(async (projectId: string) => {
+    setRecoveryDialog((current) => current?.projectId === projectId
+      ? { ...current, loading: true, error: undefined }
+      : current)
+    try {
+      await flushProjectCatalogBridgeSave()
+      const recoveryPoints = await listWorkspaceRecoveryPoints(projectId)
+      setRecoveryDialog((current) => current?.projectId === projectId
+        ? { ...current, loading: false, recoveryPoints, error: undefined }
+        : current)
+    } catch (error) {
+      setRecoveryDialog((current) => current?.projectId === projectId
+        ? { ...current, loading: false, error: error instanceof Error ? error.message : '恢复点读取失败' }
+        : current)
+    }
+  }, [flushProjectCatalogBridgeSave])
+
+  const handleOpenProjectRecovery = useCallback((projectId: string) => {
+    const project = projectCatalogRef.current.projects.find(({ id }) => id === projectId)
+    if (!project) {
+      setProjectCatalogError(`找不到项目 ${projectId}`)
+      return
+    }
+    setRecoveryDialog({
+      projectId,
+      projectTitle: project.title,
+      loading: true,
+      recoveryPoints: [],
+    })
+    void refreshRecoveryDialog(projectId)
+  }, [refreshRecoveryDialog])
+
+  const handleCreateRecoveryPoint = useCallback(async () => {
+    const current = recoveryDialog
+    if (!current) return
+    setRecoveryDialog({ ...current, busyId: 'create', error: undefined, message: undefined })
+    try {
+      await flushProjectCatalogBridgeSave()
+      await createWorkspaceRecoveryPoint(current.projectId, { reason: 'user-manual-checkpoint' })
+      const recoveryPoints = await listWorkspaceRecoveryPoints(current.projectId)
+      setRecoveryDialog((latest) => latest?.projectId === current.projectId
+        ? { ...latest, busyId: undefined, recoveryPoints, message: '已创建当前项目恢复点。' }
+        : latest)
+    } catch (error) {
+      setRecoveryDialog((latest) => latest?.projectId === current.projectId
+        ? { ...latest, busyId: undefined, error: error instanceof Error ? error.message : '恢复点创建失败' }
+        : latest)
+    }
+  }, [flushProjectCatalogBridgeSave, recoveryDialog])
+
+  const handleRestoreRecoveryPoint = useCallback(async (recoveryPoint: WorkspaceRecoveryPoint) => {
+    const current = recoveryDialog
+    if (!current || current.projectId !== recoveryPoint.projectId) return
+    if (!window.confirm('确认恢复此快照？当前状态会先自动保存为新的恢复点，此操作不会删除已有快照。')) return
+    setRecoveryDialog({ ...current, busyId: recoveryPoint.id, error: undefined, message: undefined })
+    try {
+      await flushProjectCatalogBridgeSave()
+      const { restored } = await restoreWorkspaceRecoveryPoint(recoveryPoint.id)
+      const serializedCatalog = serializeProjectCatalog(restored.catalog)
+      catalogBridgeSaveRef.current = undefined
+      catalogBridgeBaseRevisionRef.current = undefined
+      clientStateDirtyRef.current.delete('project-catalog')
+      projectCatalogRef.current = restored.catalog
+      setProjectCatalog(restored.catalog)
+      try { localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, serializedCatalog) } catch { /* SQLite remains canonical */ }
+      void saveClientState('project-catalog', serializedCatalog).catch(() => undefined)
+      if (restored.document?.modeId === 'pixel') {
+        const document = deserializePixelDocument(restored.document.value)
+        const serialized = serializePixelDocument(document)
+        setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty', document })
+        try { localStorage.setItem(pixelStorageKey(document.id), serialized) } catch { /* SQLite remains canonical */ }
+      } else if (restored.document?.modeId === 'smart-video') {
+        const body = deserializeSmartVideoDocument(restored.document.value)
+        const result = { project: body.project, plan: body.plan }
+        const session = smartVideoSessionFromResult(result)
+        setVideoSession({ status: 'ready', session, result })
+        try { sessionStorage.setItem(videoStorageKey(session.projectId), serializeSmartVideoSession(session)) } catch { /* SQLite remains canonical */ }
+      }
+      const recoveryPoints = await listWorkspaceRecoveryPoints(current.projectId)
+      const restoredProject = restored.catalog.projects.find(({ id }) => id === current.projectId)
+      setRecoveryDialog((latest) => latest?.projectId === current.projectId
+        ? {
+            ...latest,
+            busyId: undefined,
+            projectTitle: restoredProject?.title ?? latest.projectTitle,
+            recoveryPoints,
+            message: '恢复完成；旧内容已作为新的文档 revision 写入，恢复前状态也已留档。',
+          }
+        : latest)
+    } catch (error) {
+      setRecoveryDialog((latest) => latest?.projectId === current.projectId
+        ? { ...latest, busyId: undefined, error: error instanceof Error ? error.message : '恢复点应用失败' }
+        : latest)
+    }
+  }, [flushProjectCatalogBridgeSave, recoveryDialog])
+
   const replaceModeProjectReference = useCallback((modeId: ProductModeId, projectId: string) => {
     const next = { modeId, projectId }
     const target = createProductTarget(window.location.pathname, window.location.search, next)
@@ -803,7 +969,8 @@ export default function ProductApp() {
       fetchClientState('pixel-document'),
       fetchClientState('smart-video-session'),
       fetchClientState('project-catalog'),
-    ]).then(([shellResult, pixelResult, videoResult, catalogResult]) => {
+      loadWorkspaceCatalog(),
+    ]).then(([shellResult, pixelResult, videoResult, catalogResult, workspaceCatalogResult]) => {
       if (disposed) return
 
       if (shellResult.status === 'fulfilled') {
@@ -822,7 +989,11 @@ export default function ProductApp() {
 
       if (pixelResult.status === 'fulfilled') {
         const state = pixelResult.value
-        if (state && !clientStateDirtyRef.current.has('pixel-document')) {
+        if (
+          state
+          && !clientStateDirtyRef.current.has('pixel-document')
+          && initialPixelDraft.current.status !== 'ready'
+        ) {
           try {
             const document = deserializePixelDocument(state.value)
             setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty' })
@@ -839,7 +1010,11 @@ export default function ProductApp() {
 
       if (videoResult.status === 'fulfilled') {
         const state = videoResult.value
-        if (state && !clientStateDirtyRef.current.has('smart-video-session')) {
+        if (
+          state
+          && !clientStateDirtyRef.current.has('smart-video-session')
+          && initialVideoSession.current.status !== 'ready'
+        ) {
           const session = parseSmartVideoSession(state.value)
           if (session) {
             setVideoSession({ status: 'ready', session })
@@ -855,41 +1030,50 @@ export default function ProductApp() {
         }
       }
 
-      if (catalogResult.status === 'fulfilled') {
-        const state = catalogResult.value
-        const current = projectCatalogRef.current
-        if (state) {
-          try {
-            const restored = purgeExpiredProjects(deserializeProjectCatalog(state.value))
-            const currentSerialized = serializeProjectCatalog(current)
-            const restoredSerialized = serializeProjectCatalog(restored)
-            const dirty = clientStateDirtyRef.current.has('project-catalog')
-            if (dirty && currentSerialized === restoredSerialized) {
-              clientStateDirtyRef.current.delete('project-catalog')
-              catalogBridgeSaveRef.current = undefined
-              setProjectCatalogError(undefined)
-            } else if (dirty && current.revision > restored.revision) {
-              queueProjectCatalogBridgeSave(currentSerialized)
-            } else if (dirty) {
-              setProjectCatalogError('项目目录在页面打开期间已于本机发生变化；已保留浏览器副本，未自动覆盖本机数据。')
-            } else if (restored.revision > current.revision) {
-              projectCatalogRef.current = restored
-              setProjectCatalog(restored)
-              try { localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, restoredSerialized) } catch { /* bridge remains canonical */ }
-              setProjectCatalogError(undefined)
-            } else if (current.revision > restored.revision) {
-              queueProjectCatalogBridgeSave(currentSerialized)
-            } else if (currentSerialized !== restoredSerialized) {
-              setProjectCatalogError('浏览器与本机桥接存在同 revision 的项目目录冲突；已保留浏览器副本，未自动覆盖任一侧。')
-            }
-          } catch {
-            setProjectCatalogError('本机桥接返回的项目目录未通过严格格式校验；已保留浏览器副本。')
+      const current = projectCatalogRef.current
+      let authoritativeSerialized: string | undefined
+      let authoritativeRevision: number | undefined
+      if (workspaceCatalogResult.status === 'fulfilled') {
+        authoritativeSerialized = serializeProjectCatalog(workspaceCatalogResult.value.catalog)
+        authoritativeRevision = workspaceCatalogResult.value.catalog.revision
+      } else if (catalogResult.status === 'fulfilled' && catalogResult.value) {
+        authoritativeSerialized = catalogResult.value.value
+      }
+      if (authoritativeSerialized) {
+        try {
+          const raw = deserializeProjectCatalog(authoritativeSerialized)
+          const restored = purgeExpiredProjects(raw)
+          const currentSerialized = serializeProjectCatalog(current)
+          const restoredSerialized = serializeProjectCatalog(restored)
+          const dirty = clientStateDirtyRef.current.has('project-catalog')
+          catalogBridgeBaseRevisionRef.current = authoritativeRevision ?? raw.revision
+          if (dirty && currentSerialized === restoredSerialized) {
+            clientStateDirtyRef.current.delete('project-catalog')
+            catalogBridgeSaveRef.current = undefined
+            catalogBridgeBaseRevisionRef.current = undefined
+            setProjectCatalogError(undefined)
+          } else if (dirty && current.revision > raw.revision) {
+            queueProjectCatalogBridgeSave(currentSerialized)
+          } else if (dirty) {
+            setProjectCatalogError('项目目录在页面打开期间已于 SQLite 工作区发生变化；已保留浏览器副本，未自动覆盖权威数据。')
+          } else if (restored.revision > current.revision || (restored.revision === current.revision && restoredSerialized === currentSerialized)) {
+            projectCatalogRef.current = restored
+            setProjectCatalog(restored)
+            try { localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, restoredSerialized) } catch { /* SQLite remains canonical */ }
+            setProjectCatalogError(undefined)
+            if (restored.revision > raw.revision) queueProjectCatalogBridgeSave(restoredSerialized)
+          } else if (current.revision > raw.revision) {
+            queueProjectCatalogBridgeSave(currentSerialized)
+          } else if (currentSerialized !== restoredSerialized) {
+            setProjectCatalogError('浏览器与 SQLite 工作区存在同 revision 目录冲突；已保留浏览器副本，未自动覆盖任一侧。')
           }
-        } else if (!state) {
-          queueProjectCatalogBridgeSave(serializeProjectCatalog(current))
+        } catch {
+          setProjectCatalogError('SQLite 工作区返回的项目目录未通过严格格式校验；已保留浏览器副本。')
         }
       } else {
-        setProjectCatalogError('读取本机项目目录失败；已保留浏览器副本，未执行覆盖。')
+        catalogBridgeBaseRevisionRef.current = 0
+        queueProjectCatalogBridgeSave(serializeProjectCatalog(current))
+        setProjectCatalogError('SQLite 工作区暂时无法读取；浏览器副本仍保留并等待重试。')
       }
     }).finally(() => {
       if (!disposed) setClientStateReady(true)
@@ -901,6 +1085,73 @@ export default function ProductApp() {
   useEffect(() => {
     if (!runtimeProbe.checking && !runtimeProbe.bridgeReady) setClientStateReady(true)
   }, [runtimeProbe.bridgeReady, runtimeProbe.checking])
+
+  useEffect(() => {
+    if (
+      !clientStateReady
+      || !runtimeProbe.bridgeReady
+      || route.modeId === 'home'
+      || route.modeId === 'balanced'
+      || !activeWorkspaceProjectId
+      || !activeModeDocumentId
+      || !activeModeDocumentMode
+    ) {
+      setWorkspaceDocumentResolvedKey(null)
+      return
+    }
+    const loadingKey = `${activeWorkspaceProjectId}:${activeModeDocumentId}:${activeModeDocumentMode}`
+    let disposed = false
+    setWorkspaceDocumentResolvedKey((current) => current === loadingKey ? current : null)
+    void loadWorkspaceModeDocument(activeWorkspaceProjectId, activeModeDocumentId, activeModeDocumentMode)
+      .then((stored) => {
+        if (disposed) return
+        if (activeModeDocumentMode === 'pixel') {
+          if (stored) {
+            const document = deserializePixelDocument(stored.value)
+            const serialized = serializePixelDocument(document)
+            setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty', document })
+            try { localStorage.setItem(pixelStorageKey(activeModeDocumentId), serialized) } catch { /* SQLite remains canonical */ }
+          } else {
+            setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocumentId), activeModeDocumentId))
+          }
+          return
+        }
+        if (stored) {
+          const body = deserializeSmartVideoDocument(stored.value)
+          const result = { project: body.project, plan: body.plan }
+          const session = smartVideoSessionFromResult(result)
+          setVideoSession({ status: 'ready', session, result })
+          try { sessionStorage.setItem(videoStorageKey(activeModeDocumentId), serializeSmartVideoSession(session)) } catch { /* SQLite remains canonical */ }
+        } else {
+          setVideoSession(readVideoSession(videoStorageKey(activeModeDocumentId), activeModeDocumentId))
+        }
+      })
+      .catch((error) => {
+        if (disposed) return
+        const fallback = activeModeDocumentMode === 'pixel'
+          ? readPixelDraft(pixelStorageKey(activeModeDocumentId), activeModeDocumentId)
+          : readVideoSession(videoStorageKey(activeModeDocumentId), activeModeDocumentId)
+        if (activeModeDocumentMode === 'pixel') setPixelDraft(fallback as PixelDraftSnapshot)
+        else setVideoSession(fallback as VideoSessionSnapshot)
+        setModeNotice({
+          tone: 'error',
+          message: `SQLite 项目正文读取失败，当前使用浏览器恢复副本：${error instanceof Error ? error.message : '未知错误'}`,
+        })
+      })
+      .finally(() => {
+        if (!disposed) {
+          setWorkspaceDocumentResolvedKey(loadingKey)
+        }
+      })
+    return () => { disposed = true }
+  }, [
+    activeModeDocumentId,
+    activeModeDocumentMode,
+    activeWorkspaceProjectId,
+    clientStateReady,
+    route.modeId,
+    runtimeProbe.bridgeReady,
+  ])
 
   useEffect(() => {
     void refreshRuntime()
@@ -1164,7 +1415,7 @@ export default function ProductApp() {
       browserStored = false
     }
     if (usesLegacyBridge) queuePixelBridgeSave(serialized)
-    const durablyStored = browserStored || (usesLegacyBridge && bridgeReadyRef.current)
+    const durablyStored = browserStored || bridgeReadyRef.current
     setPixelDraft(durablyStored
       ? { status: 'ready', document: next }
       : {
@@ -1173,6 +1424,28 @@ export default function ProductApp() {
           error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
         })
     if (catalogDocumentId && activeWorkspaceProjectId) {
+      if (bridgeReadyRef.current) {
+        void saveWorkspaceModeDocument({
+          projectId: activeWorkspaceProjectId,
+          documentId: catalogDocumentId,
+          modeId: 'pixel',
+          revision: next.revision,
+          value: serialized,
+          reason: 'pixel-autosave',
+        }).then(() => {
+          setPixelDraft({ status: 'ready', document: next })
+        }).catch((error) => {
+          const conflict = error instanceof ProjectApiError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT'
+          setPixelDraft({
+            status: 'error',
+            document: next,
+            error: conflict
+              ? '像素文档已在另一页面更新；当前内存草稿仍保留，未覆盖 SQLite 版本。'
+              : '像素草稿仍在当前页面，但写入 SQLite 项目正文失败；刷新前请先导出。',
+          })
+          setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '像素项目正文保存失败' })
+        })
+      }
       try {
         commitProjectCatalog(touchProjectDocument(
           projectCatalogRef.current,
@@ -1187,8 +1460,8 @@ export default function ProductApp() {
       replaceModeProjectReference('pixel', next.id)
     }
     if (!browserStored) {
-      setModeNotice(usesLegacyBridge && bridgeReadyRef.current
-        ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到本机用户数据。' }
+      setModeNotice(bridgeReadyRef.current
+        ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到 SQLite 工作区。' }
         : { tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
     }
   }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog, queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
@@ -1199,16 +1472,7 @@ export default function ProductApp() {
       : undefined
     const storageKey = videoStorageKey(catalogDocumentId)
     const usesLegacyBridge = !catalogDocumentId
-    const session: SmartVideoSessionSummary = {
-      version: 1,
-      projectId: result.project.id,
-      title: result.project.title,
-      sourceKind: result.project.source.kind,
-      sourceText: result.project.source.text,
-      updatedAt: result.project.updatedAt,
-      sceneCount: result.project.scenes.length,
-      taskCount: result.plan.tasks.length,
-    }
+    const session = smartVideoSessionFromResult(result)
     const serialized = serializeSmartVideoSession(session)
     if (usesLegacyBridge) clientStateDirtyRef.current.add('smart-video-session')
     let browserStored = true
@@ -1217,21 +1481,46 @@ export default function ProductApp() {
     } catch {
       browserStored = false
     }
-    const durablyStored = browserStored || (usesLegacyBridge && bridgeReadyRef.current)
+    const durablyStored = browserStored || bridgeReadyRef.current
     setVideoSession(durablyStored
-      ? { status: 'ready', session }
+      ? { status: 'ready', session, result }
       : {
           status: 'error',
           session,
+          result,
           error: '智能视频计划仍在当前页面，但浏览器存储失败且本机桥接离线；刷新后无法恢复。',
         })
     if (catalogDocumentId && activeWorkspaceProjectId) {
+      const catalogDocument = projectCatalogRef.current.projects
+        .find(({ id }) => id === activeWorkspaceProjectId)
+        ?.documents.find(({ id }) => id === catalogDocumentId)
+      const documentRevision = Math.max(0, catalogDocument?.revision ?? 0) + 1
+      if (bridgeReadyRef.current) {
+        void saveWorkspaceModeDocument({
+          projectId: activeWorkspaceProjectId,
+          documentId: catalogDocumentId,
+          modeId: 'smart-video',
+          revision: documentRevision,
+          value: serializeSmartVideoDocument(result),
+          reason: 'smart-video-plan-autosave',
+        }).catch((error) => {
+          setVideoSession({
+            status: 'error',
+            session,
+            result,
+            error: error instanceof ProjectApiError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT'
+              ? '智能视频项目已在另一页面更新；当前计划仍保留，未覆盖 SQLite 版本。'
+              : '智能视频计划仍在当前页面，但写入 SQLite 项目正文失败。',
+          })
+          setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '智能视频项目正文保存失败' })
+        })
+      }
       try {
         commitProjectCatalog(touchProjectDocument(
           projectCatalogRef.current,
           activeWorkspaceProjectId,
           catalogDocumentId,
-          { title: result.project.title, revision: result.project.revision },
+          { title: result.project.title, revision: documentRevision },
         ))
       } catch (error) {
         setProjectCatalogError(error instanceof Error ? error.message : '智能视频文档索引更新失败')
@@ -1240,7 +1529,7 @@ export default function ProductApp() {
       replaceModeProjectReference('smart-video', session.projectId)
     }
     setModeNotice(durablyStored
-      ? { tone: 'success', message: '剧本输入与计划摘要已保存到本机创作会话。' }
+      ? { tone: 'success', message: '剧本、分镜与执行计划已保存到 SQLite 项目正文。' }
       : { tone: 'error', message: '当前计划未能持久化；刷新后无法恢复。' })
     if (usesLegacyBridge && bridgeReadyRef.current) {
       void saveClientState('smart-video-session', serialized).catch(() => {
@@ -1382,6 +1671,18 @@ export default function ProductApp() {
 
   if (route.modeId === 'pixel') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId
+    const requestedWorkspaceKey = activeWorkspaceProjectId && requestedProjectId
+      ? `${activeWorkspaceProjectId}:${requestedProjectId}:pixel`
+      : null
+    if (requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
+      return (
+        <ModeGate
+          modeLabel="像素模式"
+          feedback={{ status: 'loading', title: '正在读取像素项目正文', detail: '正在从 SQLite 工作区恢复此文档的图层、帧与调色板。' }}
+          onBack={goHome}
+        />
+      )
+    }
     const pixelEntry = resolvePixelDraftEntry({
       requestedProjectId,
       status: pixelDraft.status,
@@ -1456,6 +1757,18 @@ export default function ProductApp() {
 
   if (route.modeId === 'smart-video') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId
+    const requestedWorkspaceKey = activeWorkspaceProjectId && requestedProjectId
+      ? `${activeWorkspaceProjectId}:${requestedProjectId}:smart-video`
+      : null
+    if (requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
+      return (
+        <ModeGate
+          modeLabel="智能视频"
+          feedback={{ status: 'loading', title: '正在读取智能视频项目正文', detail: '正在从 SQLite 工作区恢复剧本、分镜与执行计划。' }}
+          onBack={goHome}
+        />
+      )
+    }
     const requestedSessionMissing = requestedProjectId && (
       videoSession.status !== 'ready' || videoSession.session?.projectId !== requestedProjectId
     )
@@ -1516,6 +1829,7 @@ export default function ProductApp() {
           key={requestedProjectId ?? 'video-legacy'}
           initialText={videoSession.status === 'ready' ? videoSession.session?.sourceText : undefined}
           initialKind={videoSession.status === 'ready' ? videoSession.session?.sourceKind : undefined}
+          initialResult={videoSession.status === 'ready' ? videoSession.result : undefined}
           projectId={requestedProjectId}
           projectTitle={activeWorkspaceProject?.title}
           runtime={smartVideoRuntime}
@@ -1539,6 +1853,7 @@ export default function ProductApp() {
         onCreateProject={handleCreateProject}
         onOpenProject={handleOpenProject}
         onProjectStatusChange={handleProjectStatusChange}
+        onOpenProjectRecovery={handleOpenProjectRecovery}
         onRetryProjects={retryLocalContexts}
         onOpenSettings={openRuntimeSettings}
         onRefreshRuntime={() => void refreshRuntime()}
@@ -1554,6 +1869,21 @@ export default function ProductApp() {
         onClose={() => setSettingsOpen(false)}
         onRefresh={() => void refreshRuntime()}
         onConfigure={(request) => void handleRuntimeConfigure(request)}
+      />
+      <ProjectRecoveryDialog
+        open={Boolean(recoveryDialog)}
+        projectTitle={recoveryDialog?.projectTitle ?? ''}
+        recoveryPoints={recoveryDialog?.recoveryPoints ?? []}
+        loading={recoveryDialog?.loading ?? false}
+        busyId={recoveryDialog?.busyId}
+        error={recoveryDialog?.error}
+        message={recoveryDialog?.message}
+        onClose={() => setRecoveryDialog(null)}
+        onRefresh={() => {
+          if (recoveryDialog) void refreshRecoveryDialog(recoveryDialog.projectId)
+        }}
+        onCreate={() => void handleCreateRecoveryPoint()}
+        onRestore={(recoveryPoint) => void handleRestoreRecoveryPoint(recoveryPoint)}
       />
     </>
   )

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
 import { createProjectCatalog, createWorkspaceProject, serializeProjectCatalog } from '../src/lib/project/projectCatalog.mjs'
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
@@ -182,8 +183,8 @@ try {
   assert.equal(JSON.parse(loadedShellState.state.value).balancedProjectId, 'qa-project')
   const projectCatalogValue = serializeProjectCatalog(createWorkspaceProject(
     createProjectCatalog(),
-    { title: 'QA 多项目目录', initialModeId: 'balanced' },
-    { now: 1_728_000_000_000, projectId: 'qa-workspace', documentId: 'qa-balanced-document' },
+    { title: 'QA 多项目目录', initialModeId: 'pixel' },
+    { now: 1_728_000_000_000, projectId: 'qa-workspace', documentId: 'qa-pixel-document' },
   ).catalog)
   const savedProjectCatalog = await requestJson(bridge.baseUrl, '/api/client-state/project-catalog', {
     method: 'PUT',
@@ -192,6 +193,50 @@ try {
   assert.equal(savedProjectCatalog.state.kind, 'project-catalog')
   const loadedProjectCatalog = await requestJson(bridge.baseUrl, '/api/client-state/project-catalog')
   assert.deepEqual(JSON.parse(loadedProjectCatalog.state.value), JSON.parse(projectCatalogValue))
+  const emptyWorkspaceCatalog = await requestJson(bridge.baseUrl, '/api/workspace/catalog')
+  assert.equal(emptyWorkspaceCatalog.catalog.revision, 0)
+  const workspaceCatalog = JSON.parse(projectCatalogValue)
+  const savedWorkspaceCatalog = await requestJson(bridge.baseUrl, '/api/workspace/catalog', {
+    method: 'PUT',
+    body: JSON.stringify({ catalog: workspaceCatalog, baseRevision: 0, source: 'api-qa' }),
+  })
+  assert.equal(savedWorkspaceCatalog.catalog.projects[0].id, 'qa-workspace')
+  const staleWorkspaceCatalog = await requestJson(bridge.baseUrl, '/api/workspace/catalog', {
+    method: 'PUT',
+    body: JSON.stringify({ catalog: { ...workspaceCatalog, revision: 2 }, baseRevision: 0, source: 'stale-qa' }),
+  }, 409)
+  assert.equal(staleWorkspaceCatalog.error.code, 'WORKSPACE_CATALOG_CONFLICT')
+  const pixelDocument = createPixelDocument({
+    id: 'qa-pixel-document',
+    name: 'QA Pixel',
+    width: 4,
+    height: 4,
+    revision: 1,
+  })
+  const savedWorkspaceDocument = await requestJson(bridge.baseUrl, '/api/workspace/documents/qa-pixel-document', {
+    method: 'PUT',
+    body: JSON.stringify({
+      projectId: 'qa-workspace',
+      modeId: 'pixel',
+      baseRevision: null,
+      revision: 1,
+      value: serializePixelDocument(pixelDocument),
+      forceRecovery: true,
+    }),
+  })
+  assert.equal(savedWorkspaceDocument.document.revision, 1)
+  const loadedWorkspaceDocument = await requestJson(
+    bridge.baseUrl,
+    '/api/workspace/documents/qa-pixel-document?projectId=qa-workspace&modeId=pixel',
+  )
+  assert.equal(JSON.parse(loadedWorkspaceDocument.document.value).name, 'QA Pixel')
+  const manualRecovery = await requestJson(bridge.baseUrl, '/api/workspace/projects/qa-workspace/recovery-points', {
+    method: 'POST',
+    body: JSON.stringify({ documentId: 'qa-pixel-document', reason: 'api-qa' }),
+  }, 201)
+  assert.equal(manualRecovery.recoveryPoint.documentId, 'qa-pixel-document')
+  const recoveryList = await requestJson(bridge.baseUrl, '/api/workspace/projects/qa-workspace/recovery-points')
+  assert.ok(recoveryList.recoveryPoints.some(({ id }) => id === manualRecovery.recoveryPoint.id))
   const unknownStateKind = await requestJson(bridge.baseUrl, '/api/client-state/..%2Fescape', {}, 404)
   assert.equal(unknownStateKind.error.code, 'UNKNOWN_CLIENT_STATE_KIND')
   const invalidShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences', {

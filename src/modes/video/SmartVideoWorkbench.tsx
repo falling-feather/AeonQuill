@@ -96,6 +96,7 @@ export type SmartVideoPlanResult = {
 export type SmartVideoWorkbenchProps = {
   initialText?: string
   initialKind?: StorySourceKind
+  initialResult?: SmartVideoPlanResult
   projectId?: string
   projectTitle?: string
   runtime?: SmartVideoRuntimeSummary
@@ -279,19 +280,19 @@ function runtimeSnapshotFromFailure(message: string): ExecutionRuntimeSnapshot {
 export function SmartVideoWorkbench({
   initialText = starterScript,
   initialKind = 'script',
+  initialResult,
   projectId,
   projectTitle,
   runtime = { state: 'offline', label: 'ComfyUI 休眠', detail: '生成阶段才会按策略启动' },
   onBack,
   onPlanReady,
 }: SmartVideoWorkbenchProps) {
-  const [kind, setKind] = useState<StorySourceKind>(initialKind)
-  const [text, setText] = useState(initialText)
-  const [aspectRatio, setAspectRatio] = useState<StoryAspectRatio>('16:9')
-  const [frameStrategy, setFrameStrategy] = useState<FrameStrategy>('start-end')
-  const [result, setResult] = useState<SmartVideoPlanResult>(() =>
-    createPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle),
-  )
+  const [kind, setKind] = useState<StorySourceKind>(initialResult?.project.source.kind ?? initialKind)
+  const [text, setText] = useState(initialResult?.project.source.text ?? initialText)
+  const [aspectRatio, setAspectRatio] = useState<StoryAspectRatio>(initialResult?.project.settings.aspectRatio ?? '16:9')
+  const [frameStrategy, setFrameStrategy] = useState<FrameStrategy>(initialResult?.project.settings.frameStrategy ?? 'start-end')
+  const [result, setResult] = useState<SmartVideoPlanResult>(() => initialResult
+    ?? createPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle))
   const firstShotId = result.project.scenes[0]?.shots[0]?.id ?? ''
   const [error, setError] = useState<string | null>(null)
   const [executionError, setExecutionError] = useState<string | null>(null)

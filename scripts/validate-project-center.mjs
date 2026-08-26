@@ -122,6 +122,15 @@ try {
   )
   assert.equal(new Set(catalog.projects.flatMap((project) => project.documents.map((document) => document.id))).size, 4)
 
+  await page.getByRole('button', { name: '打开独立均衡项目项目操作', exact: true }).click()
+  await page.getByRole('button', { name: '恢复点', exact: true }).click()
+  const recoveryDialog = page.getByRole('dialog', { name: '项目恢复点' })
+  await recoveryDialog.waitFor({ state: 'visible' })
+  await recoveryDialog.getByRole('button', { name: '创建当前恢复点', exact: true }).click()
+  await recoveryDialog.getByText('已创建当前项目恢复点。', { exact: true }).waitFor({ state: 'visible' })
+  assert.equal(await recoveryDialog.locator('.aq-recovery-list > li').count() >= 1, true)
+  await recoveryDialog.getByRole('button', { name: '关闭项目恢复点', exact: true }).click()
+
   await page.getByRole('button', { name: '打开独立像素项目项目操作', exact: true }).click()
   await page.getByRole('button', { name: '归档', exact: true }).click()
   await page.getByRole('button', { name: '已归档', exact: true }).click()
@@ -130,7 +139,7 @@ try {
   await page.getByText('独立像素项目', { exact: true }).waitFor({ state: 'visible' })
 
   await page.screenshot({
-    path: join(artifactDirectory, 'project-center-v072-desktop.png'),
+    path: join(artifactDirectory, 'project-center-v073-desktop.png'),
     type: 'png',
     fullPage: true,
   })
@@ -140,7 +149,7 @@ try {
   await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible' })
   assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({
-    path: join(artifactDirectory, 'project-center-v072-mobile.png'),
+    path: join(artifactDirectory, 'project-center-v073-mobile.png'),
     type: 'png',
     fullPage: true,
   })
@@ -185,10 +194,12 @@ try {
       legacyVideoPreserved: sessionStorage.getItem('aeonquill:smart-video-session:v1') !== null,
     }
   })
-  assert.deepEqual(migrationResult.projects, [
+  const migratedLegacyProjects = migrationResult.projects.filter(({ title }) => title.startsWith('旧'))
+  assert.deepEqual(migratedLegacyProjects, [
     { title: '旧像素草稿', documents: [{ id: 'legacy-pixel-document', modeId: 'pixel' }] },
     { title: '旧视频会话', documents: [{ id: 'legacy-video-document', modeId: 'smart-video' }] },
   ])
+  assert.equal(migrationResult.projects.some(({ title }) => title === '独立均衡项目'), true)
   assert.equal(migrationResult.legacyPixelPreserved, true)
   assert.equal(migrationResult.legacyVideoPreserved, true)
   await legacyPage.getByText('旧像素草稿', { exact: true }).click()
@@ -201,9 +212,9 @@ try {
     baseUrl,
     projects: catalog.projects.length,
     documents: 4,
-    migratedLegacyProjects: migrationResult.projects.length,
-    desktop: 'project-center-v072-desktop.png',
-    mobile: 'project-center-v072-mobile.png',
+    migratedLegacyProjects: migratedLegacyProjects.length,
+    desktop: 'project-center-v073-desktop.png',
+    mobile: 'project-center-v073-mobile.png',
   }, null, 2))
 } catch (error) {
   await page.screenshot({

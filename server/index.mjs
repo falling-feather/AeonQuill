@@ -16,6 +16,7 @@ import {
 } from './job-scheduler.mjs'
 import { JobStore } from './job-store.mjs'
 import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store.mjs'
+import { WorkspaceStore } from './workspace-store.mjs'
 import { buildManagedComfyLaunch, ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
 import {
   cacheDirectory,
@@ -94,6 +95,7 @@ const imageProcessor = new ImageProcessor({
 })
 const store = new JobStore(join(dataDirectory, 'jobs.json'))
 const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
+const workspaceStore = new WorkspaceStore(join(dataDirectory, 'workspaces'))
 const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'))
 const assetPreviewService = new AssetPreviewService({
   rootDirectory: join(cacheDirectory, 'previews'),
@@ -123,9 +125,17 @@ await Promise.all([
   mkdir(logDirectory, { recursive: true }),
   store.load(),
   projectStore.open(),
+  workspaceStore.open(),
   clientStateStore.open(),
   assetPreviewService.open(),
 ])
+
+try {
+  const legacyCatalog = await clientStateStore.get('project-catalog')
+  if (legacyCatalog?.value) workspaceStore.bootstrapCatalog(JSON.parse(legacyCatalog.value), { source: 'client-state-v1' })
+} catch (error) {
+  console.warn(`[WORKSPACE_BOOTSTRAP_SKIPPED] ${redactSensitiveText(error?.message || 'legacy catalog unavailable')}`)
+}
 
 const sseClients = new Set()
 const requestedImageConcurrency = Number(
@@ -1995,6 +2005,101 @@ const server = createServer(async (request, response) => {
       runtimeCache = null
       return sendJson(response, 200, await inspectRuntime(true))
     }
+    if (request.method === 'GET' && pathname === '/api/workspace/catalog') {
+      return sendJson(response, 200, workspaceStore.getCatalog())
+    }
+    if (request.method === 'PUT' && pathname === '/api/workspace/catalog') {
+      const body = await readJsonBody(request, 3 * 1024 * 1024)
+      const allowed = new Set(['catalog', 'baseRevision', 'source'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || !('catalog' in body)
+        || !('baseRevision' in body)
+        || (body.source !== undefined && (typeof body.source !== 'string' || body.source.length > 80))
+      ) {
+        return sendError(response, 400, 'INVALID_WORKSPACE_CATALOG_REQUEST', '项目目录请求字段无效')
+      }
+      return sendJson(response, 200, workspaceStore.saveCatalog(body.catalog, {
+        baseRevision: body.baseRevision,
+        source: body.source || 'client',
+      }))
+    }
+    const workspaceDocumentMatch = /^\/api\/workspace\/documents\/([^/]+)$/u.exec(pathname)
+    if (request.method === 'GET' && workspaceDocumentMatch) {
+      const document = workspaceStore.getModeDocument(decodeURIComponent(workspaceDocumentMatch[1]))
+      if (document && url.searchParams.get('projectId') && document.projectId !== url.searchParams.get('projectId')) {
+        return sendError(response, 409, 'WORKSPACE_DOCUMENT_OWNERSHIP_CHANGE', '项目文档不属于请求的项目')
+      }
+      if (document && url.searchParams.get('modeId') && document.modeId !== url.searchParams.get('modeId')) {
+        return sendError(response, 409, 'WORKSPACE_MODE_MISMATCH', '项目文档模式与请求不一致')
+      }
+      return sendJson(response, 200, { document })
+    }
+    if (request.method === 'PUT' && workspaceDocumentMatch) {
+      const body = await readJsonBody(request, 72 * 1024 * 1024)
+      const allowed = new Set(['projectId', 'modeId', 'baseRevision', 'revision', 'value', 'reason', 'forceRecovery'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || ['projectId', 'modeId', 'baseRevision', 'revision', 'value'].some((key) => !(key in body))
+        || (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 120))
+        || (body.forceRecovery !== undefined && typeof body.forceRecovery !== 'boolean')
+      ) {
+        return sendError(response, 400, 'INVALID_MODE_DOCUMENT_REQUEST', '模式文档请求字段无效')
+      }
+      const document = workspaceStore.saveModeDocument({
+        ...body,
+        documentId: decodeURIComponent(workspaceDocumentMatch[1]),
+      }, {
+        reason: body.reason,
+        forceRecovery: body.forceRecovery,
+      })
+      return sendJson(response, 200, { document })
+    }
+    const workspaceRecoveriesMatch = /^\/api\/workspace\/projects\/([^/]+)\/recovery-points$/u.exec(pathname)
+    if (request.method === 'GET' && workspaceRecoveriesMatch) {
+      return sendJson(response, 200, {
+        recoveryPoints: workspaceStore.listRecoveryPoints(decodeURIComponent(workspaceRecoveriesMatch[1])),
+      })
+    }
+    if (request.method === 'POST' && workspaceRecoveriesMatch) {
+      const body = await readJsonBody(request, 16 * 1024)
+      const allowed = new Set(['documentId', 'reason'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || (body.documentId !== undefined && typeof body.documentId !== 'string')
+        || (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 120))
+      ) {
+        return sendError(response, 400, 'INVALID_RECOVERY_POINT_REQUEST', '恢复点请求字段无效')
+      }
+      return sendJson(response, 201, {
+        recoveryPoint: workspaceStore.createRecoveryPoint(
+          decodeURIComponent(workspaceRecoveriesMatch[1]),
+          { documentId: body.documentId, reason: body.reason },
+        ),
+      })
+    }
+    const workspaceRestoreMatch = /^\/api\/workspace\/recovery-points\/([^/]+)\/restore$/u.exec(pathname)
+    if (request.method === 'POST' && workspaceRestoreMatch) {
+      const restored = workspaceStore.restoreRecoveryPoint(decodeURIComponent(workspaceRestoreMatch[1]))
+      if (restored.document?.modeId === 'balanced') {
+        await projectStore.saveProject(JSON.parse(restored.document.value), {
+          source: 'workspace-recovery-restore',
+          resolveAssetReference: resolveProjectAssetReference,
+        })
+      }
+      return sendJson(response, 200, {
+        restored,
+      })
+    }
     const clientStateMatch = /^\/api\/client-state\/([^/]+)$/u.exec(pathname)
     if (request.method === 'GET' && clientStateMatch) {
       const state = await clientStateStore.get(decodeURIComponent(clientStateMatch[1]))
@@ -2066,6 +2171,18 @@ const server = createServer(async (request, response) => {
         source: 'canvas-autosave',
         resolveAssetReference: resolveProjectAssetReference,
       })
+      const registration = workspaceStore.findDocumentRegistration(project.id)
+      if (registration?.document.modeId === 'balanced') {
+        const existingWorkspaceDocument = workspaceStore.getModeDocument(project.id)
+        workspaceStore.saveModeDocument({
+          projectId: registration.project.id,
+          documentId: project.id,
+          modeId: 'balanced',
+          baseRevision: existingWorkspaceDocument?.revision ?? null,
+          revision: project.revision,
+          value: JSON.stringify(project.document),
+        }, { reason: 'balanced-canvas-autosave' })
+      }
       return sendJson(response, 200, { project })
     }
     if (request.method === 'GET' && pathname === '/api/projects/current') {
@@ -2199,6 +2316,8 @@ async function shutdown() {
   clearInterval(heartbeat)
   for (const response of sseClients) response.end()
   await runtimeManager.dispose().catch(() => {})
+  workspaceStore.close()
+  projectStore.close()
   server.closeIdleConnections?.()
   const closeLingeringConnections = setTimeout(() => server.closeAllConnections?.(), 2_500)
   closeLingeringConnections.unref()
