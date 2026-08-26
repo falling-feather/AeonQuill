@@ -14,6 +14,9 @@ const MAX_PACKAGE_BYTES = 384 * 1024 * 1024
 const ASSET_ID_PATTERN = /^[a-f0-9]{64}$/
 const ASSET_VERSION_ID_PATTERN = /^asset-version-[a-f0-9]{32}$/
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/
+const LIBRARY_ID_PATTERN = /^(?:library|collection)-[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/
+const LIBRARY_SCOPES = new Set(['global', 'project'])
+const MAX_LIBRARY_TAGS = 12
 const MIME_EXTENSIONS = new Map([
   ['image/png', 'png'],
   ['image/jpeg', 'jpg'],
@@ -53,6 +56,59 @@ function assertAssetId(assetId) {
   if (typeof assetId !== 'string' || !ASSET_ID_PATTERN.test(assetId)) {
     fail('INVALID_ASSET_ID', 'Asset id is invalid', 400)
   }
+}
+
+function assertLibraryId(value, label = 'Library id') {
+  if (typeof value !== 'string' || !LIBRARY_ID_PATTERN.test(value)) {
+    fail('INVALID_LIBRARY_ID', `${label} is invalid`, 400)
+  }
+  return value
+}
+
+function normalizeLibraryScope(scope, projectId) {
+  if (!LIBRARY_SCOPES.has(scope)) fail('INVALID_LIBRARY_SCOPE', 'Library scope must be global or project', 400)
+  if (scope === 'project') {
+    assertProjectId(projectId)
+    return { scope, projectId }
+  }
+  if (projectId !== undefined && projectId !== null) {
+    fail('INVALID_LIBRARY_SCOPE', 'Global library items cannot carry a project id', 400)
+  }
+  return { scope, projectId: null }
+}
+
+function normalizeLibraryText(value, label, maximum, { required = false } = {}) {
+  if (value === undefined || value === null) {
+    if (required) fail('INVALID_LIBRARY_METADATA', `${label} is required`, 400)
+    return ''
+  }
+  if (typeof value !== 'string') fail('INVALID_LIBRARY_METADATA', `${label} must be text`, 400)
+  const normalized = value.trim().replace(/\s+/gu, ' ')
+  if ((required && !normalized) || normalized.length > maximum) {
+    fail('INVALID_LIBRARY_METADATA', `${label} must contain ${required ? '1' : '0'}-${maximum} characters`, 400)
+  }
+  return normalized
+}
+
+function normalizeLibraryTags(tags = []) {
+  if (!Array.isArray(tags) || tags.length > MAX_LIBRARY_TAGS) {
+    fail('INVALID_LIBRARY_TAGS', `Library tags must contain at most ${MAX_LIBRARY_TAGS} entries`, 400)
+  }
+  const normalized = tags.map((tag) => normalizeLibraryText(tag, 'Library tag', 40, { required: true }).toLocaleLowerCase('zh-CN'))
+  if (new Set(normalized).size !== normalized.length) fail('INVALID_LIBRARY_TAGS', 'Library tags must be unique', 400)
+  return normalized.sort((left, right) => left.localeCompare(right, 'zh-CN'))
+}
+
+function libraryMediaKind(mimeType) {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('video/')) return 'video'
+  if (mimeType.startsWith('audio/')) return 'audio'
+  fail('UNSUPPORTED_ASSET_TYPE', `Unsupported library asset type: ${mimeType}`, 415)
+}
+
+function libraryVersionId(itemId, version, assetId) {
+  const digest = contentHash(Buffer.from(`${itemId}\0${version}\0${assetId}`, 'utf8'))
+  return `library-version-${digest.slice(0, 32)}`
 }
 
 function stableJson(value) {
@@ -208,6 +264,58 @@ export class ProjectStore {
       CREATE INDEX IF NOT EXISTS project_assets_asset_id ON project_assets(asset_id);
       CREATE INDEX IF NOT EXISTS asset_versions_asset_id ON asset_versions(asset_id);
       CREATE INDEX IF NOT EXISTS asset_versions_logical ON asset_versions(project_id, logical_asset_id, version);
+      CREATE TABLE IF NOT EXISTS library_items (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK(scope IN ('global', 'project')),
+        project_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        media_kind TEXT NOT NULL CHECK(media_kind IN ('image', 'video', 'audio')),
+        source_item_id TEXT REFERENCES library_items(id) ON DELETE SET NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK((scope = 'global' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL))
+      );
+      CREATE TABLE IF NOT EXISTS library_versions (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL CHECK(version > 0),
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE RESTRICT,
+        parent_version_id TEXT,
+        provenance_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(item_id, version)
+      );
+      CREATE TABLE IF NOT EXISTS library_tags (
+        item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+        tag TEXT NOT NULL,
+        PRIMARY KEY(item_id, tag)
+      );
+      CREATE TABLE IF NOT EXISTS library_collections (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK(scope IN ('global', 'project')),
+        project_id TEXT,
+        title TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK((scope = 'global' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL))
+      );
+      CREATE TABLE IF NOT EXISTS library_collection_items (
+        collection_id TEXT NOT NULL REFERENCES library_collections(id) ON DELETE CASCADE,
+        item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+        PRIMARY KEY(collection_id, item_id)
+      );
+      CREATE TABLE IF NOT EXISTS library_project_refs (
+        project_id TEXT NOT NULL,
+        item_id TEXT NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+        version_id TEXT NOT NULL REFERENCES library_versions(id) ON DELETE RESTRICT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(project_id, item_id)
+      );
+      CREATE INDEX IF NOT EXISTS library_items_scope_project ON library_items(scope, project_id, updated_at);
+      CREATE INDEX IF NOT EXISTS library_versions_asset_id ON library_versions(asset_id);
+      CREATE INDEX IF NOT EXISTS library_versions_item ON library_versions(item_id, version);
+      CREATE INDEX IF NOT EXISTS library_project_refs_project ON library_project_refs(project_id, created_at);
     `)
     return this
   }
@@ -303,6 +411,454 @@ export class ProjectStore {
       FROM assets WHERE id = ?
     `).get(assetId)
     return row ? { ...row, provenance: JSON.parse(row.provenanceJson) } : null
+  }
+
+  libraryTags(itemId) {
+    return this.database.prepare('SELECT tag FROM library_tags WHERE item_id = ? ORDER BY tag ASC')
+      .all(itemId).map(({ tag }) => tag)
+  }
+
+  libraryCollections(itemId) {
+    return this.database.prepare(`
+      SELECT c.id, c.scope, c.project_id AS projectId, c.title
+      FROM library_collections c
+      JOIN library_collection_items ci ON ci.collection_id = c.id
+      WHERE ci.item_id = ?
+      ORDER BY c.title ASC, c.id ASC
+    `).all(itemId)
+  }
+
+  libraryVersion(versionId) {
+    return this.database.prepare(`
+      SELECT v.id, v.item_id AS itemId, v.version, v.asset_id AS assetId,
+             v.parent_version_id AS parentVersionId, v.provenance_json AS provenanceJson,
+             v.created_at AS createdAt, a.mime_type AS mimeType, a.extension, a.bytes
+      FROM library_versions v
+      JOIN assets a ON a.id = v.asset_id
+      WHERE v.id = ?
+    `).get(versionId)
+  }
+
+  hydrateLibraryItem(row, projectId = undefined) {
+    if (!row) return null
+    const latest = this.database.prepare(`
+      SELECT id FROM library_versions WHERE item_id = ? ORDER BY version DESC LIMIT 1
+    `).get(row.id)
+    const reference = projectId && row.scope === 'global'
+      ? this.database.prepare(`
+          SELECT version_id AS versionId FROM library_project_refs WHERE project_id = ? AND item_id = ?
+        `).get(projectId, row.id)
+      : null
+    const selectedVersion = this.libraryVersion(reference?.versionId || latest?.id)
+    if (!selectedVersion) fail('LIBRARY_VERSION_NOT_FOUND', `Library item has no usable version: ${row.id}`, 500)
+    const latestVersion = this.libraryVersion(latest.id)
+    return {
+      id: row.id,
+      scope: row.scope,
+      projectId: row.projectId || undefined,
+      title: row.title,
+      description: row.description,
+      mediaKind: row.mediaKind,
+      sourceItemId: row.sourceItemId || undefined,
+      relationship: row.scope === 'project' ? 'project-owned' : reference ? 'global-reference' : 'global',
+      tags: this.libraryTags(row.id),
+      collections: this.libraryCollections(row.id),
+      versionCount: Number(latestVersion.version),
+      latestVersionId: latestVersion.id,
+      version: {
+        id: selectedVersion.id,
+        version: Number(selectedVersion.version),
+        assetId: selectedVersion.assetId,
+        parentVersionId: selectedVersion.parentVersionId || undefined,
+        provenance: JSON.parse(selectedVersion.provenanceJson),
+        createdAt: Number(selectedVersion.createdAt),
+        mimeType: selectedVersion.mimeType,
+        extension: selectedVersion.extension,
+        bytes: Number(selectedVersion.bytes),
+        url: `/api/project-assets/${selectedVersion.assetId}`,
+      },
+      createdAt: Number(row.createdAt),
+      updatedAt: Number(row.updatedAt),
+    }
+  }
+
+  getLibraryAsset(itemId, options = {}) {
+    this.assertOpen()
+    assertLibraryId(itemId, 'Library item id')
+    const row = this.database.prepare(`
+      SELECT id, scope, project_id AS projectId, title, description, media_kind AS mediaKind,
+             source_item_id AS sourceItemId, created_at AS createdAt, updated_at AS updatedAt
+      FROM library_items WHERE id = ?
+    `).get(itemId)
+    if (!row) return null
+    if (row.scope === 'project' && options.projectId !== row.projectId) {
+      fail('LIBRARY_ITEM_FORBIDDEN', 'Project library item belongs to another project', 403)
+    }
+    if (options.projectId !== undefined) assertProjectId(options.projectId)
+    return this.hydrateLibraryItem(row, options.projectId)
+  }
+
+  listLibraryAssets(options = {}) {
+    this.assertOpen()
+    const { scope, projectId } = normalizeLibraryScope(options.scope || 'global', options.projectId)
+    const query = normalizeLibraryText(options.query, 'Library query', 120).toLocaleLowerCase('zh-CN')
+    const requestedTags = normalizeLibraryTags(options.tags || [])
+    const collectionId = options.collectionId === undefined ? undefined : assertLibraryId(options.collectionId, 'Collection id')
+    const rows = scope === 'global'
+      ? this.database.prepare(`
+          SELECT id, scope, project_id AS projectId, title, description, media_kind AS mediaKind,
+                 source_item_id AS sourceItemId, created_at AS createdAt, updated_at AS updatedAt
+          FROM library_items WHERE scope = 'global'
+          ORDER BY updated_at DESC, id ASC LIMIT 500
+        `).all()
+      : this.database.prepare(`
+          SELECT DISTINCT i.id, i.scope, i.project_id AS projectId, i.title, i.description,
+                 i.media_kind AS mediaKind, i.source_item_id AS sourceItemId,
+                 i.created_at AS createdAt, i.updated_at AS updatedAt
+          FROM library_items i
+          LEFT JOIN library_project_refs r ON r.item_id = i.id AND r.project_id = ?
+          WHERE (i.scope = 'project' AND i.project_id = ?) OR r.project_id = ?
+          ORDER BY i.updated_at DESC, i.id ASC LIMIT 500
+        `).all(projectId, projectId, projectId)
+    return rows.map((row) => this.hydrateLibraryItem(row, projectId || undefined)).filter((item) => {
+      if (query) {
+        const haystack = `${item.title}\n${item.description}\n${item.tags.join('\n')}`.toLocaleLowerCase('zh-CN')
+        if (!haystack.includes(query)) return false
+      }
+      if (requestedTags.some((tag) => !item.tags.includes(tag))) return false
+      if (collectionId && !item.collections.some(({ id }) => id === collectionId)) return false
+      return true
+    })
+  }
+
+  async stageLibraryContent(dataUrl, provenance, now) {
+    const decoded = decodeSupportedDataUrl(dataUrl)
+    const assetId = contentHash(decoded.bytes)
+    const existing = this.getAsset(assetId)
+    if (existing) {
+      if (existing.mimeType !== decoded.mimeType || existing.bytes !== decoded.bytes.length) {
+        fail('ASSET_HASH_MISMATCH', 'Existing content asset metadata does not match imported bytes', 409)
+      }
+      return { asset: existing, createdFile: false, insertRequired: false }
+    }
+    const relativePath = assetFilename(assetId, decoded.extension)
+    const finalPath = pathWithin(this.assetDirectory, join(this.assetDirectory, relativePath))
+    const temporaryPath = pathWithin(this.tempDirectory, join(this.tempDirectory, `${assetId}-${randomUUID()}.tmp`))
+    await writeFile(temporaryPath, decoded.bytes, { flag: 'wx' })
+    let createdFile = false
+    try {
+      await rename(temporaryPath, finalPath)
+      createdFile = true
+    } catch (error) {
+      await unlink(temporaryPath).catch(() => {})
+      if (error.code !== 'EEXIST') throw error
+    }
+    return {
+      asset: {
+        id: assetId,
+        sha256: assetId,
+        mimeType: decoded.mimeType,
+        extension: decoded.extension,
+        bytes: decoded.bytes.length,
+        relativePath,
+        provenance,
+        createdAt: now,
+      },
+      createdFile,
+      insertRequired: true,
+    }
+  }
+
+  insertStagedLibraryAsset(staged, now) {
+    if (!staged.insertRequired) return
+    this.database.prepare(`
+      INSERT OR IGNORE INTO assets
+        (id, sha256, mime_type, extension, bytes, relative_path, provenance_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      staged.asset.id,
+      staged.asset.sha256,
+      staged.asset.mimeType,
+      staged.asset.extension,
+      staged.asset.bytes,
+      staged.asset.relativePath,
+      stableJson(staged.asset.provenance),
+      now,
+    )
+  }
+
+  validateLibraryCollections(collectionIds, scope, projectId) {
+    if (collectionIds === undefined) return []
+    if (!Array.isArray(collectionIds) || collectionIds.length > 20) {
+      fail('INVALID_LIBRARY_COLLECTIONS', 'Library collections must contain at most 20 ids', 400)
+    }
+    const ids = collectionIds.map((id) => assertLibraryId(id, 'Collection id'))
+    if (new Set(ids).size !== ids.length) fail('INVALID_LIBRARY_COLLECTIONS', 'Library collection ids must be unique', 400)
+    for (const id of ids) {
+      const collection = this.database.prepare(`
+        SELECT id, scope, project_id AS projectId FROM library_collections WHERE id = ?
+      `).get(id)
+      if (!collection) fail('LIBRARY_COLLECTION_NOT_FOUND', `Library collection was not found: ${id}`, 404)
+      if (collection.scope !== scope || (scope === 'project' && collection.projectId !== projectId)) {
+        fail('LIBRARY_COLLECTION_SCOPE_MISMATCH', 'Library item and collection scopes do not match', 409)
+      }
+    }
+    return ids
+  }
+
+  replaceLibraryTags(itemId, tags) {
+    this.database.prepare('DELETE FROM library_tags WHERE item_id = ?').run(itemId)
+    const insert = this.database.prepare('INSERT INTO library_tags (item_id, tag) VALUES (?, ?)')
+    for (const tag of tags) insert.run(itemId, tag)
+  }
+
+  replaceLibraryCollections(itemId, collectionIds) {
+    this.database.prepare('DELETE FROM library_collection_items WHERE item_id = ?').run(itemId)
+    const insert = this.database.prepare(`
+      INSERT INTO library_collection_items (collection_id, item_id) VALUES (?, ?)
+    `)
+    for (const collectionId of collectionIds) insert.run(collectionId, itemId)
+  }
+
+  async createLibraryAsset(input, options = {}) {
+    this.assertOpen()
+    const now = options.now ?? Date.now()
+    const { scope, projectId } = normalizeLibraryScope(input.scope, input.projectId)
+    const title = normalizeLibraryText(input.title, 'Library title', 120, { required: true })
+    const description = normalizeLibraryText(input.description, 'Library description', 600)
+    const tags = normalizeLibraryTags(input.tags)
+    const collectionIds = this.validateLibraryCollections(input.collectionIds, scope, projectId)
+    const itemId = input.id === undefined ? `library-${randomUUID()}` : assertLibraryId(input.id, 'Library item id')
+    if (this.database.prepare('SELECT 1 FROM library_items WHERE id = ?').get(itemId)) {
+      fail('LIBRARY_ITEM_CONFLICT', `Library item already exists: ${itemId}`, 409)
+    }
+    const provenance = { source: options.source || 'user-library-import', importedAt: now }
+    const staged = await this.stageLibraryContent(input.dataUrl, provenance, now)
+    const mediaKind = libraryMediaKind(staged.asset.mimeType)
+    const versionId = libraryVersionId(itemId, 1, staged.asset.id)
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      this.insertStagedLibraryAsset(staged, now)
+      this.database.prepare(`
+        INSERT INTO library_items
+          (id, scope, project_id, title, description, media_kind, source_item_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      `).run(itemId, scope, projectId, title, description, mediaKind, now, now)
+      this.database.prepare(`
+        INSERT INTO library_versions
+          (id, item_id, version, asset_id, parent_version_id, provenance_json, created_at)
+        VALUES (?, ?, 1, ?, NULL, ?, ?)
+      `).run(versionId, itemId, staged.asset.id, stableJson(provenance), now)
+      this.replaceLibraryTags(itemId, tags)
+      this.replaceLibraryCollections(itemId, collectionIds)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      try { this.database.exec('ROLLBACK') } catch {}
+      if (staged.createdFile) await unlink(this.assetPath(staged.asset)).catch(() => {})
+      throw error
+    }
+    return this.getLibraryAsset(itemId, projectId ? { projectId } : {})
+  }
+
+  linkLibraryAssetToProject(itemId, projectId, versionId = undefined, options = {}) {
+    this.assertOpen()
+    assertLibraryId(itemId, 'Library item id')
+    assertProjectId(projectId)
+    const item = this.database.prepare('SELECT id, scope FROM library_items WHERE id = ?').get(itemId)
+    if (!item) fail('LIBRARY_ITEM_NOT_FOUND', `Library item was not found: ${itemId}`, 404)
+    if (item.scope !== 'global') fail('LIBRARY_LINK_SCOPE_MISMATCH', 'Only global assets can be linked into a project', 409)
+    const selected = versionId
+      ? this.libraryVersion(versionId)
+      : this.database.prepare(`
+          SELECT id FROM library_versions WHERE item_id = ? ORDER BY version DESC LIMIT 1
+        `).get(itemId)
+    const selectedVersion = selected?.itemId ? selected : this.libraryVersion(selected?.id)
+    if (!selectedVersion || selectedVersion.itemId !== itemId) {
+      fail('LIBRARY_VERSION_NOT_FOUND', 'Selected library version does not belong to this item', 404)
+    }
+    const now = options.now ?? Date.now()
+    this.database.prepare(`
+      INSERT INTO library_project_refs (project_id, item_id, version_id, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(project_id, item_id) DO UPDATE SET version_id = excluded.version_id
+    `).run(projectId, itemId, selectedVersion.id, now)
+    return this.getLibraryAsset(itemId, { projectId })
+  }
+
+  async deriveLibraryAsset(itemId, input, options = {}) {
+    this.assertOpen()
+    assertLibraryId(itemId, 'Library item id')
+    assertProjectId(input.projectId)
+    const sourceItem = this.getLibraryAsset(itemId, itemId.startsWith('library-') ? { projectId: input.projectId } : {})
+    if (!sourceItem) fail('LIBRARY_ITEM_NOT_FOUND', `Library item was not found: ${itemId}`, 404)
+    if (sourceItem.scope === 'project' && sourceItem.projectId !== input.projectId) {
+      fail('LIBRARY_ITEM_FORBIDDEN', 'Cannot derive another project library item', 403)
+    }
+    const sourceVersion = input.sourceVersionId
+      ? this.libraryVersion(input.sourceVersionId)
+      : this.libraryVersion(sourceItem.version.id)
+    if (!sourceVersion || sourceVersion.itemId !== itemId) {
+      fail('LIBRARY_VERSION_NOT_FOUND', 'Source version does not belong to the selected library item', 404)
+    }
+    const now = options.now ?? Date.now()
+    const title = normalizeLibraryText(input.title || `${sourceItem.title} · 派生`, 'Library title', 120, { required: true })
+    const description = normalizeLibraryText(input.description ?? sourceItem.description, 'Library description', 600)
+    const tags = normalizeLibraryTags(input.tags ?? sourceItem.tags)
+    const collectionIds = this.validateLibraryCollections(input.collectionIds, 'project', input.projectId)
+    const derivedItemId = input.id === undefined ? `library-${randomUUID()}` : assertLibraryId(input.id, 'Library item id')
+    if (this.database.prepare('SELECT 1 FROM library_items WHERE id = ?').get(derivedItemId)) {
+      fail('LIBRARY_ITEM_CONFLICT', `Library item already exists: ${derivedItemId}`, 409)
+    }
+    const provenance = {
+      source: options.source || 'project-derived-library-asset',
+      sourceItemId: itemId,
+      sourceVersionId: sourceVersion.id,
+      derivedAt: now,
+    }
+    const staged = input.dataUrl
+      ? await this.stageLibraryContent(input.dataUrl, provenance, now)
+      : { asset: this.getAsset(sourceVersion.assetId), createdFile: false, insertRequired: false }
+    if (!staged.asset) fail('ASSET_NOT_FOUND', 'Source library content asset is missing', 409)
+    const mediaKind = libraryMediaKind(staged.asset.mimeType)
+    if (mediaKind !== sourceItem.mediaKind) fail('LIBRARY_MEDIA_KIND_MISMATCH', 'Derived asset media kind cannot change', 409)
+    const versionId = libraryVersionId(derivedItemId, 1, staged.asset.id)
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      this.insertStagedLibraryAsset(staged, now)
+      this.database.prepare(`
+        INSERT INTO library_items
+          (id, scope, project_id, title, description, media_kind, source_item_id, created_at, updated_at)
+        VALUES (?, 'project', ?, ?, ?, ?, ?, ?, ?)
+      `).run(derivedItemId, input.projectId, title, description, mediaKind, itemId, now, now)
+      this.database.prepare(`
+        INSERT INTO library_versions
+          (id, item_id, version, asset_id, parent_version_id, provenance_json, created_at)
+        VALUES (?, ?, 1, ?, ?, ?, ?)
+      `).run(versionId, derivedItemId, staged.asset.id, sourceVersion.id, stableJson(provenance), now)
+      this.replaceLibraryTags(derivedItemId, tags)
+      this.replaceLibraryCollections(derivedItemId, collectionIds)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      try { this.database.exec('ROLLBACK') } catch {}
+      if (staged.createdFile) await unlink(this.assetPath(staged.asset)).catch(() => {})
+      throw error
+    }
+    return this.getLibraryAsset(derivedItemId, { projectId: input.projectId })
+  }
+
+  async addLibraryAssetVersion(itemId, input, options = {}) {
+    this.assertOpen()
+    assertLibraryId(itemId, 'Library item id')
+    assertProjectId(input.projectId)
+    const item = this.database.prepare(`
+      SELECT id, scope, project_id AS projectId, media_kind AS mediaKind FROM library_items WHERE id = ?
+    `).get(itemId)
+    if (!item) fail('LIBRARY_ITEM_NOT_FOUND', `Library item was not found: ${itemId}`, 404)
+    if (item.scope !== 'project' || item.projectId !== input.projectId) {
+      fail('LIBRARY_ORIGINAL_IMMUTABLE', 'Global or foreign project assets cannot be edited in place; create a project derivative', 409)
+    }
+    const previous = this.database.prepare(`
+      SELECT id, version FROM library_versions WHERE item_id = ? ORDER BY version DESC LIMIT 1
+    `).get(itemId)
+    if (!previous) fail('LIBRARY_VERSION_NOT_FOUND', 'Library item has no current version', 500)
+    const now = options.now ?? Date.now()
+    const provenance = {
+      source: options.source || 'project-library-edit',
+      parentVersionId: previous.id,
+      createdAt: now,
+    }
+    const staged = await this.stageLibraryContent(input.dataUrl, provenance, now)
+    if (libraryMediaKind(staged.asset.mimeType) !== item.mediaKind) {
+      if (staged.createdFile) await unlink(this.assetPath(staged.asset)).catch(() => {})
+      fail('LIBRARY_MEDIA_KIND_MISMATCH', 'A library version cannot change media kind', 409)
+    }
+    const version = Number(previous.version) + 1
+    const versionId = libraryVersionId(itemId, version, staged.asset.id)
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      this.insertStagedLibraryAsset(staged, now)
+      this.database.prepare(`
+        INSERT INTO library_versions
+          (id, item_id, version, asset_id, parent_version_id, provenance_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(versionId, itemId, version, staged.asset.id, previous.id, stableJson(provenance), now)
+      this.database.prepare('UPDATE library_items SET updated_at = ? WHERE id = ?').run(now, itemId)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      try { this.database.exec('ROLLBACK') } catch {}
+      if (staged.createdFile) await unlink(this.assetPath(staged.asset)).catch(() => {})
+      throw error
+    }
+    return this.getLibraryAsset(itemId, { projectId: input.projectId })
+  }
+
+  updateLibraryAssetMetadata(itemId, input, options = {}) {
+    this.assertOpen()
+    assertLibraryId(itemId, 'Library item id')
+    const item = this.database.prepare(`
+      SELECT id, scope, project_id AS projectId, title, description FROM library_items WHERE id = ?
+    `).get(itemId)
+    if (!item) fail('LIBRARY_ITEM_NOT_FOUND', `Library item was not found: ${itemId}`, 404)
+    if (item.scope === 'project' && input.projectId !== item.projectId) {
+      fail('LIBRARY_ITEM_FORBIDDEN', 'Project library item belongs to another project', 403)
+    }
+    if (input.projectId !== undefined) assertProjectId(input.projectId)
+    const title = input.title === undefined ? item.title : normalizeLibraryText(input.title, 'Library title', 120, { required: true })
+    const description = input.description === undefined
+      ? item.description
+      : normalizeLibraryText(input.description, 'Library description', 600)
+    const tags = input.tags === undefined ? this.libraryTags(itemId) : normalizeLibraryTags(input.tags)
+    const collectionIds = input.collectionIds === undefined
+      ? this.libraryCollections(itemId).map(({ id }) => id)
+      : this.validateLibraryCollections(input.collectionIds, item.scope, item.projectId)
+    const now = options.now ?? Date.now()
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      this.database.prepare(`
+        UPDATE library_items SET title = ?, description = ?, updated_at = ? WHERE id = ?
+      `).run(title, description, now, itemId)
+      this.replaceLibraryTags(itemId, tags)
+      this.replaceLibraryCollections(itemId, collectionIds)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+    return this.getLibraryAsset(itemId, item.scope === 'project' ? { projectId: item.projectId } : {})
+  }
+
+  createLibraryCollection(input, options = {}) {
+    this.assertOpen()
+    const { scope, projectId } = normalizeLibraryScope(input.scope, input.projectId)
+    const title = normalizeLibraryText(input.title, 'Collection title', 80, { required: true })
+    const id = input.id === undefined ? `collection-${randomUUID()}` : assertLibraryId(input.id, 'Collection id')
+    const now = options.now ?? Date.now()
+    try {
+      this.database.prepare(`
+        INSERT INTO library_collections (id, scope, project_id, title, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, scope, projectId, title, now, now)
+    } catch (error) {
+      if (error.code === 'ERR_SQLITE_CONSTRAINT_PRIMARYKEY') {
+        fail('LIBRARY_COLLECTION_CONFLICT', `Library collection already exists: ${id}`, 409)
+      }
+      throw error
+    }
+    return { id, scope, projectId: projectId || undefined, title, createdAt: now, updatedAt: now }
+  }
+
+  listLibraryCollections(options = {}) {
+    this.assertOpen()
+    const { scope, projectId } = normalizeLibraryScope(options.scope || 'global', options.projectId)
+    return this.database.prepare(`
+      SELECT c.id, c.scope, c.project_id AS projectId, c.title,
+             c.created_at AS createdAt, c.updated_at AS updatedAt, COUNT(ci.item_id) AS itemCount
+      FROM library_collections c
+      LEFT JOIN library_collection_items ci ON ci.collection_id = c.id
+      WHERE c.scope = ? AND c.project_id IS ?
+      GROUP BY c.id
+      ORDER BY c.title ASC, c.id ASC
+    `).all(scope, projectId).map((row) => ({ ...row, projectId: row.projectId || undefined, itemCount: Number(row.itemCount) }))
   }
 
   async prepareDocument(document, options = {}) {
@@ -556,6 +1112,7 @@ export class ProjectStore {
       FROM assets a
       WHERE NOT EXISTS (SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id)
         AND NOT EXISTS (SELECT 1 FROM asset_versions av WHERE av.asset_id = a.id)
+        AND NOT EXISTS (SELECT 1 FROM library_versions lv WHERE lv.asset_id = a.id)
     `).all()
     const removed = []
     for (const asset of orphans) {
@@ -574,7 +1131,8 @@ export class ProjectStore {
           SELECT 1 AS found
           WHERE EXISTS (SELECT 1 FROM project_assets WHERE asset_id = ?)
              OR EXISTS (SELECT 1 FROM asset_versions WHERE asset_id = ?)
-        `).get(asset.id, asset.id)
+             OR EXISTS (SELECT 1 FROM library_versions WHERE asset_id = ?)
+        `).get(asset.id, asset.id, asset.id)
         if (stillReferenced) {
           this.database.exec('ROLLBACK')
           if (moved) await rename(trashPath, filePath)

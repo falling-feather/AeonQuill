@@ -22,6 +22,36 @@
   font-size: 13px;
 }
 
+.aq-product-library-launcher {
+  position: fixed;
+  z-index: 180;
+  right: 18px;
+  top: 76px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid rgba(101, 83, 173, 0.34);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #56459c;
+  box-shadow: 0 8px 26px rgba(37, 31, 60, 0.1);
+  backdrop-filter: blur(12px);
+  font: 650 12px/1 Inter, ui-sans-serif, sans-serif;
+  cursor: pointer;
+}
+
+.aq-product-library-launcher:hover {
+  border-color: #6553ad;
+  background: #f7f4ff;
+}
+
+.aq-product-library-launcher:focus-visible {
+  outline: 2px solid #286fc5;
+  outline-offset: 3px;
+}
+
 .aq-product-mode-host > .aq-pixel-mode,
 .aq-product-mode-host > .aq-video-workbench,
 .aq-product-mode-host > .app-shell {
@@ -123,5 +153,17 @@
 
   .aq-product-state-host > .aq-surface-state {
     margin-top: 28px;
+  }
+
+  .aq-product-library-launcher {
+    right: 10px;
+    top: 66px;
+    width: 38px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .aq-product-library-launcher span {
+    display: none;
   }
 }

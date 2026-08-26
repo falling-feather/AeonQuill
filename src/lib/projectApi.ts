@@ -168,15 +168,16 @@ export function saveWorkspaceModeDocument(input: {
       const baseRevision = workspaceDocumentRevisions.has(input.documentId)
         ? workspaceDocumentRevisions.get(input.documentId) ?? null
         : null
+      const { documentId, ...body } = input
       const payload = await api<{ document: WorkspaceModeDocument }>(
-        `/api/workspace/documents/${encodeURIComponent(input.documentId)}`,
+        `/api/workspace/documents/${encodeURIComponent(documentId)}`,
         {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ...input, baseRevision }),
+          body: JSON.stringify({ ...body, baseRevision }),
         },
       )
-      workspaceDocumentRevisions.set(input.documentId, payload.document.revision)
+      workspaceDocumentRevisions.set(documentId, payload.document.revision)
       return payload.document
     })
   workspaceDocumentWrites.set(input.documentId, request)

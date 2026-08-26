@@ -8,6 +8,8 @@ import { createProjectCatalog, createWorkspaceProject, serializeProjectCatalog }
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
 const sourcePath = fileURLToPath(new URL('../src/assets/sample-summer-character.png', import.meta.url))
+const libraryPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg=='
+const libraryPixelVariant = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 async function requestJson(baseUrl, pathname, options = {}, expectedStatus = 200) {
   const response = await bridge.request(pathname, {
@@ -237,6 +239,56 @@ try {
   assert.equal(manualRecovery.recoveryPoint.documentId, 'qa-pixel-document')
   const recoveryList = await requestJson(bridge.baseUrl, '/api/workspace/projects/qa-workspace/recovery-points')
   assert.ok(recoveryList.recoveryPoints.some(({ id }) => id === manualRecovery.recoveryPoint.id))
+  const globalCollection = await requestJson(bridge.baseUrl, '/api/library/collections', {
+    method: 'POST',
+    body: JSON.stringify({ scope: 'global', title: 'QA 品牌素材' }),
+  }, 201)
+  const globalLibraryAsset = await requestJson(bridge.baseUrl, '/api/library/assets', {
+    method: 'POST',
+    body: JSON.stringify({
+      scope: 'global',
+      title: 'QA 全局角色',
+      description: '用于 API 资源库往返',
+      tags: ['角色', 'qa'],
+      collectionIds: [globalCollection.collection.id],
+      dataUrl: libraryPixel,
+    }),
+  }, 201)
+  assert.equal(globalLibraryAsset.asset.relationship, 'global')
+  const searchedLibrary = await requestJson(bridge.baseUrl, '/api/library/assets?scope=global&q=API&tag=qa')
+  assert.equal(searchedLibrary.assets[0].id, globalLibraryAsset.asset.id)
+  const linkedLibraryAsset = await requestJson(
+    bridge.baseUrl,
+    `/api/library/assets/${encodeURIComponent(globalLibraryAsset.asset.id)}/link-project`,
+    { method: 'POST', body: JSON.stringify({ projectId: 'qa-workspace' }) },
+  )
+  assert.equal(linkedLibraryAsset.asset.relationship, 'global-reference')
+  const derivedLibraryAsset = await requestJson(
+    bridge.baseUrl,
+    `/api/library/assets/${encodeURIComponent(globalLibraryAsset.asset.id)}/derive`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'qa-workspace', title: 'QA 项目派生', tags: ['派生'] }),
+    },
+    201,
+  )
+  assert.equal(derivedLibraryAsset.asset.version.assetId, globalLibraryAsset.asset.version.assetId)
+  assert.equal(derivedLibraryAsset.asset.version.parentVersionId, globalLibraryAsset.asset.version.id)
+  const versionedLibraryAsset = await requestJson(
+    bridge.baseUrl,
+    `/api/library/assets/${encodeURIComponent(derivedLibraryAsset.asset.id)}/versions`,
+    { method: 'POST', body: JSON.stringify({ projectId: 'qa-workspace', dataUrl: libraryPixelVariant }) },
+    201,
+  )
+  assert.equal(versionedLibraryAsset.asset.version.version, 2)
+  assert.notEqual(versionedLibraryAsset.asset.version.assetId, globalLibraryAsset.asset.version.assetId)
+  const projectLibrary = await requestJson(bridge.baseUrl, '/api/library/assets?scope=project&projectId=qa-workspace')
+  assert.deepEqual(new Set(projectLibrary.assets.map(({ relationship }) => relationship)), new Set(['global-reference', 'project-owned']))
+  const invalidLibraryPayload = await requestJson(bridge.baseUrl, '/api/library/assets', {
+    method: 'POST',
+    body: JSON.stringify({ scope: 'global', title: '非法字段', dataUrl: libraryPixel, privatePath: 'D:\\secret' }),
+  }, 400)
+  assert.equal(invalidLibraryPayload.error.code, 'INVALID_LIBRARY_ASSET_REQUEST')
   const unknownStateKind = await requestJson(bridge.baseUrl, '/api/client-state/..%2Fescape', {}, 404)
   assert.equal(unknownStateKind.error.code, 'UNKNOWN_CLIENT_STATE_KIND')
   const invalidShellState = await requestJson(bridge.baseUrl, '/api/client-state/shell-preferences', {

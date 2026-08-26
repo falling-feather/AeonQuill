@@ -2100,6 +2100,172 @@ const server = createServer(async (request, response) => {
         restored,
       })
     }
+    const libraryCollectionPath = pathname === '/api/library/collections'
+    if (request.method === 'GET' && libraryCollectionPath) {
+      const scope = url.searchParams.get('scope') || 'global'
+      const projectId = url.searchParams.get('projectId') || undefined
+      if (scope === 'project' && !workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '资源库所属项目不存在')
+      }
+      return sendJson(response, 200, {
+        collections: projectStore.listLibraryCollections({ scope, projectId }),
+      })
+    }
+    if (request.method === 'POST' && libraryCollectionPath) {
+      const body = await readJsonBody(request, 32 * 1024)
+      const allowed = new Set(['scope', 'projectId', 'title'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || !('scope' in body)
+        || !('title' in body)
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_COLLECTION_REQUEST', '资源集合请求字段无效')
+      }
+      if (body.scope === 'project' && !workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === body.projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '资源集合所属项目不存在')
+      }
+      return sendJson(response, 201, {
+        collection: projectStore.createLibraryCollection(body, { source: 'library-api' }),
+      })
+    }
+    if (request.method === 'GET' && pathname === '/api/library/assets') {
+      const scope = url.searchParams.get('scope') || 'global'
+      const projectId = url.searchParams.get('projectId') || undefined
+      if (scope === 'project' && !workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '资源库所属项目不存在')
+      }
+      const tags = url.searchParams.getAll('tag')
+      return sendJson(response, 200, {
+        assets: projectStore.listLibraryAssets({
+          scope,
+          projectId,
+          query: url.searchParams.get('q') || undefined,
+          tags,
+          collectionId: url.searchParams.get('collectionId') || undefined,
+        }),
+      })
+    }
+    if (request.method === 'POST' && pathname === '/api/library/assets') {
+      const body = await readJsonBody(request, 96 * 1024 * 1024)
+      const allowed = new Set(['scope', 'projectId', 'title', 'description', 'tags', 'collectionIds', 'dataUrl'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || !('scope' in body)
+        || !('title' in body)
+        || !('dataUrl' in body)
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_ASSET_REQUEST', '资源导入请求字段无效')
+      }
+      if (body.scope === 'project' && !workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === body.projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '资源所属项目不存在')
+      }
+      return sendJson(response, 201, {
+        asset: await projectStore.createLibraryAsset(body, { source: 'user-library-import' }),
+      })
+    }
+    const libraryAssetMatch = /^\/api\/library\/assets\/([^/]+)$/u.exec(pathname)
+    if (request.method === 'GET' && libraryAssetMatch) {
+      const projectId = url.searchParams.get('projectId') || undefined
+      const asset = projectStore.getLibraryAsset(decodeURIComponent(libraryAssetMatch[1]), projectId ? { projectId } : {})
+      if (!asset) return sendError(response, 404, 'LIBRARY_ITEM_NOT_FOUND', '资源库素材不存在')
+      return sendJson(response, 200, { asset })
+    }
+    if (request.method === 'PATCH' && libraryAssetMatch) {
+      const body = await readJsonBody(request, 48 * 1024)
+      const allowed = new Set(['projectId', 'title', 'description', 'tags', 'collectionIds'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_METADATA_REQUEST', '资源元数据请求字段无效')
+      }
+      return sendJson(response, 200, {
+        asset: projectStore.updateLibraryAssetMetadata(decodeURIComponent(libraryAssetMatch[1]), body),
+      })
+    }
+    const libraryLinkMatch = /^\/api\/library\/assets\/([^/]+)\/link-project$/u.exec(pathname)
+    if (request.method === 'POST' && libraryLinkMatch) {
+      const body = await readJsonBody(request, 16 * 1024)
+      const allowed = new Set(['projectId', 'versionId'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || typeof body.projectId !== 'string'
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_LINK_REQUEST', '资源加入项目请求字段无效')
+      }
+      if (!workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === body.projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '目标项目不存在')
+      }
+      return sendJson(response, 200, {
+        asset: projectStore.linkLibraryAssetToProject(
+          decodeURIComponent(libraryLinkMatch[1]),
+          body.projectId,
+          body.versionId,
+        ),
+      })
+    }
+    const libraryDeriveMatch = /^\/api\/library\/assets\/([^/]+)\/derive$/u.exec(pathname)
+    if (request.method === 'POST' && libraryDeriveMatch) {
+      const body = await readJsonBody(request, 96 * 1024 * 1024)
+      const allowed = new Set([
+        'projectId', 'sourceVersionId', 'title', 'description', 'tags', 'collectionIds', 'dataUrl',
+      ])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || typeof body.projectId !== 'string'
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_DERIVE_REQUEST', '项目派生资源请求字段无效')
+      }
+      if (!workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === body.projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '目标项目不存在')
+      }
+      return sendJson(response, 201, {
+        asset: await projectStore.deriveLibraryAsset(
+          decodeURIComponent(libraryDeriveMatch[1]),
+          body,
+          { source: 'project-derived-library-asset' },
+        ),
+      })
+    }
+    const libraryVersionMatch = /^\/api\/library\/assets\/([^/]+)\/versions$/u.exec(pathname)
+    if (request.method === 'POST' && libraryVersionMatch) {
+      const body = await readJsonBody(request, 96 * 1024 * 1024)
+      const allowed = new Set(['projectId', 'dataUrl'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || typeof body.projectId !== 'string'
+        || typeof body.dataUrl !== 'string'
+      ) {
+        return sendError(response, 400, 'INVALID_LIBRARY_VERSION_REQUEST', '资源版本请求字段无效')
+      }
+      if (!workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === body.projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '目标项目不存在')
+      }
+      return sendJson(response, 201, {
+        asset: await projectStore.addLibraryAssetVersion(
+          decodeURIComponent(libraryVersionMatch[1]),
+          body,
+          { source: 'project-library-edit' },
+        ),
+      })
+    }
     const clientStateMatch = /^\/api\/client-state\/([^/]+)$/u.exec(pathname)
     if (request.method === 'GET' && clientStateMatch) {
       const state = await clientStateStore.get(decodeURIComponent(clientStateMatch[1]))

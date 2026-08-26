@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Library } from 'lucide-react'
 import BalancedWorkbench from './App'
 import { ProjectRecoveryDialog, RuntimeSettingsDialog, SurfaceState } from './components/Home'
+import { AssetLibraryDialog } from './components/Library'
 import type { CanvasDocument } from './lib/canvasCore'
 import {
   deserializePixelDocument,
@@ -37,6 +39,7 @@ import {
   type StoredProject,
   type WorkspaceRecoveryPoint,
 } from './lib/projectApi'
+import type { LibraryAsset, LibraryAssetInsertion } from './lib/libraryApi'
 import {
   configureRuntime,
   fetchClientState,
@@ -130,6 +133,12 @@ type ProjectCatalogSnapshot = {
   error?: string
 }
 
+const PRODUCT_MODE_LABELS: Record<ProductModeId, string> = {
+  balanced: '均衡模式',
+  pixel: '像素模式',
+  'smart-video': '智能视频',
+}
+
 type RecoveryDialogState = {
   projectId: string
   projectTitle: string
@@ -138,6 +147,11 @@ type RecoveryDialogState = {
   busyId?: string
   error?: string
   message?: string
+}
+
+type RoutedLibraryInsertion = LibraryAssetInsertion & {
+  modeId: ProductModeId
+  documentId?: string
 }
 
 function readRoute(): ProductLocation {
@@ -501,10 +515,11 @@ interface ProductModeHostProps {
   routeKey: string
   notice: ProductNotice | null
   onBack: () => void
+  onOpenLibrary: () => void
   children: ReactNode
 }
 
-function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice, onBack, children }: ProductModeHostProps) {
+function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice, onBack, onOpenLibrary, children }: ProductModeHostProps) {
   const hostRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -519,6 +534,10 @@ function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice,
       <ModeErrorBoundary modeLabel={modeLabel} resetKey={currentRouteKey} onBack={onBack}>
         {children}
       </ModeErrorBoundary>
+      <button type="button" className="aq-product-library-launcher" onClick={onOpenLibrary} aria-label="打开跨模式资源库">
+        <Library size={16} />
+        <span>资源库</span>
+      </button>
       {notice ? (
         <div className={`aq-product-notice is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>
           {notice.message}
@@ -552,6 +571,9 @@ export default function ProductApp() {
   const [settingsError, setSettingsError] = useState<string>()
   const [settingsMessage, setSettingsMessage] = useState<string>()
   const [recoveryDialog, setRecoveryDialog] = useState<RecoveryDialogState | null>(null)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [libraryOpenPending, setLibraryOpenPending] = useState(false)
+  const [libraryInsertion, setLibraryInsertion] = useState<RoutedLibraryInsertion | null>(null)
   const [projectProbe, setProjectProbe] = useState<ProjectProbe>({
     projectId: initialPreferences.current.balancedProjectId,
     status: 'idle',
@@ -1102,7 +1124,10 @@ export default function ProductApp() {
     const loadingKey = `${activeWorkspaceProjectId}:${activeModeDocumentId}:${activeModeDocumentMode}`
     let disposed = false
     setWorkspaceDocumentResolvedKey((current) => current === loadingKey ? current : null)
-    void loadWorkspaceModeDocument(activeWorkspaceProjectId, activeModeDocumentId, activeModeDocumentMode)
+    void (async () => {
+      await flushProjectCatalogBridgeSave()
+      return loadWorkspaceModeDocument(activeWorkspaceProjectId, activeModeDocumentId, activeModeDocumentMode)
+    })()
       .then((stored) => {
         if (disposed) return
         if (activeModeDocumentMode === 'pixel') {
@@ -1149,6 +1174,7 @@ export default function ProductApp() {
     activeModeDocumentMode,
     activeWorkspaceProjectId,
     clientStateReady,
+    flushProjectCatalogBridgeSave,
     route.modeId,
     runtimeProbe.bridgeReady,
   ])
@@ -1595,6 +1621,85 @@ export default function ProductApp() {
 
   const goHome = useCallback(() => navigate({ modeId: 'home' }), [navigate])
 
+  const openLibrary = useCallback(() => {
+    setLibraryOpenPending(true)
+    if (!clientStateReady) setModeNotice({ tone: 'info', message: '正在同步 SQLite 项目目录，随后打开资源库。' })
+  }, [clientStateReady])
+
+  useEffect(() => {
+    if (!libraryOpenPending || !clientStateReady) return
+    let disposed = false
+    void (async () => {
+      await flushProjectCatalogBridgeSave()
+      if (bridgeReadyRef.current) {
+        const expectedProjectIds = projectCatalogRef.current.projects
+          .filter((project) => project.status === 'active')
+          .map((project) => project.id)
+        let synchronized = expectedProjectIds.length === 0
+        for (let attempt = 0; attempt < 5 && !synchronized; attempt += 1) {
+          const authoritative = await loadWorkspaceCatalog()
+          const remoteIds = new Set(authoritative.catalog.projects.map((project) => project.id))
+          synchronized = expectedProjectIds.every((id) => remoteIds.has(id))
+          if (!synchronized) {
+            await flushProjectCatalogBridgeSave()
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 120 * (attempt + 1)))
+          }
+        }
+        if (!synchronized) throw new Error('项目目录尚未完成 SQLite 同步，请稍后重试。')
+      }
+      if (!disposed) {
+        setLibraryOpenPending(false)
+        setModeNotice((current) => current?.message === '正在同步 SQLite 项目目录，随后打开资源库。' ? null : current)
+        setLibraryOpen(true)
+      }
+    })().catch((error) => {
+      if (!disposed) {
+        setLibraryOpenPending(false)
+        setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '项目目录同步失败，暂不能打开资源库。' })
+      }
+    })
+    return () => { disposed = true }
+  }, [clientStateReady, flushProjectCatalogBridgeSave, libraryOpenPending])
+
+  const handleUseLibraryAsset = useCallback((asset: LibraryAsset) => {
+    if (route.modeId === 'home') return
+    if (asset.mediaKind !== 'image') {
+      setModeNotice({ tone: 'error', message: '当前版本先开放图像跨模式投递；视频与音频仍可在资源库中归档。' })
+      return
+    }
+    setLibraryInsertion({
+      nonce: Date.now(),
+      asset,
+      modeId: route.modeId,
+      documentId: activeModeDocumentId,
+    })
+    setLibraryOpen(false)
+    setModeNotice({ tone: 'info', message: `正在把“${asset.title}”投递到${PRODUCT_MODE_LABELS[route.modeId]}。` })
+  }, [activeModeDocumentId, route.modeId])
+
+  const handleLibraryAssetConsumed = useCallback((nonce: number) => {
+    setLibraryInsertion((current) => current?.nonce === nonce ? null : current)
+  }, [])
+
+  const libraryProjects = useMemo(() => projectCatalog.projects
+    .filter((project) => project.status === 'active')
+    .map((project) => ({ id: project.id, title: project.title })), [projectCatalog.projects])
+  const activeLibraryInsertion = route.modeId !== 'home'
+    && libraryInsertion?.modeId === route.modeId
+    && libraryInsertion.documentId === activeModeDocumentId
+    ? libraryInsertion
+    : undefined
+  const libraryDialog = (
+    <AssetLibraryDialog
+      open={libraryOpen}
+      projects={libraryProjects}
+      activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
+      modeLabel={route.modeId === 'home' ? undefined : PRODUCT_MODE_LABELS[route.modeId]}
+      onClose={() => setLibraryOpen(false)}
+      onUseAsset={route.modeId === 'home' ? undefined : handleUseLibraryAsset}
+    />
+  )
+
   if (route.modeId === 'balanced') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
     const matchingProbe = projectProbe.projectId === requestedProjectId
@@ -1656,7 +1761,8 @@ export default function ProductApp() {
       )
     }
     return (
-      <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
+      <>
+      <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
         <BalancedWorkbench
           key={requestedProjectId}
           projectId={requestedProjectId}
@@ -1664,8 +1770,12 @@ export default function ProductApp() {
           initialDocument={projectProbe.project?.id === requestedProjectId ? projectProbe.project.document : undefined}
           onBack={goHome}
           onDocumentChange={handleBalancedDocumentChange}
+          libraryAsset={activeLibraryInsertion}
+          onLibraryAssetConsumed={handleLibraryAssetConsumed}
         />
       </ProductModeHost>
+      {libraryDialog}
+      </>
     )
   }
 
@@ -1741,7 +1851,8 @@ export default function ProductApp() {
       )
     }
     return (
-      <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
+      <>
+      <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
         <PixelModeWorkbench
           key={requestedProjectId ?? 'pixel-legacy'}
           initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
@@ -1750,8 +1861,12 @@ export default function ProductApp() {
           onBack={goHome}
           onDocumentChange={handlePixelChange}
           onSpriteSheetReady={handleSpriteSheetExport}
+          libraryAsset={activeLibraryInsertion}
+          onLibraryAssetConsumed={handleLibraryAssetConsumed}
         />
       </ProductModeHost>
+      {libraryDialog}
+      </>
     )
   }
 
@@ -1824,7 +1939,8 @@ export default function ProductApp() {
       )
     }
     return (
-      <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome}>
+      <>
+      <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary}>
         <SmartVideoWorkbench
           key={requestedProjectId ?? 'video-legacy'}
           initialText={videoSession.status === 'ready' ? videoSession.session?.sourceText : undefined}
@@ -1835,8 +1951,12 @@ export default function ProductApp() {
           runtime={smartVideoRuntime}
           onBack={goHome}
           onPlanReady={handleVideoPlanReady}
+          libraryAsset={activeLibraryInsertion}
+          onLibraryAssetConsumed={handleLibraryAssetConsumed}
         />
       </ProductModeHost>
+      {libraryDialog}
+      </>
     )
   }
 
@@ -1855,10 +1975,12 @@ export default function ProductApp() {
         onProjectStatusChange={handleProjectStatusChange}
         onOpenProjectRecovery={handleOpenProjectRecovery}
         onRetryProjects={retryLocalContexts}
+        onOpenLibrary={openLibrary}
         onOpenSettings={openRuntimeSettings}
         onRefreshRuntime={() => void refreshRuntime()}
         onRuntimeItemAction={(item) => void handleRuntimeAction(item)}
       />
+      {libraryDialog}
       <RuntimeSettingsDialog
         open={settingsOpen}
         diagnostics={runtimeProbe.diagnostics}

@@ -76,6 +76,7 @@ import {
   type RgbaImage,
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
+import type { LibraryAssetInsertion } from '../../lib/libraryApi'
 import {
   PixelBrowserError,
   decodePixelImageFile,
@@ -144,6 +145,8 @@ export type PixelModeWorkbenchProps = {
   onBack?: () => void
   onDocumentChange?: (document: PixelDocument) => void
   onSpriteSheetReady?: (payload: PixelSpriteSheetPayload) => void | Promise<void>
+  libraryAsset?: LibraryAssetInsertion
+  onLibraryAssetConsumed?: (nonce: number) => void
 }
 
 export function createDefaultPixelProject(input: { id?: string; name?: string } = {}) {
@@ -251,6 +254,8 @@ export function PixelModeWorkbench({
   onBack,
   onDocumentChange,
   onSpriteSheetReady,
+  libraryAsset,
+  onLibraryAssetConsumed,
 }: PixelModeWorkbenchProps) {
   const [history, setHistory] = useState<HistoryState>(() => ({
     document: initialDocument
@@ -293,6 +298,7 @@ export function PixelModeWorkbench({
   const lastStrokePointRef = useRef<PixelPoint | null>(null)
   const dragContextRef = useRef<PixelDragContext | null>(null)
   const commandSequenceRef = useRef(1)
+  const consumedLibraryAssetRef = useRef<number | null>(null)
   const document = history.document
   const historyRef = useRef(history)
   historyRef.current = history
@@ -517,6 +523,45 @@ export function PixelModeWorkbench({
     const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height)))
     return { x, y }
   }, [])
+
+  useEffect(() => {
+    if (!libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
+    consumedLibraryAssetRef.current = libraryAsset.nonce
+    let disposed = false
+    void (async () => {
+      try {
+        const response = await fetch(libraryAsset.asset.version.url, { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`资源读取返回 HTTP ${response.status}`)
+        let blob = await response.blob()
+        let extension = libraryAsset.asset.version.extension
+        if (!['image/png', 'image/webp'].includes(blob.type)) {
+          const bitmap = await createImageBitmap(blob)
+          try {
+            const canvas = window.document.createElement('canvas')
+            canvas.width = bitmap.width
+            canvas.height = bitmap.height
+            const context = canvas.getContext('2d')
+            if (!context) throw new Error('浏览器无法规范化资源库图像')
+            context.drawImage(bitmap, 0, 0)
+            blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+              (value) => value ? resolve(value) : reject(new Error('无法编码像素导入 PNG')),
+              'image/png',
+            ))
+            extension = 'png'
+          } finally {
+            bitmap.close()
+          }
+        }
+        if (disposed) return
+        await loadImageSource(new File([blob], `${libraryAsset.asset.title}.${extension}`, { type: blob.type }))
+      } catch (error) {
+        if (!disposed) setStatus(error instanceof Error ? error.message : '资源库图像投递失败')
+      } finally {
+        if (!disposed) onLibraryAssetConsumed?.(libraryAsset.nonce)
+      }
+    })()
+    return () => { disposed = true }
+  }, [libraryAsset, loadImageSource, onLibraryAssetConsumed])
 
   const stageStrokeAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const stroke = strokeContextRef.current

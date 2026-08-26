@@ -25,6 +25,7 @@ import {
   type CanvasActor,
   type CanvasDocument,
 } from './lib/canvasCore'
+import type { LibraryAssetInsertion } from './lib/libraryApi'
 import {
   isImageJobOutput,
   type Camera,
@@ -145,6 +146,8 @@ export type BalancedWorkbenchProps = {
   projectTitle?: string
   initialDocument?: CanvasDocument
   onDocumentChange?: (document: CanvasDocument) => void
+  libraryAsset?: LibraryAssetInsertion
+  onLibraryAssetConsumed?: (nonce: number) => void
 }
 
 function App({
@@ -153,6 +156,8 @@ function App({
   projectTitle = '光阴砚本地项目',
   initialDocument,
   onDocumentChange,
+  libraryAsset,
+  onLibraryAssetConsumed,
 }: BalancedWorkbenchProps) {
   const storageKey = projectId === 'local-project' ? APP_STORAGE_KEY : `${APP_STORAGE_KEY}:${projectId}`
   const initialProject = useRef(loadProject({ projectId, projectTitle, storageKey, initialDocument }))
@@ -191,6 +196,7 @@ function App({
   const lastPersistedRevisionRef = useRef(canvasDocument.revision)
   const jobStatusRef = useRef(new Map<string, ProcessingJob['status']>())
   const appliedImageJobIdsRef = useRef(new Set<string>())
+  const consumedLibraryAssetRef = useRef<number | null>(null)
 
   const replaceDocument = useCallback((next: CanvasDocument) => {
     const validated = assertCanvasDocument(next)
@@ -606,6 +612,27 @@ function App({
     },
     [commitCanvasTool, showToast],
   )
+
+  useEffect(() => {
+    if (!libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
+    consumedLibraryAssetRef.current = libraryAsset.nonce
+    let disposed = false
+    void (async () => {
+      try {
+        const response = await fetch(libraryAsset.asset.version.url, { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`资源读取返回 HTTP ${response.status}`)
+        const blob = await response.blob()
+        if (disposed) return
+        const filename = `${libraryAsset.asset.title}.${libraryAsset.asset.version.extension}`
+        addImageFile(new File([blob], filename, { type: libraryAsset.asset.version.mimeType }), getViewportCenter())
+      } catch (error) {
+        if (!disposed) showToast(error instanceof Error ? error.message : '资源库图像投递失败')
+      } finally {
+        if (!disposed) onLibraryAssetConsumed?.(libraryAsset.nonce)
+      }
+    })()
+    return () => { disposed = true }
+  }, [addImageFile, getViewportCenter, libraryAsset, onLibraryAssetConsumed, showToast])
 
   const handleToolSelect = useCallback(
     (tool: ToolId) => {

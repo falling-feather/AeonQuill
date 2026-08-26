@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -69,6 +69,7 @@ import {
   type JobEvent,
 } from '../../lib/videoApi'
 import type { ProcessingJob, RuntimeStatus } from '../../types'
+import type { LibraryAssetInsertion } from '../../lib/libraryApi'
 import { ProductionStudio, type ApprovedProductionStorySource } from './ProductionStudio'
 import './smart-video-workbench.css'
 
@@ -102,6 +103,8 @@ export type SmartVideoWorkbenchProps = {
   runtime?: SmartVideoRuntimeSummary
   onBack?: () => void
   onPlanReady?: (result: SmartVideoPlanResult) => void
+  libraryAsset?: LibraryAssetInsertion
+  onLibraryAssetConsumed?: (nonce: number) => void
 }
 
 type FrameAssetState = {
@@ -286,6 +289,8 @@ export function SmartVideoWorkbench({
   runtime = { state: 'offline', label: 'ComfyUI 休眠', detail: '生成阶段才会按策略启动' },
   onBack,
   onPlanReady,
+  libraryAsset,
+  onLibraryAssetConsumed,
 }: SmartVideoWorkbenchProps) {
   const [kind, setKind] = useState<StorySourceKind>(initialResult?.project.source.kind ?? initialKind)
   const [text, setText] = useState(initialResult?.project.source.text ?? initialText)
@@ -316,6 +321,7 @@ export function SmartVideoWorkbench({
   const [latestJobIdByItem, setLatestJobIdByItem] = useState<Record<string, string>>({})
   const [submittedJobIds, setSubmittedJobIds] = useState<string[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<VideoWorkspaceSection>('production')
+  const consumedLibraryAssetRef = useRef<number | null>(null)
 
   function revealWorkspace(section: VideoWorkspaceSection) {
     setActiveWorkspace(section)
@@ -700,6 +706,41 @@ export function SmartVideoWorkbench({
       setError(errorMessage(nextError))
     }
   }
+
+  useEffect(() => {
+    if (!libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
+    consumedLibraryAssetRef.current = libraryAsset.nonce
+    let disposed = false
+    void (async () => {
+      try {
+        const shotId = selectedShotIds[0] ?? result.project.scenes[0]?.shots[0]?.id
+        if (!shotId) throw new Error('当前剧本还没有可绑定的镜头')
+        const response = await fetch(libraryAsset.asset.version.url, { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`资源读取返回 HTTP ${response.status}`)
+        const blob = await response.blob()
+        if (disposed) return
+        setExecutionMode('image-to-video')
+        setImageFrameMode('first')
+        setSelectedShotIds([shotId])
+        revealWorkspace('execution')
+        await importFrame(
+          shotId,
+          'first-frame',
+          new File([blob], `${libraryAsset.asset.title}.${libraryAsset.asset.version.extension}`, {
+            type: libraryAsset.asset.version.mimeType,
+          }),
+        )
+        if (!disposed) setBridgeMessage(`已把资源库图像“${libraryAsset.asset.title}”绑定为首帧。`)
+      } catch (nextError) {
+        if (!disposed) setExecutionError(errorMessage(nextError))
+      } finally {
+        if (!disposed) onLibraryAssetConsumed?.(libraryAsset.nonce)
+      }
+    })()
+    return () => { disposed = true }
+    // 资源投递严格按 nonce 消费一次；镜头变化不应重复导入同一版本。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryAsset?.nonce])
 
   return (
     <section className="aq-video-workbench" aria-label="智能视频工作台">

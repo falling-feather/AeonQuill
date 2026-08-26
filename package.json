@@ -15,6 +15,7 @@
     "validate:api": "node scripts/validate-api.mjs",
     "validate:browser": "node scripts/validate-browser.mjs",
     "validate:project-center": "node scripts/validate-project-center.mjs",
+    "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "benchmark:canvas": "node scripts/benchmark-canvas.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
     "validate:workflows": "node server/validate-workflows.mjs",
