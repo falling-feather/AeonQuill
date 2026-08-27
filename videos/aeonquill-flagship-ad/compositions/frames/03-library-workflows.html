@@ -2,7 +2,8 @@
   <script src="assets/vendor/gsap-3.14.2.min.js"></script>
   <div id="root" data-composition-id="03-library-workflows" data-duration="5.6" data-width="1920" data-height="1080">
     <div
-      class="clip 03-library-workflows-ground"
+      id="f03-library-workflows-ground"
+      class="clip f03-library-workflows-ground"
       data-start="0"
       data-duration="5.6"
       data-track-index="0"
@@ -10,35 +11,37 @@
     ></div>
 
     <section
-      class="clip 03-library-workflows-scene"
+      id="f03-library-workflows-scene"
+      class="clip f03-library-workflows-scene"
       data-start="0"
       data-duration="5.6"
       data-track-index="1"
       aria-label="资源库与工作流中心跨模式复用"
     >
-      <header id="03-library-workflows-title" class="03-library-workflows-title">
-        <div class="03-library-workflows-mode-row">
-          <span class="03-library-workflows-mode-rule" aria-hidden="true"></span>
-          <span id="03-library-workflows-mode" class="03-library-workflows-mode-copy">跨模式</span>
-          <span class="03-library-workflows-mode-rule" aria-hidden="true"></span>
+      <header id="f03-library-workflows-title" class="f03-library-workflows-title">
+        <div class="f03-library-workflows-mode-row">
+          <span class="f03-library-workflows-mode-rule" aria-hidden="true"></span>
+          <span id="f03-library-workflows-mode" class="f03-library-workflows-mode-copy">跨模式</span>
+          <span class="f03-library-workflows-mode-rule" aria-hidden="true"></span>
         </div>
         <h1>资源 <span aria-hidden="true">×</span> 工作流</h1>
       </header>
 
-      <div class="03-library-workflows-stage">
+      <div class="f03-library-workflows-stage">
         <article
-          id="03-library-workflows-left-card"
-          class="03-library-workflows-card-shell 03-library-workflows-card-left"
+          id="f03-library-workflows-left-card"
+          class="f03-library-workflows-card-shell f03-library-workflows-card-left"
           aria-label="资源库界面"
         >
-          <div id="03-library-workflows-left-float" class="03-library-workflows-card-float 03-library-workflows-left-float">
-            <div id="03-library-workflows-left-label" class="03-library-workflows-card-label">
-              <span class="03-library-workflows-label-mark" aria-hidden="true"></span>
+          <div id="f03-library-workflows-left-float" class="f03-library-workflows-card-float f03-library-workflows-left-float">
+            <div id="f03-library-workflows-left-label" class="f03-library-workflows-card-label">
+              <span class="f03-library-workflows-label-mark" aria-hidden="true"></span>
               <span>资源库</span>
             </div>
-            <figure class="03-library-workflows-screen 03-library-workflows-library-screen">
+            <figure class="f03-library-workflows-screen f03-library-workflows-library-screen">
               <img
-                id="03-library-workflows-library-image"
+                id="f03-library-workflows-library-image"
+                data-layout-allow-overflow
                 src="assets/images/asset-library-desktop.png"
                 alt="AEONQUILL 真实资源库与执行界面"
               />
@@ -47,18 +50,19 @@
         </article>
 
         <article
-          id="03-library-workflows-right-card"
-          class="03-library-workflows-card-shell 03-library-workflows-card-right"
+          id="f03-library-workflows-right-card"
+          class="f03-library-workflows-card-shell f03-library-workflows-card-right"
           aria-label="工作流中心界面"
         >
-          <div id="03-library-workflows-right-float" class="03-library-workflows-card-float 03-library-workflows-right-float">
-            <div id="03-library-workflows-right-label" class="03-library-workflows-card-label">
-              <span class="03-library-workflows-label-mark" aria-hidden="true"></span>
+          <div id="f03-library-workflows-right-float" class="f03-library-workflows-card-float f03-library-workflows-right-float">
+            <div id="f03-library-workflows-right-label" class="f03-library-workflows-card-label">
+              <span class="f03-library-workflows-label-mark" aria-hidden="true"></span>
               <span>工作流中心</span>
             </div>
-            <figure class="03-library-workflows-screen 03-library-workflows-workflow-screen">
+            <figure class="f03-library-workflows-screen f03-library-workflows-workflow-screen">
               <img
-                id="03-library-workflows-workflow-image"
+                id="f03-library-workflows-workflow-image"
+                data-layout-allow-overflow
                 src="assets/images/workflow-center-desktop.png"
                 alt="AEONQUILL 真实本地工作流中心界面"
               />
@@ -66,33 +70,33 @@
           </div>
         </article>
 
-        <div id="03-library-workflows-left-badge" class="03-library-workflows-badge 03-library-workflows-badge-left">
+        <div id="f03-library-workflows-left-badge" class="f03-library-workflows-badge f03-library-workflows-badge-left">
           跨模式复用
         </div>
-        <div id="03-library-workflows-right-badge" class="03-library-workflows-badge 03-library-workflows-badge-right">
+        <div id="f03-library-workflows-right-badge" class="f03-library-workflows-badge f03-library-workflows-badge-right">
           按需启用
         </div>
 
         <svg
-          class="03-library-workflows-bridge"
+          class="f03-library-workflows-bridge"
           viewBox="0 0 240 92"
           preserveAspectRatio="none"
           aria-hidden="true"
         >
           <path
-            id="03-library-workflows-bridge-path"
+            id="f03-library-workflows-bridge-path"
             d="M 2 4 C 50 76, 190 76, 238 4"
             pathLength="240"
           ></path>
         </svg>
 
-        <div id="03-library-workflows-recovery" class="03-library-workflows-recovery">
-          <span id="03-library-workflows-recovery-dot" class="03-library-workflows-recovery-dot" aria-hidden="true"></span>
+        <div id="f03-library-workflows-recovery" class="f03-library-workflows-recovery">
+          <span id="f03-library-workflows-recovery-dot" class="f03-library-workflows-recovery-dot" aria-hidden="true"></span>
           <span>项目可恢复</span>
         </div>
       </div>
 
-      <div class="03-library-workflows-pagenum" aria-hidden="true">03</div>
+      <div class="f03-library-workflows-pagenum" aria-hidden="true">03</div>
     </section>
   </div>
 
@@ -132,7 +136,7 @@
       font-synthesis: none;
     }
 
-    [class~="03-library-workflows-ground"] {
+    [class~="f03-library-workflows-ground"] {
       position: absolute;
       inset: 0;
       overflow: hidden;
@@ -153,13 +157,13 @@
         #f7f8fb;
     }
 
-    [class~="03-library-workflows-scene"] {
+    [class~="f03-library-workflows-scene"] {
       position: absolute;
       inset: 0;
       overflow: hidden;
     }
 
-    [class~="03-library-workflows-title"] {
+    [class~="f03-library-workflows-title"] {
       position: absolute;
       inset-block-start: 4.5cqh;
       inset-inline-start: 19cqw;
@@ -170,7 +174,7 @@
       z-index: 8;
     }
 
-    [class~="03-library-workflows-mode-row"] {
+    [class~="f03-library-workflows-mode-row"] {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -183,14 +187,14 @@
       letter-spacing: 0.18em;
     }
 
-    [class~="03-library-workflows-mode-rule"] {
+    [class~="f03-library-workflows-mode-rule"] {
       display: block;
       width: 2.3cqw;
       height: 1px;
       background: rgba(16, 18, 22, 0.62);
     }
 
-    [class~="03-library-workflows-mode-copy"] {
+    [class~="f03-library-workflows-mode-copy"] {
       position: relative;
       display: inline-block;
       isolation: isolate;
@@ -199,7 +203,7 @@
       will-change: transform, opacity;
     }
 
-    [class~="03-library-workflows-mode-copy"]::before {
+    [class~="f03-library-workflows-mode-copy"]::before {
       content: "";
       position: absolute;
       z-index: -1;
@@ -209,7 +213,7 @@
       background: rgba(109, 125, 255, 0.74);
     }
 
-    [class~="03-library-workflows-title"] h1 {
+    [class~="f03-library-workflows-title"] h1 {
       margin: 1.05cqh 0 0;
       font-family: "Noto Serif SC";
       font-size: 4.6cqw;
@@ -219,7 +223,7 @@
       white-space: nowrap;
     }
 
-    [class~="03-library-workflows-title"] h1 span {
+    [class~="f03-library-workflows-title"] h1 span {
       display: inline-block;
       margin-inline: 0.9cqw;
       color: #101216;
@@ -227,7 +231,7 @@
       font-weight: 400;
     }
 
-    [class~="03-library-workflows-stage"] {
+    [class~="f03-library-workflows-stage"] {
       position: absolute;
       inset-block-start: 21.2cqh;
       inset-inline-start: 5cqw;
@@ -238,7 +242,7 @@
       z-index: 4;
     }
 
-    [class~="03-library-workflows-card-shell"] {
+    [class~="f03-library-workflows-card-shell"] {
       position: absolute;
       inset-block-start: 0;
       width: 40.4cqw;
@@ -248,15 +252,15 @@
       will-change: transform, opacity;
     }
 
-    [class~="03-library-workflows-card-left"] {
+    [class~="f03-library-workflows-card-left"] {
       inset-inline-start: 1.5cqw;
     }
 
-    [class~="03-library-workflows-card-right"] {
+    [class~="f03-library-workflows-card-right"] {
       inset-inline-end: 1.5cqw;
     }
 
-    [class~="03-library-workflows-card-float"] {
+    [class~="f03-library-workflows-card-float"] {
       position: relative;
       width: 100%;
       height: 100%;
@@ -265,7 +269,7 @@
       will-change: transform;
     }
 
-    [class~="03-library-workflows-card-float"]::before {
+    [class~="f03-library-workflows-card-float"]::before {
       content: "";
       position: absolute;
       z-index: -1;
@@ -273,21 +277,21 @@
       background: rgba(109, 125, 255, 0.3);
     }
 
-    [class~="03-library-workflows-left-float"]::before {
+    [class~="f03-library-workflows-left-float"]::before {
       inset-inline-start: 0.78cqw;
       inset-inline-end: -0.78cqw;
       inset-block-start: 1.05cqh;
       inset-block-end: -1.05cqh;
     }
 
-    [class~="03-library-workflows-right-float"]::before {
+    [class~="f03-library-workflows-right-float"]::before {
       inset-inline-start: -0.78cqw;
       inset-inline-end: 0.78cqw;
       inset-block-start: 1.05cqh;
       inset-block-end: -1.05cqh;
     }
 
-    [class~="03-library-workflows-card-label"] {
+    [class~="f03-library-workflows-card-label"] {
       position: relative;
       z-index: 3;
       display: flex;
@@ -307,13 +311,13 @@
       will-change: transform, opacity;
     }
 
-    [class~="03-library-workflows-label-mark"] {
+    [class~="f03-library-workflows-label-mark"] {
       width: 0.72cqw;
       height: 0.72cqw;
       background: #6d7dff;
     }
 
-    [class~="03-library-workflows-screen"] {
+    [class~="f03-library-workflows-screen"] {
       position: relative;
       z-index: 2;
       width: 100%;
@@ -323,7 +327,7 @@
       background: #f7f8fb;
     }
 
-    [class~="03-library-workflows-screen"] img {
+    [class~="f03-library-workflows-screen"] img {
       position: absolute;
       display: block;
       max-width: none;
@@ -332,21 +336,21 @@
       will-change: transform;
     }
 
-    [class~="03-library-workflows-library-screen"] img {
+    [class~="f03-library-workflows-library-screen"] img {
       inset-block-start: -8.4cqh;
       inset-inline-start: -12cqw;
       width: auto;
       height: 136%;
     }
 
-    [class~="03-library-workflows-workflow-screen"] img {
+    [class~="f03-library-workflows-workflow-screen"] img {
       inset-block-start: -2.1cqh;
       inset-inline-start: -2.25cqw;
       width: auto;
       height: 117%;
     }
 
-    [class~="03-library-workflows-badge"] {
+    [class~="f03-library-workflows-badge"] {
       position: absolute;
       z-index: 9;
       inset-block-start: 34.6cqh;
@@ -365,17 +369,17 @@
       will-change: transform, opacity;
     }
 
-    [class~="03-library-workflows-badge-left"] {
+    [class~="f03-library-workflows-badge-left"] {
       inset-inline-start: 33.1cqw;
       transform-origin: 100% 50%;
     }
 
-    [class~="03-library-workflows-badge-right"] {
+    [class~="f03-library-workflows-badge-right"] {
       inset-inline-start: 46.1cqw;
       transform-origin: 0% 50%;
     }
 
-    [class~="03-library-workflows-bridge"] {
+    [class~="f03-library-workflows-bridge"] {
       position: absolute;
       z-index: 7;
       inset-block-start: 39.1cqh;
@@ -385,7 +389,7 @@
       overflow: visible;
     }
 
-    [class~="03-library-workflows-bridge"] path {
+    [class~="f03-library-workflows-bridge"] path {
       fill: none;
       stroke: #6d7dff;
       stroke-width: 1;
@@ -396,7 +400,7 @@
       will-change: stroke-dashoffset, opacity;
     }
 
-    [class~="03-library-workflows-recovery"] {
+    [class~="f03-library-workflows-recovery"] {
       position: absolute;
       z-index: 10;
       inset-block-start: 45.6cqh;
@@ -421,7 +425,7 @@
       will-change: transform, opacity;
     }
 
-    [class~="03-library-workflows-recovery-dot"] {
+    [class~="f03-library-workflows-recovery-dot"] {
       display: block;
       width: 0.62cqw;
       height: 0.62cqw;
@@ -430,7 +434,7 @@
       will-change: transform;
     }
 
-    [class~="03-library-workflows-pagenum"] {
+    [class~="f03-library-workflows-pagenum"] {
       position: absolute;
       z-index: 12;
       inset-block-start: 79.3cqh;
@@ -450,21 +454,21 @@
       const pick = (id) => document.getElementById(id);
       const timeline = gsap.timeline({ paused: true });
 
-      const title = pick("03-library-workflows-title");
-      const mode = pick("03-library-workflows-mode");
-      const leftCard = pick("03-library-workflows-left-card");
-      const rightCard = pick("03-library-workflows-right-card");
-      const leftFloat = pick("03-library-workflows-left-float");
-      const rightFloat = pick("03-library-workflows-right-float");
-      const leftLabel = pick("03-library-workflows-left-label");
-      const rightLabel = pick("03-library-workflows-right-label");
-      const libraryImage = pick("03-library-workflows-library-image");
-      const workflowImage = pick("03-library-workflows-workflow-image");
-      const leftBadge = pick("03-library-workflows-left-badge");
-      const rightBadge = pick("03-library-workflows-right-badge");
-      const bridgePath = pick("03-library-workflows-bridge-path");
-      const recovery = pick("03-library-workflows-recovery");
-      const recoveryDot = pick("03-library-workflows-recovery-dot");
+      const title = pick("f03-library-workflows-title");
+      const mode = pick("f03-library-workflows-mode");
+      const leftCard = pick("f03-library-workflows-left-card");
+      const rightCard = pick("f03-library-workflows-right-card");
+      const leftFloat = pick("f03-library-workflows-left-float");
+      const rightFloat = pick("f03-library-workflows-right-float");
+      const leftLabel = pick("f03-library-workflows-left-label");
+      const rightLabel = pick("f03-library-workflows-right-label");
+      const libraryImage = pick("f03-library-workflows-library-image");
+      const workflowImage = pick("f03-library-workflows-workflow-image");
+      const leftBadge = pick("f03-library-workflows-left-badge");
+      const rightBadge = pick("f03-library-workflows-right-badge");
+      const bridgePath = pick("f03-library-workflows-bridge-path");
+      const recovery = pick("f03-library-workflows-recovery");
+      const recoveryDot = pick("f03-library-workflows-recovery-dot");
 
       timeline.fromTo(
         title,

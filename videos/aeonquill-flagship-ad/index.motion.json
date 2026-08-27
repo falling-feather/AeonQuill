@@ -1,0 +1,40 @@
+{
+  "duration": 26,
+  "assertions": [
+    {
+      "kind": "appearsBy",
+      "selector": "#el-01-ink-to-workspace",
+      "bySec": 0.2
+    },
+    {
+      "kind": "before",
+      "a": "#el-01-ink-to-workspace",
+      "b": "#el-02-three-modes"
+    },
+    {
+      "kind": "before",
+      "a": "#el-02-three-modes",
+      "b": "#el-03-library-workflows"
+    },
+    {
+      "kind": "before",
+      "a": "#el-03-library-workflows",
+      "b": "#el-04-agent-production"
+    },
+    {
+      "kind": "before",
+      "a": "#el-04-agent-production",
+      "b": "#el-05-brand-lockup"
+    },
+    {
+      "kind": "appearsBy",
+      "selector": "#el-05-brand-lockup",
+      "bySec": 21.2
+    },
+    {
+      "kind": "keepsMoving",
+      "withinSelector": "#root",
+      "maxStaticSec": 2.6
+    }
+  ]
+}

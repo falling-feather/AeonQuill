@@ -13,3 +13,5 @@ vite.config.js
 vite.config.d.ts
 desktop/tauri/src-tauri/binaries/
 desktop/tauri/src-tauri/target/
+videos/**/renders/
+videos/**/snapshots/
