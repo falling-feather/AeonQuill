@@ -1,7 +1,7 @@
 {
   "name": "aeonquill",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "main": "desktop/electron/main.mjs",
   "scripts": {
@@ -40,9 +40,11 @@
     "build:desktop:tauri:debug": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-toolchain.ps1 debug",
     "package:desktop:tauri": "npm run build:desktop:sidecar && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-toolchain.ps1 bundle && npm run stage:desktop:release",
     "package:desktop:signed": "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File scripts/package-signed-desktop.ps1",
-    "package:desktop:lightweight": "npm run package:desktop:signed && npm run validate:desktop:sidecar && npm run validate:desktop:tauri:release && npm run validate:desktop:release-manifest && npm run stage:desktop:lightweight && npm run validate:desktop:lightweight",
+    "package:desktop:lightweight": "npm run package:desktop:signed && npm run validate:desktop:sidecar && npm run validate:desktop:tauri:release && npm run validate:desktop:single-instance:release && npm run validate:desktop:release-manifest && npm run stage:desktop:lightweight && npm run validate:desktop:lightweight",
     "validate:desktop:tauri": "node scripts/validate-desktop-tauri.mjs",
     "validate:desktop:tauri:release": "node scripts/validate-desktop-tauri.mjs --release",
+    "validate:desktop:single-instance": "node scripts/validate-desktop-single-instance.mjs",
+    "validate:desktop:single-instance:release": "node scripts/validate-desktop-single-instance.mjs --release",
     "validate:desktop:tauri:installer": "node scripts/validate-tauri-installer.mjs",
     "stage:desktop:release": "node scripts/stage-desktop-release.mjs",
     "stage:desktop:lightweight": "node scripts/stage-lightweight-release.mjs",

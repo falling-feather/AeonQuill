@@ -30,7 +30,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
-  assert.equal(metadata.version, '0.7.0')
+  assert.equal(metadata.version, '0.7.1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -42,7 +42,8 @@ test('desktop release identity and version mirrors resolve from package.json', a
     '../../release/THIRD-PARTY-NOTICES.md': 'release/THIRD-PARTY-NOTICES.md',
   })
   assert.match(cargoSource, /^name = "aeonquill-desktop"$/m)
-  assert.match(cargoSource, /^version = "0\.7\.0"$/m)
+  assert.match(cargoSource, /^version = "0\.7\.1"$/m)
+  assert.match(cargoSource, /^tauri-plugin-single-instance = "2"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
@@ -50,6 +51,14 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(tauriSource, /tauri::RunEvent::WindowEvent/)
   assert.match(tauriSource, /tauri::WindowEvent::CloseRequested/)
   assert.match(tauriSource, /app_handle\.exit\(0\)/)
+  const singleInstanceAt = tauriSource.indexOf('.plugin(tauri_plugin_single_instance::init(')
+  const shellPluginAt = tauriSource.indexOf('.plugin(tauri_plugin_shell::init())')
+  const setupAt = tauriSource.indexOf('.setup(move |app| setup_desktop(')
+  assert.ok(singleInstanceAt >= 0, 'Tauri must register the single-instance plugin')
+  assert.ok(singleInstanceAt < shellPluginAt, 'The single-instance lock must be the first plugin')
+  assert.ok(singleInstanceAt < setupAt, 'The single-instance lock must be acquired before desktop setup')
+  assert.match(tauriSource, /window\.unminimize\(\)/)
+  assert.match(tauriSource, /window\.set_focus\(\)/)
   assert.match(tauriSource, /default_data_directory\.join\("EBWebView"\)/)
   assert.match(tauriSource, /\.data_directory\(webview_data_directory\)/)
   for (const key of [
@@ -66,7 +75,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
     assert.match(tauriSource, new RegExp(key))
     assert.match(electronSource, new RegExp(key))
   }
-  assert.equal(basename(paths.installer), 'AEONQUILL_0.7.0_x64-setup.exe')
+  assert.equal(basename(paths.installer), 'AEONQUILL_0.7.1_x64-setup.exe')
   assert.equal(basename(paths.builtApp), 'aeonquill-desktop.exe')
   assert.equal(basename(paths.bundledSidecar), 'aeonquill-bridge.exe')
 })
@@ -174,6 +183,7 @@ test('packaging scripts contain no legacy MiaoHui artifact identities', async ()
     'scripts/package-electron.mjs',
     'scripts/validate-desktop-electron.mjs',
     'scripts/validate-desktop-tauri.mjs',
+    'scripts/validate-desktop-single-instance.mjs',
     'scripts/validate-node-sidecar.mjs',
     'scripts/validate-tauri-installer.mjs',
     'scripts/benchmark-desktop-shells.mjs',
@@ -199,10 +209,15 @@ test('lightweight release fails closed unless the packaged sidecar and hidden Ta
   const signedAt = command.indexOf('package:desktop:signed')
   const sidecarAt = command.indexOf('validate:desktop:sidecar')
   const tauriAt = command.indexOf('validate:desktop:tauri:release')
+  const singleInstanceAt = command.indexOf('validate:desktop:single-instance:release')
   const stageAt = command.indexOf('stage:desktop:lightweight')
   assert.ok(signedAt >= 0 && sidecarAt > signedAt)
   assert.ok(tauriAt > sidecarAt)
-  assert.ok(stageAt > tauriAt, 'Download staging must happen only after both executable lifecycle gates pass')
+  assert.ok(singleInstanceAt > tauriAt)
+  assert.ok(
+    stageAt > singleInstanceAt,
+    'Download staging must happen only after sidecar, lifecycle, and single-instance gates pass',
+  )
 })
 
 test('new user-visible jobs and diagnostics use AEONQUILL while legacy protocols remain readable', async () => {

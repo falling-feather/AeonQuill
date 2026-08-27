@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { waitForBridgeClosed } from '../desktop/shared/bridge-contract.mjs'
@@ -164,7 +163,9 @@ assert.equal(config.app.withGlobalTauri, false)
 assert.deepEqual(capability.permissions, ['core:default', 'dialog:allow-open'])
 assert.equal(capability.permissions.some((permission) => permission.startsWith('shell:')), false)
 
-const runtimeDirectory = await mkdtemp(join(tmpdir(), 'aeonquill-tauri-qa-'))
+const qaTempRoot = join(projectRoot, '.runtime', 'qa-temp')
+await mkdir(qaTempRoot, { recursive: true })
+const runtimeDirectory = await mkdtemp(join(qaTempRoot, 'aeonquill-tauri-qa-'))
 try {
   const result = await runTauriQa(runtimeDirectory)
   const { report } = result

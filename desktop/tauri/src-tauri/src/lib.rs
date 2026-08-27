@@ -677,9 +677,25 @@ pub fn run() {
     // updater can distinguish NSIS/MSI/AppImage packages after bundling.
     let _ = tauri::utils::platform::bundle_type();
     let runtime = Arc::new(DesktopRuntime::new());
+    let single_instance_runtime = Arc::clone(&runtime);
     let setup_runtime = Arc::clone(&runtime);
     let page_runtime = Arc::clone(&runtime);
     let app = tauri::Builder::default()
+        // This plugin must stay first: it acquires the process-wide application
+        // lock before setup can spawn the local bridge or create a webview.
+        .plugin(tauri_plugin_single_instance::init(
+            move |app, _arguments, _working_directory| {
+                // Headless QA launches must never steal focus from the user.
+                if single_instance_runtime.qa_mode {
+                    return;
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| setup_desktop(app, &setup_runtime))
