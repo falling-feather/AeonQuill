@@ -5,11 +5,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$packageMetadata = Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json
+$productVersion = [string]$packageMetadata.version
+if ($productVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+  throw "package.json 产品版本无效：$productVersion"
+}
 $sourceSidecar = Join-Path $projectRoot 'desktop\tauri\src-tauri\binaries\aeonquill-bridge-x86_64-pc-windows-msvc.exe'
 $targetRelease = Join-Path $projectRoot 'desktop\tauri\src-tauri\target\release'
 $builtApplication = Join-Path $targetRelease 'aeonquill-desktop.exe'
 $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
-$installer = Join-Path $targetRelease 'bundle\nsis\AEONQUILL_0.6.0_x64-setup.exe'
+$installer = Join-Path $targetRelease ("bundle\nsis\AEONQUILL_{0}_x64-setup.exe" -f $productVersion)
 $signingRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-SIGNING-TEMP'
 $signingConfig = Join-Path $signingRoot 'tauri-self-signing.json'
 $buildTempRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-BUILD-TEMP'

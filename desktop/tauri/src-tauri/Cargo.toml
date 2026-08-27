@@ -1,6 +1,6 @@
 [package]
 name = "aeonquill-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "AEONQUILL local-first image and video creative workstation"
 authors = ["AEONQUILL contributors"]
 license = "Proprietary"
