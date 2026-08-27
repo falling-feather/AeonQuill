@@ -1,0 +1,737 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Noto Serif SC";
+      src: url("assets/fonts/NotoSerifSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "Noto Sans SC";
+      src: url("assets/fonts/NotoSansSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "JetBrains Mono";
+      src: url("assets/fonts/JetBrainsMono-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    #root {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      container-type: size;
+      color: #101216;
+      font-family: "Noto Sans SC";
+      isolation: isolate;
+    }
+
+    [id="04-agent-production-ground"],
+    [id="04-agent-production-scene"] {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    [id="04-agent-production-ground"] {
+      background: #f7f8fb;
+    }
+
+    [id="04-agent-production-sun-bloom"] {
+      position: absolute;
+      left: 10cqw;
+      top: -20cqh;
+      width: 70cqw;
+      height: 100cqh;
+      background: radial-gradient(
+        ellipse at 52% 48%,
+        rgba(109, 125, 255, 0.88) 0%,
+        rgba(148, 160, 255, 0.62) 25%,
+        rgba(109, 125, 255, 0.2) 53%,
+        rgba(247, 248, 251, 0) 74%
+      );
+    }
+
+    [id="04-agent-production-ember-bloom"] {
+      position: absolute;
+      right: -7cqw;
+      top: 47cqh;
+      width: 37cqw;
+      height: 48cqh;
+      background: radial-gradient(
+        ellipse at center,
+        rgba(199, 165, 98, 0.2) 0%,
+        rgba(199, 165, 98, 0.08) 40%,
+        rgba(247, 248, 251, 0) 72%
+      );
+    }
+
+    [id="04-agent-production-scene"] {
+      perspective: 1250px;
+    }
+
+    [id="04-agent-production-title"] {
+      position: absolute;
+      z-index: 8;
+      left: 5.7cqw;
+      top: 4.8cqh;
+      font-family: "Noto Sans SC";
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.2em;
+      white-space: nowrap;
+    }
+
+    [id="04-agent-production-title-rule"] {
+      position: absolute;
+      z-index: 7;
+      left: 17.2cqw;
+      right: 5.7cqw;
+      top: 5.45cqh;
+      height: 1px;
+      background: rgba(16, 18, 22, 0.2);
+      transform-origin: left center;
+    }
+
+    [id="04-agent-production-ui-stage"] {
+      position: absolute;
+      z-index: 2;
+      left: 5.7cqw;
+      top: 10.2cqh;
+      width: 88.6cqw;
+      height: 70cqh;
+      overflow: hidden;
+      border-top: 1px solid rgba(16, 18, 22, 0.24);
+      border-bottom: 1px solid rgba(16, 18, 22, 0.24);
+      background: #f7f8fb;
+      transform-origin: 50% 45%;
+      transform-style: preserve-3d;
+    }
+
+    [id="04-agent-production-ui-image"] {
+      position: absolute;
+      z-index: 1;
+      left: 0;
+      top: -14.3cqh;
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    [id="04-agent-production-node-director"],
+    [id="04-agent-production-node-writer"] {
+      position: absolute;
+      z-index: 3;
+      top: 26cqh;
+      height: 30.7cqh;
+      outline: 1px solid #6d7dff;
+      outline-offset: -1px;
+      background: linear-gradient(
+        180deg,
+        rgba(109, 125, 255, 0.02),
+        rgba(109, 125, 255, 0.13) 52%,
+        rgba(109, 125, 255, 0.03)
+      );
+    }
+
+    [id="04-agent-production-node-director"] {
+      left: 8.5cqw;
+      width: 5.7cqw;
+    }
+
+    [id="04-agent-production-node-writer"] {
+      left: 14.9cqw;
+      width: 6.85cqw;
+    }
+
+    [id="04-agent-production-node-director"]::before,
+    [id="04-agent-production-node-writer"]::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 0.55cqh;
+      background: #6d7dff;
+    }
+
+    [id="04-agent-production-progress-track"] {
+      position: absolute;
+      z-index: 4;
+      left: 8.5cqw;
+      top: 22.35cqh;
+      width: 59.2cqw;
+      height: 1px;
+      background: rgba(16, 18, 22, 0.22);
+    }
+
+    [id="04-agent-production-progress-aura"] {
+      position: absolute;
+      left: 0;
+      top: -0.42cqh;
+      width: 100%;
+      height: 0.84cqh;
+      background: linear-gradient(
+        90deg,
+        rgba(109, 125, 255, 0),
+        rgba(109, 125, 255, 0.24) 78%,
+        rgba(109, 125, 255, 0)
+      );
+      transform-origin: left center;
+    }
+
+    [id="04-agent-production-progress-fill"] {
+      position: absolute;
+      inset: 0;
+      background: #6d7dff;
+      transform-origin: left center;
+    }
+
+    [id="04-agent-production-status-rail"] {
+      position: absolute;
+      z-index: 5;
+      left: 8cqw;
+      top: 58cqh;
+      width: 61cqw;
+      height: 10.6cqh;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      background: rgba(247, 248, 251, 0.94);
+      border-top: 1px solid rgba(16, 18, 22, 0.22);
+      border-bottom: 1px solid rgba(16, 18, 22, 0.22);
+    }
+
+    [data-f04-stage] {
+      position: relative;
+      display: grid;
+      grid-template-columns: 4.8cqw 1fr;
+      align-items: center;
+      padding: 0 1.35cqw;
+    }
+
+    [data-f04-stage]:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 1.4cqh;
+      bottom: 1.4cqh;
+      width: 1px;
+      background: rgba(16, 18, 22, 0.18);
+    }
+
+    [data-f04-stage-label] {
+      font-family: "Noto Sans SC";
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.18em;
+      white-space: nowrap;
+    }
+
+    [data-f04-stage-state] {
+      min-width: 7cqw;
+      font-family: "Noto Serif SC";
+      font-size: 1.4cqw;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+    }
+
+    [data-f04-stage-marker] {
+      position: absolute;
+      left: 1.35cqw;
+      bottom: 1.4cqh;
+      width: 2.8cqw;
+      height: 1px;
+      background: #6d7dff;
+      transform-origin: left center;
+    }
+
+    [id="04-agent-production-working-ring"] {
+      position: absolute;
+      z-index: 6;
+      left: 71.8cqw;
+      top: 60.6cqh;
+      width: 3.2cqw;
+      height: 3.2cqw;
+      overflow: visible;
+    }
+
+    [id="04-agent-production-working-ring"] circle {
+      fill: none;
+      stroke-width: 1;
+    }
+
+    [id="04-agent-production-working-ring-base"] {
+      stroke: rgba(16, 18, 22, 0.2);
+    }
+
+    [id="04-agent-production-working-ring-arc"] {
+      stroke: #6d7dff;
+      stroke-linecap: round;
+      stroke-dasharray: 35 17;
+    }
+
+    [id="04-agent-production-screen-dimmer"] {
+      position: absolute;
+      z-index: 9;
+      inset: 0;
+      background: rgba(247, 248, 251, 0.52);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    [id="04-agent-production-receipt"] {
+      position: absolute;
+      z-index: 12;
+      left: 68.3cqw;
+      top: 12.2cqh;
+      width: 26cqw;
+      height: 60.5cqh;
+      overflow: hidden;
+      background: rgba(247, 248, 251, 0.985);
+      border-top: 1px solid #101216;
+      border-bottom: 1px solid rgba(16, 18, 22, 0.22);
+      transform-origin: right center;
+    }
+
+    [id="04-agent-production-receipt-accent"] {
+      position: absolute;
+      z-index: 4;
+      left: 0;
+      top: 0;
+      width: 0.32cqw;
+      height: 100%;
+      background: #6d7dff;
+    }
+
+    [id="04-agent-production-receipt-crop"] {
+      position: relative;
+      height: 41.4cqh;
+      overflow: hidden;
+      border-bottom: 1px solid rgba(16, 18, 22, 0.22);
+      background: #f7f8fb;
+    }
+
+    [id="04-agent-production-receipt-image"] {
+      position: absolute;
+      left: -71.45cqw;
+      top: -4.8cqh;
+      width: 97.5cqw;
+      height: auto;
+      display: block;
+    }
+
+    [id="04-agent-production-receipt-copy"] {
+      position: relative;
+      height: 19.1cqh;
+      overflow: hidden;
+    }
+
+    [id="04-agent-production-receipt-label"] {
+      position: absolute;
+      left: 2.25cqw;
+      top: 1.5cqh;
+      font-family: "Noto Sans SC";
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.18em;
+    }
+
+    [id="04-agent-production-every-step"] {
+      position: absolute;
+      left: 2.25cqw;
+      top: 4.35cqh;
+      font-family: "Noto Serif SC";
+      font-size: 1.45cqw;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+    }
+
+    [id="04-agent-production-decision"] {
+      position: absolute;
+      left: 2.25cqw;
+      top: 8.05cqh;
+      font-family: "Noto Serif SC";
+      font-size: 3.05cqw;
+      font-weight: 400;
+      line-height: 0.96;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+
+    [id="04-agent-production-confirm-svg"] {
+      position: absolute;
+      left: 2.25cqw;
+      bottom: 1.35cqh;
+      width: 21.2cqw;
+      height: 6.2cqh;
+      overflow: visible;
+    }
+
+    [id="04-agent-production-confirm-line"],
+    [id="04-agent-production-confirm-check"] {
+      fill: none;
+      stroke: #c7a562;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    [id="04-agent-production-confirm-line"] {
+      stroke-width: 1;
+    }
+
+    [id="04-agent-production-confirm-check"] {
+      stroke-width: 1.4;
+    }
+
+    [id="04-agent-production-pagenum"] {
+      position: absolute;
+      z-index: 14;
+      right: 5.7cqw;
+      top: 80.5cqh;
+      font-family: "JetBrains Mono";
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: 0.08em;
+      opacity: 0.75;
+    }
+  </style>
+
+  <div id="root" data-composition-id="04-agent-production" data-duration="6.7" data-width="1920" data-height="1080">
+    <div
+      id="04-agent-production-ground"
+      class="clip"
+      data-start="0"
+      data-duration="6.7"
+      data-track-index="0"
+    >
+      <div id="04-agent-production-sun-bloom"></div>
+      <div id="04-agent-production-ember-bloom"></div>
+    </div>
+
+    <div
+      id="04-agent-production-scene"
+      class="clip"
+      data-start="0"
+      data-duration="6.7"
+      data-track-index="1"
+    >
+      <div id="04-agent-production-title">多智能体制片</div>
+      <div id="04-agent-production-title-rule"></div>
+
+      <div id="04-agent-production-ui-stage">
+        <img
+          id="04-agent-production-ui-image"
+          src="assets/images/production-agent-desktop.png"
+          alt="AEONQUILL 多智能体制片工作台"
+          draggable="false"
+        />
+
+        <div id="04-agent-production-node-director"></div>
+        <div id="04-agent-production-node-writer"></div>
+
+        <div id="04-agent-production-progress-track">
+          <div id="04-agent-production-progress-aura"></div>
+          <div id="04-agent-production-progress-fill"></div>
+        </div>
+
+        <div id="04-agent-production-status-rail">
+          <div id="04-agent-production-stage-storyboard" data-f04-stage="storyboard">
+            <span data-f04-stage-label>分镜</span>
+            <span id="04-agent-production-state-storyboard" data-f04-stage-state></span>
+            <span data-f04-stage-marker></span>
+          </div>
+          <div id="04-agent-production-stage-character" data-f04-stage="character">
+            <span data-f04-stage-label>人物</span>
+            <span id="04-agent-production-state-character" data-f04-stage-state></span>
+            <span data-f04-stage-marker></span>
+          </div>
+          <div id="04-agent-production-stage-edit" data-f04-stage="edit">
+            <span data-f04-stage-label>剪辑</span>
+            <span id="04-agent-production-state-edit" data-f04-stage-state></span>
+            <span data-f04-stage-marker></span>
+          </div>
+        </div>
+
+        <svg id="04-agent-production-working-ring" viewBox="0 0 64 64" aria-hidden="true">
+          <circle id="04-agent-production-working-ring-base" cx="32" cy="32" r="22"></circle>
+          <circle id="04-agent-production-working-ring-arc" cx="32" cy="32" r="22"></circle>
+        </svg>
+
+        <div id="04-agent-production-screen-dimmer"></div>
+      </div>
+
+      <div id="04-agent-production-receipt">
+        <div id="04-agent-production-receipt-accent"></div>
+        <div id="04-agent-production-receipt-crop">
+          <img
+            id="04-agent-production-receipt-image"
+            src="assets/images/production-agent-desktop.png"
+            alt="工作台中的人工审批区域"
+            draggable="false"
+          />
+        </div>
+        <div id="04-agent-production-receipt-copy">
+          <div id="04-agent-production-receipt-label">人工审核</div>
+          <div id="04-agent-production-every-step">每一步</div>
+          <div id="04-agent-production-decision">由你决定</div>
+          <svg id="04-agent-production-confirm-svg" viewBox="0 0 440 84" aria-hidden="true">
+            <path id="04-agent-production-confirm-line" d="M 2 18 H 330"></path>
+            <path id="04-agent-production-confirm-check" d="M 356 45 L 374 62 L 416 18"></path>
+          </svg>
+        </div>
+      </div>
+
+      <div id="04-agent-production-pagenum">04</div>
+    </div>
+  </div>
+
+  <script src="assets/vendor/gsap-3.14.2.min.js"></script>
+  <script>
+    (() => {
+      const root = document.querySelector('[data-composition-id="04-agent-production"]');
+      const gsapRuntime = window.gsap;
+      const byId = (suffix) => document.getElementById(`04-agent-production-${suffix}`);
+
+      const uiStage = byId("ui-stage");
+      const title = byId("title");
+      const titleRule = byId("title-rule");
+      const directorNode = byId("node-director");
+      const writerNode = byId("node-writer");
+      const progressFill = byId("progress-fill");
+      const progressAura = byId("progress-aura");
+      const ring = byId("working-ring");
+      const ringArc = byId("working-ring-arc");
+      const dimmer = byId("screen-dimmer");
+      const receipt = byId("receipt");
+      const receiptLabel = byId("receipt-label");
+      const everyStep = byId("every-step");
+      const decision = byId("decision");
+      const confirmLine = byId("confirm-line");
+      const confirmCheck = byId("confirm-check");
+      const pagenum = byId("pagenum");
+
+      const tl = gsapRuntime.timeline({ paused: true });
+      window.__timelines = window.__timelines || {};
+      window.__timelines["04-agent-production"] = tl;
+
+      tl.fromTo(
+        uiStage,
+        { opacity: 0.2, rotationY: -3.4, rotationX: 1.25, scale: 0.975 },
+        {
+          opacity: 1,
+          rotationY: 0,
+          rotationX: 0,
+          scale: 1,
+          duration: 0.78,
+          ease: "power2.out",
+          immediateRender: true,
+        },
+        0,
+      );
+
+      tl.fromTo(
+        title,
+        { opacity: 0, y: -10 },
+        { opacity: 1, y: 0, duration: 0.38, ease: "power1.out", immediateRender: true },
+        0.08,
+      );
+      tl.fromTo(
+        titleRule,
+        { scaleX: 0, opacity: 0 },
+        { scaleX: 1, opacity: 1, duration: 0.58, ease: "power2.out", immediateRender: true },
+        0.18,
+      );
+      tl.fromTo(
+        directorNode,
+        { opacity: 0, scaleY: 0.94 },
+        { opacity: 1, scaleY: 1, duration: 0.34, ease: "power1.out", immediateRender: true },
+        0.24,
+      );
+      tl.fromTo(
+        writerNode,
+        { opacity: 0, scaleY: 0.94 },
+        { opacity: 1, scaleY: 1, duration: 0.34, ease: "power1.out", immediateRender: true },
+        0.58,
+      );
+
+      tl.fromTo(
+        progressFill,
+        { scaleX: 0 },
+        { scaleX: 1, duration: 3.05, ease: "none", immediateRender: true },
+        1.1,
+      );
+      tl.fromTo(
+        progressAura,
+        { scaleX: 0, opacity: 0 },
+        { scaleX: 1, opacity: 1, duration: 3.05, ease: "none", immediateRender: true },
+        1.1,
+      );
+
+      const stateWords = ["待处理", "协作中", "可审核"];
+      const stateHolds = [0.08, 0.2, 0.34];
+      const makeSchedule = (start) => {
+        let cursor = start;
+        return stateWords.map((text, index) => {
+          const duration = 0.14 + text.length * 0.025 + stateHolds[index];
+          const entry = { text, start: cursor, end: cursor + duration };
+          cursor += duration;
+          return entry;
+        });
+      };
+      const stageSpecs = [
+        {
+          element: byId("stage-storyboard"),
+          state: byId("state-storyboard"),
+          marker: root.querySelector('[data-f04-stage="storyboard"] [data-f04-stage-marker]'),
+          start: 1.1,
+          schedule: makeSchedule(1.1),
+        },
+        {
+          element: byId("stage-character"),
+          state: byId("state-character"),
+          marker: root.querySelector('[data-f04-stage="character"] [data-f04-stage-marker]'),
+          start: 2.0,
+          schedule: makeSchedule(2.0),
+        },
+        {
+          element: byId("stage-edit"),
+          state: byId("state-edit"),
+          marker: root.querySelector('[data-f04-stage="edit"] [data-f04-stage-marker]'),
+          start: 2.9,
+          schedule: makeSchedule(2.9),
+        },
+      ];
+
+      const stateAt = (schedule, time) => {
+        for (let index = schedule.length - 1; index >= 0; index -= 1) {
+          if (time >= schedule[index].start) return schedule[index].text;
+        }
+        return "";
+      };
+
+      stageSpecs.forEach((stage) => {
+        tl.fromTo(
+          stage.element,
+          { opacity: 0, y: 12 },
+          { opacity: 1, y: 0, duration: 0.34, ease: "power1.out", immediateRender: true },
+          stage.start,
+        );
+        tl.fromTo(
+          stage.marker,
+          { scaleX: 0 },
+          { scaleX: 1, duration: 0.48, ease: "power2.out", immediateRender: true },
+          stage.start + 0.1,
+        );
+      });
+
+      const stateDriver = { t: 0 };
+      const lastStates = ["", "", ""];
+      tl.to(
+        stateDriver,
+        {
+          t: 4.4,
+          duration: 4.4,
+          ease: "none",
+          onUpdate: () => {
+            stageSpecs.forEach((stage, index) => {
+              const next = stateAt(stage.schedule, stateDriver.t);
+              if (next !== lastStates[index]) {
+                stage.state.textContent = next;
+                lastStates[index] = next;
+              }
+            });
+          },
+        },
+        0,
+      );
+
+      tl.fromTo(
+        ring,
+        { opacity: 0, scale: 0.88 },
+        { opacity: 1, scale: 1, duration: 0.25, ease: "power1.out", immediateRender: true },
+        1.1,
+      );
+      const ringState = { degrees: 0 };
+      tl.to(
+        ringState,
+        {
+          degrees: 810,
+          duration: 3.04,
+          ease: "none",
+          onUpdate: () => {
+            ringArc.setAttribute("transform", `rotate(${ringState.degrees} 32 32)`);
+          },
+        },
+        1.1,
+      );
+      tl.to(ring, { opacity: 0, duration: 0.12, ease: "power1.out" }, 4.14);
+
+      [confirmLine, confirmCheck].forEach((path) => {
+        const length = path.getTotalLength();
+        path.style.strokeDasharray = `${length}`;
+        path.style.strokeDashoffset = `${length}`;
+      });
+
+      tl.fromTo(
+        receipt,
+        { opacity: 0, y: 18, scale: 0.965 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.44, ease: "power2.out", immediateRender: true },
+        4.4,
+      );
+      tl.to(dimmer, { opacity: 1, duration: 0.34, ease: "power1.out" }, 4.4);
+      tl.fromTo(
+        receiptLabel,
+        { opacity: 0, y: 8 },
+        { opacity: 1, y: 0, duration: 0.24, ease: "power1.out", immediateRender: true },
+        4.48,
+      );
+      tl.fromTo(
+        everyStep,
+        { opacity: 0, y: 10 },
+        { opacity: 1, y: 0, duration: 0.3, ease: "power1.out", immediateRender: true },
+        4.56,
+      );
+      tl.fromTo(
+        decision,
+        { opacity: 0, y: 12 },
+        { opacity: 1, y: 0, duration: 0.34, ease: "power2.out", immediateRender: true },
+        4.82,
+      );
+      tl.to(
+        confirmLine,
+        { strokeDashoffset: 0, duration: 0.46, ease: "power2.out" },
+        4.82,
+      );
+      tl.to(
+        confirmCheck,
+        { strokeDashoffset: 0, duration: 0.28, ease: "power2.out" },
+        5.02,
+      );
+      tl.fromTo(
+        pagenum,
+        { opacity: 0 },
+        { opacity: 0.75, duration: 0.32, ease: "power1.out", immediateRender: true },
+        0.3,
+      );
+    })();
+  </script>
+</template>

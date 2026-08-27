@@ -1,0 +1,569 @@
+<template>
+  <script src="assets/vendor/gsap-3.14.2.min.js"></script>
+  <div id="root" data-composition-id="03-library-workflows" data-duration="5.6" data-width="1920" data-height="1080">
+    <div
+      class="clip 03-library-workflows-ground"
+      data-start="0"
+      data-duration="5.6"
+      data-track-index="0"
+      aria-hidden="true"
+    ></div>
+
+    <section
+      class="clip 03-library-workflows-scene"
+      data-start="0"
+      data-duration="5.6"
+      data-track-index="1"
+      aria-label="资源库与工作流中心跨模式复用"
+    >
+      <header id="03-library-workflows-title" class="03-library-workflows-title">
+        <div class="03-library-workflows-mode-row">
+          <span class="03-library-workflows-mode-rule" aria-hidden="true"></span>
+          <span id="03-library-workflows-mode" class="03-library-workflows-mode-copy">跨模式</span>
+          <span class="03-library-workflows-mode-rule" aria-hidden="true"></span>
+        </div>
+        <h1>资源 <span aria-hidden="true">×</span> 工作流</h1>
+      </header>
+
+      <div class="03-library-workflows-stage">
+        <article
+          id="03-library-workflows-left-card"
+          class="03-library-workflows-card-shell 03-library-workflows-card-left"
+          aria-label="资源库界面"
+        >
+          <div id="03-library-workflows-left-float" class="03-library-workflows-card-float 03-library-workflows-left-float">
+            <div id="03-library-workflows-left-label" class="03-library-workflows-card-label">
+              <span class="03-library-workflows-label-mark" aria-hidden="true"></span>
+              <span>资源库</span>
+            </div>
+            <figure class="03-library-workflows-screen 03-library-workflows-library-screen">
+              <img
+                id="03-library-workflows-library-image"
+                src="assets/images/asset-library-desktop.png"
+                alt="AEONQUILL 真实资源库与执行界面"
+              />
+            </figure>
+          </div>
+        </article>
+
+        <article
+          id="03-library-workflows-right-card"
+          class="03-library-workflows-card-shell 03-library-workflows-card-right"
+          aria-label="工作流中心界面"
+        >
+          <div id="03-library-workflows-right-float" class="03-library-workflows-card-float 03-library-workflows-right-float">
+            <div id="03-library-workflows-right-label" class="03-library-workflows-card-label">
+              <span class="03-library-workflows-label-mark" aria-hidden="true"></span>
+              <span>工作流中心</span>
+            </div>
+            <figure class="03-library-workflows-screen 03-library-workflows-workflow-screen">
+              <img
+                id="03-library-workflows-workflow-image"
+                src="assets/images/workflow-center-desktop.png"
+                alt="AEONQUILL 真实本地工作流中心界面"
+              />
+            </figure>
+          </div>
+        </article>
+
+        <div id="03-library-workflows-left-badge" class="03-library-workflows-badge 03-library-workflows-badge-left">
+          跨模式复用
+        </div>
+        <div id="03-library-workflows-right-badge" class="03-library-workflows-badge 03-library-workflows-badge-right">
+          按需启用
+        </div>
+
+        <svg
+          class="03-library-workflows-bridge"
+          viewBox="0 0 240 92"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <path
+            id="03-library-workflows-bridge-path"
+            d="M 2 4 C 50 76, 190 76, 238 4"
+            pathLength="240"
+          ></path>
+        </svg>
+
+        <div id="03-library-workflows-recovery" class="03-library-workflows-recovery">
+          <span id="03-library-workflows-recovery-dot" class="03-library-workflows-recovery-dot" aria-hidden="true"></span>
+          <span>项目可恢复</span>
+        </div>
+      </div>
+
+      <div class="03-library-workflows-pagenum" aria-hidden="true">03</div>
+    </section>
+  </div>
+
+  <style>
+    @font-face {
+      font-family: "Noto Serif SC";
+      src: url("assets/fonts/NotoSerifSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "Noto Sans SC";
+      src: url("assets/fonts/NotoSansSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "JetBrains Mono";
+      src: url("assets/fonts/JetBrainsMono-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: block;
+    }
+
+    #root {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-synthesis: none;
+    }
+
+    [class~="03-library-workflows-ground"] {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(
+          ellipse 49% 69% at 27% 47%,
+          rgba(109, 125, 255, 0.72) 0%,
+          rgba(148, 160, 255, 0.39) 29%,
+          rgba(109, 125, 255, 0.17) 55%,
+          rgba(109, 125, 255, 0) 75%
+        ),
+        radial-gradient(
+          ellipse 34% 45% at 86% 16%,
+          rgba(199, 165, 98, 0.18) 0%,
+          rgba(199, 165, 98, 0.08) 40%,
+          rgba(199, 165, 98, 0) 72%
+        ),
+        #f7f8fb;
+    }
+
+    [class~="03-library-workflows-scene"] {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    [class~="03-library-workflows-title"] {
+      position: absolute;
+      inset-block-start: 4.5cqh;
+      inset-inline-start: 19cqw;
+      width: 62cqw;
+      text-align: center;
+      transform-origin: 50% 0%;
+      will-change: transform, opacity;
+      z-index: 8;
+    }
+
+    [class~="03-library-workflows-mode-row"] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1cqw;
+      min-height: 3.2cqh;
+      font-family: "Noto Sans SC";
+      font-size: 1.45cqw;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.18em;
+    }
+
+    [class~="03-library-workflows-mode-rule"] {
+      display: block;
+      width: 2.3cqw;
+      height: 1px;
+      background: rgba(16, 18, 22, 0.62);
+    }
+
+    [class~="03-library-workflows-mode-copy"] {
+      position: relative;
+      display: inline-block;
+      isolation: isolate;
+      padding-inline: 0.5cqw;
+      transform-origin: 50% 50%;
+      will-change: transform, opacity;
+    }
+
+    [class~="03-library-workflows-mode-copy"]::before {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      inset-inline: 0;
+      inset-block-end: -0.2cqh;
+      height: 1.25cqh;
+      background: rgba(109, 125, 255, 0.74);
+    }
+
+    [class~="03-library-workflows-title"] h1 {
+      margin: 1.05cqh 0 0;
+      font-family: "Noto Serif SC";
+      font-size: 4.6cqw;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+    }
+
+    [class~="03-library-workflows-title"] h1 span {
+      display: inline-block;
+      margin-inline: 0.9cqw;
+      color: #101216;
+      font-family: "Noto Serif SC";
+      font-weight: 400;
+    }
+
+    [class~="03-library-workflows-stage"] {
+      position: absolute;
+      inset-block-start: 21.2cqh;
+      inset-inline-start: 5cqw;
+      width: 90cqw;
+      height: 55cqh;
+      perspective: 1680px;
+      transform-style: preserve-3d;
+      z-index: 4;
+    }
+
+    [class~="03-library-workflows-card-shell"] {
+      position: absolute;
+      inset-block-start: 0;
+      width: 40.4cqw;
+      height: 48cqh;
+      transform-style: preserve-3d;
+      transform-origin: 50% 50%;
+      will-change: transform, opacity;
+    }
+
+    [class~="03-library-workflows-card-left"] {
+      inset-inline-start: 1.5cqw;
+    }
+
+    [class~="03-library-workflows-card-right"] {
+      inset-inline-end: 1.5cqw;
+    }
+
+    [class~="03-library-workflows-card-float"] {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      isolation: isolate;
+      transform-style: preserve-3d;
+      will-change: transform;
+    }
+
+    [class~="03-library-workflows-card-float"]::before {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      inset: 0;
+      background: rgba(109, 125, 255, 0.3);
+    }
+
+    [class~="03-library-workflows-left-float"]::before {
+      inset-inline-start: 0.78cqw;
+      inset-inline-end: -0.78cqw;
+      inset-block-start: 1.05cqh;
+      inset-block-end: -1.05cqh;
+    }
+
+    [class~="03-library-workflows-right-float"]::before {
+      inset-inline-start: -0.78cqw;
+      inset-inline-end: 0.78cqw;
+      inset-block-start: 1.05cqh;
+      inset-block-end: -1.05cqh;
+    }
+
+    [class~="03-library-workflows-card-label"] {
+      position: relative;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 0.75cqw;
+      height: 4.8cqh;
+      padding-inline: 1.05cqw;
+      background: rgba(247, 248, 251, 0.94);
+      border-top: 1px solid rgba(16, 18, 22, 0.2);
+      border-bottom: 1px solid rgba(16, 18, 22, 0.2);
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-size: 1.42cqw;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.17em;
+      will-change: transform, opacity;
+    }
+
+    [class~="03-library-workflows-label-mark"] {
+      width: 0.72cqw;
+      height: 0.72cqw;
+      background: #6d7dff;
+    }
+
+    [class~="03-library-workflows-screen"] {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      height: 43.2cqh;
+      margin: 0;
+      overflow: hidden;
+      background: #f7f8fb;
+    }
+
+    [class~="03-library-workflows-screen"] img {
+      position: absolute;
+      display: block;
+      max-width: none;
+      pointer-events: none;
+      user-select: none;
+      will-change: transform;
+    }
+
+    [class~="03-library-workflows-library-screen"] img {
+      inset-block-start: -8.4cqh;
+      inset-inline-start: -12cqw;
+      width: auto;
+      height: 136%;
+    }
+
+    [class~="03-library-workflows-workflow-screen"] img {
+      inset-block-start: -2.1cqh;
+      inset-inline-start: -2.25cqw;
+      width: auto;
+      height: 117%;
+    }
+
+    [class~="03-library-workflows-badge"] {
+      position: absolute;
+      z-index: 9;
+      inset-block-start: 34.6cqh;
+      display: grid;
+      place-items: center;
+      width: 10.8cqw;
+      height: 5.4cqh;
+      background: #6d7dff;
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-size: 1.42cqw;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.1em;
+      white-space: nowrap;
+      will-change: transform, opacity;
+    }
+
+    [class~="03-library-workflows-badge-left"] {
+      inset-inline-start: 33.1cqw;
+      transform-origin: 100% 50%;
+    }
+
+    [class~="03-library-workflows-badge-right"] {
+      inset-inline-start: 46.1cqw;
+      transform-origin: 0% 50%;
+    }
+
+    [class~="03-library-workflows-bridge"] {
+      position: absolute;
+      z-index: 7;
+      inset-block-start: 39.1cqh;
+      inset-inline-start: 40.6cqw;
+      width: 8.8cqw;
+      height: 7.7cqh;
+      overflow: visible;
+    }
+
+    [class~="03-library-workflows-bridge"] path {
+      fill: none;
+      stroke: #6d7dff;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+      stroke-linecap: square;
+      stroke-dasharray: 240;
+      stroke-dashoffset: 240;
+      will-change: stroke-dashoffset, opacity;
+    }
+
+    [class~="03-library-workflows-recovery"] {
+      position: absolute;
+      z-index: 10;
+      inset-block-start: 45.6cqh;
+      inset-inline-start: 40.6cqw;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.55cqw;
+      width: 8.8cqw;
+      height: 4.1cqh;
+      background: rgba(247, 248, 251, 0.96);
+      border-top: 1px solid rgba(16, 18, 22, 0.2);
+      border-bottom: 1px solid rgba(16, 18, 22, 0.2);
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-size: 1.05cqw;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.12em;
+      white-space: nowrap;
+      transform-origin: 50% 0%;
+      will-change: transform, opacity;
+    }
+
+    [class~="03-library-workflows-recovery-dot"] {
+      display: block;
+      width: 0.62cqw;
+      height: 0.62cqw;
+      background: #6d7dff;
+      transform-origin: 50% 50%;
+      will-change: transform;
+    }
+
+    [class~="03-library-workflows-pagenum"] {
+      position: absolute;
+      z-index: 12;
+      inset-block-start: 79.3cqh;
+      inset-inline-end: 4cqw;
+      color: rgba(16, 18, 22, 0.75);
+      font-family: "JetBrains Mono";
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: 0.08em;
+    }
+  </style>
+
+  <script>
+    (() => {
+      const frameRoot = document.querySelector('[data-composition-id="03-library-workflows"]');
+      const pick = (id) => document.getElementById(id);
+      const timeline = gsap.timeline({ paused: true });
+
+      const title = pick("03-library-workflows-title");
+      const mode = pick("03-library-workflows-mode");
+      const leftCard = pick("03-library-workflows-left-card");
+      const rightCard = pick("03-library-workflows-right-card");
+      const leftFloat = pick("03-library-workflows-left-float");
+      const rightFloat = pick("03-library-workflows-right-float");
+      const leftLabel = pick("03-library-workflows-left-label");
+      const rightLabel = pick("03-library-workflows-right-label");
+      const libraryImage = pick("03-library-workflows-library-image");
+      const workflowImage = pick("03-library-workflows-workflow-image");
+      const leftBadge = pick("03-library-workflows-left-badge");
+      const rightBadge = pick("03-library-workflows-right-badge");
+      const bridgePath = pick("03-library-workflows-bridge-path");
+      const recovery = pick("03-library-workflows-recovery");
+      const recoveryDot = pick("03-library-workflows-recovery-dot");
+
+      timeline.fromTo(
+        title,
+        { y: -64, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.78, ease: "power3.out" },
+        0
+      );
+      timeline.fromTo(
+        mode,
+        { scaleX: 0.18, opacity: 0 },
+        { scaleX: 1, opacity: 1, duration: 0.56, ease: "power3.out" },
+        0.22
+      );
+
+      timeline.fromTo(
+        leftCard,
+        { x: -420, rotateY: 24, scale: 0.86, opacity: 0 },
+        { x: 0, rotateY: 12, scale: 1, opacity: 1, duration: 1.12, ease: "power3.out" },
+        0.7
+      );
+      timeline.fromTo(
+        rightCard,
+        { x: 420, rotateY: -24, scale: 0.86, opacity: 0 },
+        { x: 0, rotateY: -12, scale: 1, opacity: 1, duration: 1.12, ease: "power3.out" },
+        0.9
+      );
+      timeline.fromTo(
+        libraryImage,
+        { scale: 1.055 },
+        { scale: 1, duration: 1.18, ease: "power2.out" },
+        0.72
+      );
+      timeline.fromTo(
+        workflowImage,
+        { scale: 1.055 },
+        { scale: 1, duration: 1.18, ease: "power2.out" },
+        0.92
+      );
+      timeline.fromTo(
+        leftLabel,
+        { y: 12, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.56, ease: "power2.out" },
+        1.14
+      );
+      timeline.fromTo(
+        rightLabel,
+        { y: 12, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.56, ease: "power2.out" },
+        1.34
+      );
+
+      timeline.fromTo(
+        leftFloat,
+        { y: 0 },
+        { y: -5, duration: 0.36, ease: "sine.inOut" },
+        2.04
+      );
+      timeline.fromTo(
+        rightFloat,
+        { y: 0 },
+        { y: 5, duration: 0.36, ease: "sine.inOut" },
+        2.04
+      );
+      timeline.to(leftFloat, { y: 0, duration: 0.36, ease: "sine.inOut" }, 2.4);
+      timeline.to(rightFloat, { y: 0, duration: 0.36, ease: "sine.inOut" }, 2.4);
+
+      timeline.fromTo(
+        leftBadge,
+        { scale: 0, y: 10, opacity: 0 },
+        { scale: 1, y: 0, opacity: 1, duration: 0.58, ease: "power3.out" },
+        2.84
+      );
+      timeline.fromTo(
+        rightBadge,
+        { scale: 0, y: 10, opacity: 0 },
+        { scale: 1, y: 0, opacity: 1, duration: 0.58, ease: "power3.out" },
+        3.18
+      );
+      timeline.fromTo(
+        bridgePath,
+        { strokeDashoffset: 240, opacity: 0 },
+        { strokeDashoffset: 0, opacity: 1, duration: 0.82, ease: "power2.inOut" },
+        3.58
+      );
+      timeline.fromTo(
+        recovery,
+        { scale: 0, y: 8, opacity: 0 },
+        { scale: 1, y: 0, opacity: 1, duration: 0.58, ease: "power3.out" },
+        4.28
+      );
+      timeline.fromTo(
+        recoveryDot,
+        { scale: 0.3 },
+        { scale: 1, duration: 0.44, ease: "power3.out" },
+        4.52
+      );
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["03-library-workflows"] = timeline;
+    })();
+  </script>
+</template>

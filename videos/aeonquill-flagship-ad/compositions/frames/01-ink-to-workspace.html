@@ -1,0 +1,481 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Noto Serif SC";
+      src: url("assets/fonts/NotoSerifSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "Noto Sans SC";
+      src: url("assets/fonts/NotoSansSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "JetBrains Mono";
+      src: url("assets/fonts/JetBrainsMono-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 800;
+      font-display: block;
+    }
+
+    #root[data-composition-id="01-ink-to-workspace"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      color: #101216;
+    }
+
+    #root[data-composition-id="01-ink-to-workspace"] > .clip {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: #f7f8fb;
+    }
+
+    [id="01-ink-to-workspace-atmosphere"] {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(
+          circle at 70% 36%,
+          rgba(109, 125, 255, 0.62) 0%,
+          rgba(148, 160, 255, 0.34) 19%,
+          rgba(109, 125, 255, 0.16) 40%,
+          rgba(109, 125, 255, 0) 66%
+        ),
+        radial-gradient(
+          circle at 10% 77%,
+          rgba(199, 165, 98, 0.18) 0%,
+          rgba(199, 165, 98, 0.08) 24%,
+          rgba(199, 165, 98, 0) 52%
+        );
+      pointer-events: none;
+    }
+
+    [id="01-ink-to-workspace-world"] {
+      position: absolute;
+      inset: 0;
+      overflow: visible;
+      transform-origin: 50% 50%;
+      will-change: transform;
+    }
+
+    [id="01-ink-to-workspace-ink"] {
+      position: absolute;
+      z-index: 1;
+      left: -100px;
+      top: 170px;
+      width: 520px;
+      height: 520px;
+      object-fit: cover;
+      opacity: 0.94;
+      mix-blend-mode: multiply;
+    }
+
+    [id="01-ink-to-workspace-gold-arc"] {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    [id="01-ink-to-workspace-gold-path"] {
+      fill: none;
+      stroke: #c7a562;
+      stroke-width: 1.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    [id="01-ink-to-workspace-inspiration"] {
+      position: absolute;
+      z-index: 3;
+      left: 58px;
+      top: 357px;
+      display: flex;
+      align-items: baseline;
+      color: #101216;
+      font-family: "Noto Serif SC";
+      font-size: 48px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.018em;
+      white-space: nowrap;
+    }
+
+    [data-f01-glyph] {
+      display: block;
+      will-change: transform, opacity;
+    }
+
+    [id="01-ink-to-workspace-detail-target"] {
+      position: absolute;
+      left: 100px;
+      top: 439px;
+      width: 2px;
+      height: 2px;
+      pointer-events: none;
+    }
+
+    [id="01-ink-to-workspace-product-ui"] {
+      position: absolute;
+      z-index: 4;
+      left: 270px;
+      top: 32px;
+      width: 1380px;
+      height: 862.5px;
+      box-sizing: border-box;
+      object-fit: contain;
+      border: 1px solid rgba(16, 18, 22, 0.2);
+      background: #f7f8fb;
+    }
+
+    [id="01-ink-to-workspace-route-map"] {
+      position: absolute;
+      z-index: 5;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    [data-f01-route] {
+      fill: none;
+      stroke: #6d7dff;
+      stroke-width: 1;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    [data-f01-node] {
+      fill: #6d7dff;
+      stroke: #f7f8fb;
+      stroke-width: 1;
+      transform-box: fill-box;
+      transform-origin: center;
+      vector-effect: non-scaling-stroke;
+      will-change: transform, opacity;
+    }
+
+    [data-f01-callout] {
+      position: absolute;
+      z-index: 6;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-size: 28px;
+      font-weight: 500;
+      line-height: 1.2;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+      will-change: transform, opacity;
+    }
+
+    [data-f01-callout]::before {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 8px;
+      background: #6d7dff;
+      content: "";
+    }
+
+    [id="01-ink-to-workspace-callout-project"] {
+      left: 78px;
+      top: 86px;
+    }
+
+    [id="01-ink-to-workspace-callout-modes"] {
+      left: 1680px;
+      top: 132px;
+    }
+
+    [id="01-ink-to-workspace-callout-runtime"] {
+      left: 1608px;
+      top: 798px;
+    }
+
+    [id="01-ink-to-workspace-pagenum"] {
+      position: absolute;
+      z-index: 7;
+      right: 52px;
+      top: 850px;
+      color: rgba(16, 18, 22, 0.75);
+      font-family: "JetBrains Mono";
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: 0.08em;
+    }
+  </style>
+
+  <script src="assets/vendor/gsap-3.14.2.min.js"></script>
+
+  <div
+    id="root"
+    data-composition-id="01-ink-to-workspace"
+    data-width="1920"
+    data-height="1080"
+    data-duration="4.65"
+    data-fps="30"
+  >
+    <div
+      id="01-ink-to-workspace-scene"
+      class="clip"
+      data-start="0"
+      data-duration="4.65"
+      data-track-index="0"
+    >
+      <div id="01-ink-to-workspace-atmosphere" aria-hidden="true"></div>
+
+      <div id="01-ink-to-workspace-world">
+        <img
+          id="01-ink-to-workspace-ink"
+          src="assets/images/aeon-ink-flow.webp"
+          alt=""
+          aria-hidden="true"
+        />
+
+        <svg
+          id="01-ink-to-workspace-gold-arc"
+          viewBox="0 0 1920 1080"
+          aria-hidden="true"
+        >
+          <path
+            id="01-ink-to-workspace-gold-path"
+            d="M 18 332 C 84 318 132 342 166 388 C 201 436 219 488 286 518 C 348 546 412 548 468 532"
+          />
+        </svg>
+
+        <div id="01-ink-to-workspace-inspiration" aria-label="灵感">
+          <span data-f01-glyph>灵</span><span data-f01-glyph>感</span>
+        </div>
+
+        <div id="01-ink-to-workspace-detail-target" aria-hidden="true"></div>
+
+        <img
+          id="01-ink-to-workspace-product-ui"
+          src="assets/images/project-center-desktop.png"
+          alt="AEONQUILL 项目中心真实桌面界面"
+        />
+
+        <svg
+          id="01-ink-to-workspace-route-map"
+          viewBox="0 0 1920 1080"
+          aria-hidden="true"
+        >
+          <path
+            id="01-ink-to-workspace-leader-project"
+            data-f01-route
+            d="M 168 105 H 248 V 151 H 588"
+          />
+          <path
+            id="01-ink-to-workspace-route-project-modes"
+            data-f01-route
+            d="M 588 151 C 830 92 1210 92 1414 174"
+          />
+          <path
+            id="01-ink-to-workspace-leader-modes"
+            data-f01-route
+            d="M 1414 174 H 1642 V 151 H 1680"
+          />
+          <path
+            id="01-ink-to-workspace-route-modes-runtime"
+            data-f01-route
+            d="M 1414 174 C 1536 340 1458 610 708 694"
+          />
+          <path
+            id="01-ink-to-workspace-leader-runtime"
+            data-f01-route
+            d="M 708 694 C 1120 720 1430 764 1572 817 H 1608"
+          />
+
+          <circle id="01-ink-to-workspace-node-project" data-f01-node cx="588" cy="151" r="6" />
+          <circle id="01-ink-to-workspace-node-modes" data-f01-node cx="1414" cy="174" r="6" />
+          <circle id="01-ink-to-workspace-node-runtime" data-f01-node cx="708" cy="694" r="6" />
+        </svg>
+
+        <div id="01-ink-to-workspace-callout-project" data-f01-callout>项目</div>
+        <div id="01-ink-to-workspace-callout-modes" data-f01-callout>三种模式</div>
+        <div id="01-ink-to-workspace-callout-runtime" data-f01-callout>本地运行时</div>
+
+        <div id="01-ink-to-workspace-pagenum" aria-label="镜头 01">01</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var root = document.querySelector('[data-composition-id="01-ink-to-workspace"]');
+      var world = document.getElementById("01-ink-to-workspace-world");
+      var target = document.getElementById("01-ink-to-workspace-detail-target");
+
+      var rootRect = root.getBoundingClientRect();
+      var targetRect = target.getBoundingClientRect();
+      var targetCenterX = ((targetRect.left + targetRect.width / 2 - rootRect.left) / rootRect.width) * 1920;
+      var targetCenterY = ((targetRect.top + targetRect.height / 2 - rootRect.top) / rootRect.height) * 1080;
+      var offsetX = targetCenterX - 960;
+      var offsetY = targetCenterY - 540;
+      var openScale = 5.6;
+
+      var cam = {
+        scale: openScale,
+        x: -offsetX * openScale,
+        y: -offsetY * openScale
+      };
+
+      function applyCamera() {
+        world.style.transform =
+          "translate(" + cam.x + "px, " + cam.y + "px) scale(" + cam.scale + ")";
+      }
+
+      function primePath(path) {
+        var length = path.getTotalLength();
+        gsap.set(path, {
+          strokeDasharray: length,
+          strokeDashoffset: length
+        });
+      }
+
+      applyCamera();
+
+      var goldPath = document.getElementById("01-ink-to-workspace-gold-path");
+      var routeIds = [
+        "01-ink-to-workspace-leader-project",
+        "01-ink-to-workspace-route-project-modes",
+        "01-ink-to-workspace-leader-modes",
+        "01-ink-to-workspace-route-modes-runtime",
+        "01-ink-to-workspace-leader-runtime"
+      ];
+
+      primePath(goldPath);
+      routeIds.forEach(function (id) {
+        primePath(document.getElementById(id));
+      });
+
+      var tl = gsap.timeline({ paused: true });
+
+      tl.fromTo(
+        "[data-f01-glyph]:nth-child(1)",
+        { opacity: 0, y: 10 },
+        { opacity: 1, y: 0, duration: 0.34, ease: "power2.out" },
+        0.08
+      );
+      tl.fromTo(
+        "[data-f01-glyph]:nth-child(2)",
+        { opacity: 0, y: 10 },
+        { opacity: 1, y: 0, duration: 0.34, ease: "power2.out" },
+        0.28
+      );
+      tl.to(
+        goldPath,
+        { strokeDashoffset: 0, duration: 0.68, ease: "power2.out" },
+        0.12
+      );
+
+      tl.to(
+        cam,
+        {
+          scale: 1,
+          x: 0,
+          y: 0,
+          duration: 2.8,
+          ease: "expo.out",
+          onUpdate: applyCamera
+        },
+        0
+      );
+
+      var callouts = [
+        {
+          text: "项目",
+          group: "01-ink-to-workspace-callout-project",
+          node: "01-ink-to-workspace-node-project",
+          paths: ["01-ink-to-workspace-leader-project"]
+        },
+        {
+          text: "三种模式",
+          group: "01-ink-to-workspace-callout-modes",
+          node: "01-ink-to-workspace-node-modes",
+          paths: [
+            "01-ink-to-workspace-route-project-modes",
+            "01-ink-to-workspace-leader-modes"
+          ]
+        },
+        {
+          text: "本地运行时",
+          group: "01-ink-to-workspace-callout-runtime",
+          node: "01-ink-to-workspace-node-runtime",
+          paths: [
+            "01-ink-to-workspace-route-modes-runtime",
+            "01-ink-to-workspace-leader-runtime"
+          ]
+        }
+      ];
+
+      var sequenceCursor = 2.8;
+      var sequence = callouts.map(function (entry) {
+        var duration = 0.18 + entry.text.length * 0.025;
+        var item = {
+          start: sequenceCursor,
+          end: sequenceCursor + duration,
+          duration: duration,
+          entry: entry
+        };
+        sequenceCursor = item.end;
+        return item;
+      });
+
+      sequence.forEach(function (item) {
+        item.entry.paths.forEach(function (pathId, index) {
+          tl.to(
+            document.getElementById(pathId),
+            {
+              strokeDashoffset: 0,
+              duration: item.duration * 0.78,
+              ease: "power2.out"
+            },
+            item.start + index * 0.025
+          );
+        });
+
+        tl.fromTo(
+          document.getElementById(item.entry.group),
+          { opacity: 0, y: 10 },
+          {
+            opacity: 1,
+            y: 0,
+            duration: Math.min(0.26, item.duration),
+            ease: "power2.out"
+          },
+          item.start + 0.04
+        );
+
+        tl.fromTo(
+          document.getElementById(item.entry.node),
+          { opacity: 0, scale: 0 },
+          { opacity: 1, scale: 1, duration: 0.18, ease: "power2.out" },
+          item.start + 0.06
+        );
+      });
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["01-ink-to-workspace"] = tl;
+    })();
+  </script>
+</template>

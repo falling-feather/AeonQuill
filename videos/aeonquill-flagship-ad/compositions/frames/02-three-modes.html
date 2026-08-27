@@ -1,0 +1,600 @@
+<template>
+  <script src="assets/vendor/gsap-3.14.2.min.js"></script>
+  <div id="root" data-composition-id="02-three-modes" data-duration="5.4" aria-label="光阴砚三种创作模式" data-width="1920" data-height="1080">
+    <div
+      class="clip frame-02-three-modes-ground"
+      data-start="0"
+      data-duration="5.4"
+      data-track-index="0"
+      aria-hidden="true"
+    >
+      <div class="frame-02-three-modes-sun-bloom"></div>
+      <div class="frame-02-three-modes-ember-bloom"></div>
+    </div>
+
+    <div
+      class="clip frame-02-three-modes-content"
+      data-start="0"
+      data-duration="5.4"
+      data-track-index="1"
+    >
+      <div class="frame-02-three-modes-brand-anchor">
+        <img
+          id="frame-02-three-modes-app-icon"
+          class="frame-02-three-modes-app-icon"
+          src="assets/images/aeonquill-app-icon.png"
+          alt=""
+        />
+        <div id="frame-02-three-modes-brand-name" class="frame-02-three-modes-brand-name">光阴砚</div>
+      </div>
+
+      <div id="frame-02-three-modes-surface" class="frame-02-three-modes-surface">
+        <div class="frame-02-three-modes-surface-world" data-layout-allow-overflow>
+          <img
+            class="frame-02-three-modes-product-screen"
+            src="assets/images/project-center-desktop.png"
+            alt="光阴砚项目中心"
+          />
+
+          <div
+            id="frame-02-three-modes-spotlight-image"
+            class="frame-02-three-modes-spotlight frame-02-three-modes-spotlight-image"
+            aria-hidden="true"
+          ><span></span></div>
+          <div
+            id="frame-02-three-modes-spotlight-pixel"
+            class="frame-02-three-modes-spotlight frame-02-three-modes-spotlight-pixel"
+            aria-hidden="true"
+          ><span></span></div>
+          <div
+            id="frame-02-three-modes-spotlight-video"
+            class="frame-02-three-modes-spotlight frame-02-three-modes-spotlight-video"
+            aria-hidden="true"
+          ><span></span></div>
+        </div>
+      </div>
+
+      <div id="frame-02-three-modes-mode-rail" class="frame-02-three-modes-mode-rail" aria-label="图像、像素、视频">
+        <div id="frame-02-three-modes-label-image" class="frame-02-three-modes-mode-label frame-02-three-modes-mode-label-image">
+          <span class="frame-02-three-modes-mode-word" data-mode-word="image"></span>
+        </div>
+        <div id="frame-02-three-modes-label-pixel" class="frame-02-three-modes-mode-label frame-02-three-modes-mode-label-pixel">
+          <span class="frame-02-three-modes-mode-word" data-mode-word="pixel"></span>
+        </div>
+        <div id="frame-02-three-modes-label-video" class="frame-02-three-modes-mode-label frame-02-three-modes-mode-label-video">
+          <span class="frame-02-three-modes-mode-word" data-mode-word="video"></span>
+        </div>
+
+        <div id="frame-02-three-modes-chain-line" class="frame-02-three-modes-chain-line" aria-hidden="true"></div>
+        <div id="frame-02-three-modes-chain-word" class="frame-02-three-modes-chain-word">一条链</div>
+        <div id="frame-02-three-modes-confirm-point" class="frame-02-three-modes-confirm-point" aria-hidden="true"></div>
+      </div>
+
+      <div class="frame-02-three-modes-pagenum" aria-hidden="true">02</div>
+    </div>
+  </div>
+
+  <style>
+    @font-face {
+      font-family: "Noto Serif SC";
+      src: url("assets/fonts/NotoSerifSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "Noto Sans SC";
+      src: url("assets/fonts/NotoSansSC-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    @font-face {
+      font-family: "JetBrains Mono";
+      src: url("assets/fonts/JetBrainsMono-Variable.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: block;
+    }
+
+    #root {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      color: #101216;
+      isolation: isolate;
+    }
+
+    .frame-02-three-modes-ground,
+    .frame-02-three-modes-content {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    .frame-02-three-modes-ground {
+      z-index: 0;
+      background: #f7f8fb;
+    }
+
+    .frame-02-three-modes-sun-bloom,
+    .frame-02-three-modes-ember-bloom {
+      position: absolute;
+      pointer-events: none;
+      transform-origin: 50% 50%;
+    }
+
+    .frame-02-three-modes-sun-bloom {
+      left: 29cqw;
+      top: -13cqh;
+      width: 69cqw;
+      height: 105cqh;
+      background: radial-gradient(
+        ellipse at center,
+        rgba(109, 125, 255, 0.78) 0%,
+        rgba(148, 160, 255, 0.53) 27%,
+        rgba(109, 125, 255, 0.19) 48%,
+        rgba(247, 248, 251, 0) 72%
+      );
+    }
+
+    .frame-02-three-modes-ember-bloom {
+      left: -13cqw;
+      top: 49cqh;
+      width: 43cqw;
+      height: 59cqh;
+      background: radial-gradient(
+        ellipse at center,
+        rgba(199, 165, 98, 0.19) 0%,
+        rgba(199, 165, 98, 0.08) 38%,
+        rgba(247, 248, 251, 0) 72%
+      );
+    }
+
+    .frame-02-three-modes-content {
+      z-index: 1;
+      perspective: 2100px;
+    }
+
+    .frame-02-three-modes-brand-anchor {
+      position: absolute;
+      left: 6.15cqw;
+      top: 13.9cqh;
+      width: 16.4cqw;
+      height: 30cqh;
+      z-index: 4;
+    }
+
+    .frame-02-three-modes-app-icon {
+      display: block;
+      width: 12cqw;
+      aspect-ratio: 1;
+      object-fit: contain;
+      transform-origin: 50% 50%;
+    }
+
+    .frame-02-three-modes-brand-name {
+      margin-top: 3.4cqh;
+      width: 15cqw;
+      font-family: "Noto Serif SC";
+      font-size: 3.2cqw;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.012em;
+      white-space: nowrap;
+    }
+
+    .frame-02-three-modes-surface {
+      position: absolute;
+      left: 28.15cqw;
+      top: 5.35cqh;
+      width: 68.75cqw;
+      height: 76.39cqh;
+      overflow: hidden;
+      border: 1px solid rgba(16, 18, 22, 0.27);
+      background: #f7f8fb;
+      transform-origin: 50% 50%;
+      transform-style: preserve-3d;
+      z-index: 2;
+    }
+
+    .frame-02-three-modes-surface-world {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    .frame-02-three-modes-product-screen {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+    }
+
+    .frame-02-three-modes-spotlight {
+      position: absolute;
+      left: 1.25%;
+      width: 13.9%;
+      height: 4.9%;
+      border: 1px solid rgba(16, 18, 22, 0.64);
+      background: linear-gradient(
+        90deg,
+        rgba(109, 125, 255, 0.28) 0%,
+        rgba(148, 160, 255, 0.13) 62%,
+        rgba(148, 160, 255, 0.02) 100%
+      );
+      transform-origin: 50% 50%;
+      pointer-events: none;
+    }
+
+    .frame-02-three-modes-spotlight span {
+      position: absolute;
+      left: 0.55cqw;
+      top: 50%;
+      width: 0.42cqw;
+      height: 0.42cqw;
+      margin-top: -0.21cqw;
+      background: #6d7dff;
+    }
+
+    .frame-02-three-modes-spotlight-image {
+      top: 34.05%;
+    }
+
+    .frame-02-three-modes-spotlight-pixel {
+      top: 39.05%;
+    }
+
+    .frame-02-three-modes-spotlight-video {
+      top: 44.05%;
+    }
+
+    .frame-02-three-modes-mode-rail {
+      position: absolute;
+      left: 5cqw;
+      top: 51.4cqh;
+      width: 28cqw;
+      height: 24cqh;
+      z-index: 5;
+    }
+
+    .frame-02-three-modes-mode-label {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 5.8cqw;
+      height: 4.8cqh;
+      min-width: 5.8cqw;
+      white-space: nowrap;
+      background: rgba(109, 125, 255, 0.2);
+      color: #101216;
+      font-family: "Noto Sans SC";
+      font-size: 1.5cqw;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.12em;
+      transform-origin: 50% 50%;
+      z-index: 3;
+    }
+
+    .frame-02-three-modes-mode-word {
+      display: inline-block;
+      min-width: 3.3cqw;
+      text-align: center;
+      white-space: nowrap;
+      transform-origin: 50% 50%;
+      text-shadow: 0 0 0 rgba(109, 125, 255, 0);
+    }
+
+    .frame-02-three-modes-mode-label-image {
+      left: 0;
+      top: 0;
+    }
+
+    .frame-02-three-modes-mode-label-pixel {
+      left: 2.2cqw;
+      top: 6.7cqh;
+    }
+
+    .frame-02-three-modes-mode-label-video {
+      left: 4.4cqw;
+      top: 13.4cqh;
+    }
+
+    .frame-02-three-modes-chain-line {
+      position: absolute;
+      left: 0;
+      top: 11.2cqh;
+      width: 27cqw;
+      height: 1px;
+      background: rgba(16, 18, 22, 0.72);
+      transform-origin: 0 50%;
+      z-index: 1;
+    }
+
+    .frame-02-three-modes-chain-word {
+      position: absolute;
+      left: 18.9cqw;
+      top: 8.72cqh;
+      width: 6.5cqw;
+      min-width: 6.5cqw;
+      height: 4.9cqh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f7f8fb;
+      color: #101216;
+      font-family: "Noto Serif SC";
+      font-size: 2cqw;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+      z-index: 4;
+    }
+
+    .frame-02-three-modes-confirm-point {
+      position: absolute;
+      left: 26.75cqw;
+      top: 10.75cqh;
+      width: 0.55cqw;
+      height: 0.98cqh;
+      background: #c7a562;
+      transform-origin: 50% 50%;
+      z-index: 5;
+    }
+
+    .frame-02-three-modes-pagenum {
+      position: absolute;
+      right: 4cqw;
+      top: 79.2cqh;
+      color: rgba(16, 18, 22, 0.75);
+      font-family: "JetBrains Mono";
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: 0.08em;
+      z-index: 6;
+    }
+  </style>
+
+  <script>
+    (() => {
+      const root = document.querySelector('[data-composition-id="02-three-modes"]');
+      if (!root || typeof gsap === "undefined") return;
+
+      const select = (selector) => root.querySelector(selector);
+      const selectAll = (selector) => Array.from(root.querySelectorAll(selector));
+
+      const icon = select("#frame-02-three-modes-app-icon");
+      const brand = select("#frame-02-three-modes-brand-name");
+      const surface = select("#frame-02-three-modes-surface");
+      const sunBloom = select(".frame-02-three-modes-sun-bloom");
+      const emberBloom = select(".frame-02-three-modes-ember-bloom");
+      const modeLabels = selectAll(".frame-02-three-modes-mode-label");
+      const modeWords = selectAll(".frame-02-three-modes-mode-word");
+      const spotlights = [
+        select("#frame-02-three-modes-spotlight-image"),
+        select("#frame-02-three-modes-spotlight-pixel"),
+        select("#frame-02-three-modes-spotlight-video"),
+      ];
+      const chainLine = select("#frame-02-three-modes-chain-line");
+      const chainWord = select("#frame-02-three-modes-chain-word");
+      const confirmPoint = select("#frame-02-three-modes-confirm-point");
+
+      const tl = gsap.timeline({ paused: true });
+      window.__timelines = window.__timelines || {};
+      window.__timelines["02-three-modes"] = tl;
+
+      gsap.set(modeLabels, { autoAlpha: 0 });
+      gsap.set(spotlights, { autoAlpha: 0, x: 96 });
+      gsap.set([chainLine, chainWord, confirmPoint], { autoAlpha: 0 });
+
+      tl.fromTo(
+        surface,
+        {
+          x: 72,
+          rotationY: -7,
+          rotationX: 2.5,
+          rotationZ: -0.7,
+          scale: 0.955,
+          opacity: 0.28,
+          transformPerspective: 2100,
+        },
+        {
+          x: 0,
+          rotationY: 0,
+          rotationX: 0,
+          rotationZ: 0,
+          scale: 1,
+          opacity: 1,
+          transformPerspective: 2100,
+          duration: 0.95,
+          ease: "power3.out",
+        },
+        0,
+      );
+
+      tl.fromTo(
+        icon,
+        { y: -54, scale: 0.9, opacity: 0 },
+        { y: 0, scale: 1, opacity: 1, duration: 0.72, ease: "power3.out" },
+        0.04,
+      );
+
+      tl.fromTo(
+        brand,
+        { y: 20, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.52, ease: "power3.out" },
+        0.3,
+      );
+
+      tl.fromTo(
+        sunBloom,
+        { scale: 0.96, opacity: 0.78 },
+        { scale: 1.035, opacity: 1, duration: 5, ease: "none" },
+        0,
+      );
+
+      tl.fromTo(
+        emberBloom,
+        { scale: 1.025, opacity: 0.72 },
+        { scale: 0.985, opacity: 0.9, duration: 5, ease: "none" },
+        0,
+      );
+
+      const MODE_SEQUENCE = [
+        { t: 0, texts: ["", "", ""], active: -1 },
+        { t: 0.08, texts: ["图像", "", ""], active: 0 },
+        { t: 0.98, texts: ["图像", "像素", ""], active: 1 },
+        { t: 1.88, texts: ["图像", "像素", "视频"], active: 2 },
+      ];
+
+      function modeStateAt(time) {
+        for (let index = MODE_SEQUENCE.length - 1; index >= 0; index -= 1) {
+          if (time >= MODE_SEQUENCE[index].t) return MODE_SEQUENCE[index];
+        }
+        return MODE_SEQUENCE[0];
+      }
+
+      function renderModeState(time) {
+        const state = modeStateAt(time);
+        modeLabels.forEach((label, index) => {
+          const text = state.texts[index];
+          modeWords[index].textContent = text;
+          label.style.visibility = text ? "visible" : "hidden";
+          label.style.opacity = text ? (index === state.active ? "1" : "0.44") : "0";
+          label.style.backgroundColor = index === state.active
+            ? "rgba(109, 125, 255, 0.88)"
+            : "rgba(109, 125, 255, 0.18)";
+        });
+      }
+
+      renderModeState(0);
+      const modeDriver = { t: 0 };
+      tl.to(
+        modeDriver,
+        {
+          t: 2.7,
+          duration: 2.7,
+          ease: "none",
+          onUpdate: () => renderModeState(modeDriver.t),
+        },
+        1,
+      );
+
+      const GLOW_TIMINGS = {
+        image: { start: 0.08, end: 0.52 },
+        pixel: { start: 0.98, end: 1.42 },
+        video: { start: 1.88, end: 2.4 },
+      };
+      const ATTACK_DURATION = 0.14;
+      const RELEASE_DURATION = 0.34;
+      const REST_LEVEL = 0.1;
+      const MAX_BLUR = 32;
+      const MAX_SCALE_BOOST = 0.16;
+
+      function envelope(time, start, end) {
+        if (time < start) return 0;
+        if (time < end) return Math.min((time - start) / ATTACK_DURATION, 1);
+        const releaseEnd = end + RELEASE_DURATION;
+        if (time < releaseEnd) {
+          return 1 - ((time - end) / RELEASE_DURATION) * (1 - REST_LEVEL);
+        }
+        return REST_LEVEL;
+      }
+
+      const glowDriver = { t: 0 };
+      tl.to(
+        glowDriver,
+        {
+          t: 2.7,
+          duration: 2.7,
+          ease: "none",
+          onUpdate: () => {
+            modeWords.forEach((word) => {
+              const timing = GLOW_TIMINGS[word.dataset.modeWord];
+              if (!timing) return;
+              const level = envelope(glowDriver.t, timing.start, timing.end);
+              word.style.textShadow = `0 0 ${MAX_BLUR * level}px rgba(109, 125, 255, ${0.48 * level})`;
+              word.style.transform = `scale(${1 + MAX_SCALE_BOOST * level})`;
+            });
+          },
+        },
+        1,
+      );
+
+      tl.fromTo(
+        spotlights[0],
+        { x: 96, autoAlpha: 0.35 },
+        { x: 0, autoAlpha: 1, duration: 0.3, ease: "power4.out", immediateRender: false },
+        1.08,
+      );
+
+      tl.to(spotlights[0], { x: -96, duration: 0.28, ease: "power4.in" }, 1.7);
+      tl.to(spotlights[0], { autoAlpha: 0, duration: 0.17, ease: "power1.in" }, 1.81);
+      tl.fromTo(
+        spotlights[1],
+        { x: 96, autoAlpha: 0.35 },
+        { x: 0, autoAlpha: 1, duration: 0.3, ease: "power4.out", immediateRender: false },
+        1.98,
+      );
+
+      tl.to(spotlights[1], { x: -96, duration: 0.28, ease: "power4.in" }, 2.6);
+      tl.to(spotlights[1], { autoAlpha: 0, duration: 0.17, ease: "power1.in" }, 2.71);
+      tl.fromTo(
+        spotlights[2],
+        { x: 96, autoAlpha: 0.35 },
+        { x: 0, autoAlpha: 1, duration: 0.3, ease: "power4.out", immediateRender: false },
+        2.88,
+      );
+
+      tl.to(spotlights[2], { x: -96, duration: 0.28, ease: "power4.in" }, 3.42);
+      tl.to(spotlights[2], { autoAlpha: 0, duration: 0.17, ease: "power1.in" }, 3.53);
+
+      tl.to(
+        modeLabels,
+        {
+          opacity: 1,
+          backgroundColor: "rgba(109, 125, 255, 0.22)",
+          duration: 0.28,
+          ease: "power2.out",
+        },
+        3.7,
+      );
+
+      tl.to(modeWords, { scale: 1, textShadow: "0 0 0 rgba(109, 125, 255, 0)", duration: 0.2, ease: "power2.out" }, 3.7);
+      tl.to(modeLabels[0], { x: 0, y: 95, duration: 0.38, ease: "power3.inOut" }, 3.7);
+      tl.to(modeLabels[1], { x: 79, y: 23, duration: 0.38, ease: "power3.inOut" }, 3.73);
+      tl.to(modeLabels[2], { x: 158, y: -50, duration: 0.38, ease: "power3.inOut" }, 3.76);
+
+      tl.fromTo(
+        chainLine,
+        { scaleX: 0, autoAlpha: 0.35 },
+        { scaleX: 1, autoAlpha: 0.82, duration: 0.38, ease: "power3.out", immediateRender: false },
+        3.7,
+      );
+
+      tl.fromTo(
+        chainWord,
+        { x: 96, autoAlpha: 0.35 },
+        { x: 0, autoAlpha: 1, duration: 0.32, ease: "power4.out", immediateRender: false },
+        3.8,
+      );
+
+      tl.fromTo(
+        confirmPoint,
+        { scale: 0.45, autoAlpha: 0 },
+        { scale: 1, autoAlpha: 1, duration: 0.2, ease: "power3.out", immediateRender: false },
+        3.98,
+      );
+    })();
+  </script>
+</template>

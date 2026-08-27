@@ -1,0 +1,12 @@
+.hyperframes/*.log
+.hyperframes/frame-packets/
+.hyperframes/snapshots-pass1/frame-*.png
+.hyperframes/snapshots-font-subset/frame-*.png
+capture/
+assets/voice/*-raw.wav
+assets/aeon-ink-flow.webp
+assets/asset-library-desktop.png
+assets/pixel-mode-desktop.png
+assets/production-agent-desktop.png
+assets/project-center-desktop.png
+assets/images/sample-summer-character.png

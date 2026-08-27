@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js" integrity="sha384-sG0Hv1tP1lZCk9KQmrIbY/XNwi+OY84GQqhMscbnsoBFqAz8KNCil1kvfL3Hbbk2" crossorigin="anonymous"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #000;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #F7F8FB;
+      }
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="26"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div
+        id="el-01-ink-to-workspace"
+        class="scene"
+        data-composition-id="01-ink-to-workspace"
+        data-composition-src="compositions/frames/01-ink-to-workspace.html"
+        data-start="0"
+        data-duration="4.65"
+        data-track-index="0"
+      ></div>
+      <audio
+        id="el-01-ink-to-workspace-voice"
+        src="assets/voice/frame-01.wav"
+        data-start="0"
+        data-duration="4.2"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+
+      <div
+        id="el-02-three-modes"
+        class="scene"
+        data-composition-id="02-three-modes"
+        data-composition-src="compositions/frames/02-three-modes.html"
+        data-start="4.2"
+        data-duration="5.4"
+        data-track-index="1"
+      ></div>
+      <audio
+        id="el-02-three-modes-voice"
+        src="assets/voice/frame-02.wav"
+        data-start="4.2"
+        data-duration="5"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+
+      <div
+        id="el-03-library-workflows"
+        class="scene"
+        data-composition-id="03-library-workflows"
+        data-composition-src="compositions/frames/03-library-workflows.html"
+        data-start="9.2"
+        data-duration="5.6"
+        data-track-index="0"
+      ></div>
+      <audio
+        id="el-03-library-workflows-voice"
+        src="assets/voice/frame-03.wav"
+        data-start="9.2"
+        data-duration="5.2"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+
+      <div
+        id="el-04-agent-production"
+        class="scene"
+        data-composition-id="04-agent-production"
+        data-composition-src="compositions/frames/04-agent-production.html"
+        data-start="14.399999999999999"
+        data-duration="6.7"
+        data-track-index="1"
+      ></div>
+      <audio
+        id="el-04-agent-production-voice"
+        src="assets/voice/frame-04.wav"
+        data-start="14.399999999999999"
+        data-duration="6.2"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+
+      <div
+        id="el-05-brand-lockup"
+        class="scene"
+        data-composition-id="05-brand-lockup"
+        data-composition-src="compositions/frames/05-brand-lockup.html"
+        data-start="20.599999999999998"
+        data-duration="5.4"
+        data-track-index="0"
+      ></div>
+      <audio
+        id="el-05-brand-lockup-voice"
+        src="assets/voice/frame-05.wav"
+        data-start="20.599999999999998"
+        data-duration="5.4"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+
+      <!-- BGM -->
+      <audio
+        id="el-bgm"
+        src="assets/bgm/aeonquill-ink-time.wav"
+        data-start="0"
+        data-duration="26"
+        data-track-index="11"
+        data-volume="0.42"
+      ></audio>
+
+      <!-- captions -->
+      <div
+        id="el-captions"
+        class="scene"
+        data-composition-id="captions"
+        data-composition-src="compositions/captions.html"
+        data-start="0"
+        data-duration="26"
+        data-track-index="2"
+      ></div>
+
+      <!-- SFX -->
+      <audio
+        id="el-sfx-0"
+        src="assets/sfx/whoosh-cinematic.mp3"
+        data-start="0"
+        data-duration="2.2"
+        data-track-index="20"
+        data-volume="0.17"
+      ></audio>
+      <audio
+        id="el-sfx-1"
+        src="assets/sfx/click-soft.mp3"
+        data-start="4.2"
+        data-duration="0.37"
+        data-track-index="21"
+        data-volume="0.23"
+      ></audio>
+      <audio
+        id="el-sfx-2"
+        src="assets/sfx/whoosh-short.mp3"
+        data-start="9.2"
+        data-duration="0.57"
+        data-track-index="22"
+        data-volume="0.15"
+      ></audio>
+      <audio
+        id="el-sfx-3"
+        src="assets/sfx/notification.mp3"
+        data-start="14.4"
+        data-duration="2.46"
+        data-track-index="23"
+        data-volume="0.16"
+      ></audio>
+      <audio
+        id="el-sfx-4"
+        src="assets/sfx/click.mp3"
+        data-start="18.8"
+        data-duration="0.37"
+        data-track-index="24"
+        data-volume="0.16"
+      ></audio>
+      <audio
+        id="el-sfx-5"
+        src="assets/sfx/chime.mp3"
+        data-start="20.6"
+        data-duration="2.5"
+        data-track-index="25"
+        data-volume="0.2"
+      ></audio>
+      <audio
+        id="el-sfx-6"
+        src="assets/sfx/whoosh-cinematic.mp3"
+        data-start="20.6"
+        data-duration="2.2"
+        data-track-index="26"
+        data-volume="0.1"
+      ></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+      // ── frame transitions (injected by transitions.mjs) ──
+      (function () { var tl = window.__timelines["main"];
+        tl.to("#el-01-ink-to-workspace", { scale: 2.5, opacity: 0, filter: "blur(8px)", duration: 0.45, ease: "power3.in" }, 4.2);
+        tl.fromTo("#el-02-three-modes", { scale: 0.5, opacity: 0, filter: "blur(8px)" }, { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.45, ease: "power3.out" }, 4.2);
+        tl.to("#el-02-three-modes", { x: -1920, duration: 0.4, ease: "power3.inOut" }, 9.2);
+        tl.fromTo("#el-03-library-workflows", { x: 1920, opacity: 1 }, { x: 0, duration: 0.4, ease: "power3.inOut" }, 9.2);
+        tl.to("#el-03-library-workflows", { x: -1920, duration: 0.4, ease: "power3.inOut" }, 14.4);
+        tl.fromTo("#el-04-agent-production", { x: 1920, opacity: 1 }, { x: 0, duration: 0.4, ease: "power3.inOut" }, 14.4);
+        tl.to("#el-04-agent-production", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.5, ease: "power2.inOut" }, 20.6);
+        tl.fromTo("#el-05-brand-lockup", { filter: "blur(10px)", scale: 0.97, opacity: 0 }, { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.5, ease: "power2.inOut" }, 20.6);
+        tl.to({}, { duration: 26 }, 0); // full-span anchor — main.duration() == composition total (Studio master duration)
+      })();
+    </script>
+  </body>
+</html>

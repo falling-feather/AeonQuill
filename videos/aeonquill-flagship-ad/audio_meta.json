@@ -1,0 +1,78 @@
+{
+  "bgm": {
+    "path": "assets/bgm/aeonquill-ink-time.wav",
+    "volume": 0.42,
+    "query": "restrained cinematic Chinese ink and modern technology underscore, 92 bpm, no vocals",
+    "duration_s": 26
+  },
+  "bgm_pending": false,
+  "voices": [
+    {
+      "frame": 1,
+      "path": "assets/voice/frame-01.wav",
+      "duration_s": 4.2,
+      "words": [
+        { "id": "f1w1", "text": "灵感", "start": 0.10, "end": 0.78 },
+        { "id": "f1w2", "text": "不该散落", "start": 0.90, "end": 2.15 },
+        { "id": "f1w3", "text": "在工具之间。", "start": 2.28, "end": 3.65 }
+      ]
+    },
+    {
+      "frame": 2,
+      "path": "assets/voice/frame-02.wav",
+      "duration_s": 5.0,
+      "words": [
+        { "id": "f2w1", "text": "光阴砚", "start": 0.10, "end": 0.98 },
+        { "id": "f2w2", "text": "让图像、像素和视频", "start": 1.10, "end": 3.35 },
+        { "id": "f2w3", "text": "汇成一条链。", "start": 3.48, "end": 4.65 }
+      ]
+    },
+    {
+      "frame": 3,
+      "path": "assets/voice/frame-03.wav",
+      "duration_s": 5.2,
+      "words": [
+        { "id": "f3w1", "text": "资源与工作流", "start": 0.10, "end": 1.62 },
+        { "id": "f3w2", "text": "跨模式复用", "start": 1.74, "end": 3.48 },
+        { "id": "f3w3", "text": "随时恢复。", "start": 3.62, "end": 4.85 }
+      ]
+    },
+    {
+      "frame": 4,
+      "path": "assets/voice/frame-04.wav",
+      "duration_s": 6.2,
+      "words": [
+        { "id": "f4w1", "text": "导演、编剧", "start": 0.10, "end": 1.42 },
+        { "id": "f4w2", "text": "分镜与剪辑智能体协作", "start": 1.54, "end": 3.92 },
+        { "id": "f4w3", "text": "每一步", "start": 4.04, "end": 4.72 },
+        { "id": "f4w4", "text": "由你决定。", "start": 4.84, "end": 5.85 }
+      ]
+    },
+    {
+      "frame": 5,
+      "path": "assets/voice/frame-05.wav",
+      "duration_s": 5.4,
+      "words": [
+        { "id": "f5w1", "text": "以光为墨", "start": 0.10, "end": 1.18 },
+        { "id": "f5w2", "text": "以时为卷。", "start": 1.30, "end": 2.34 },
+        { "id": "f5w3", "text": "一念落砚", "start": 2.48, "end": 3.62 },
+        { "id": "f5w4", "text": "万象成章。", "start": 3.74, "end": 5.05 }
+      ]
+    }
+  ],
+  "sfx": [
+    { "frame": 1, "file": "assets/sfx/whoosh-cinematic.mp3", "offset_s": 0.0, "duration_s": 2.2, "volume": 0.17 },
+    { "frame": 2, "file": "assets/sfx/click-soft.mp3", "offset_s": 0.0, "duration_s": 0.37, "volume": 0.23 },
+    { "frame": 3, "file": "assets/sfx/whoosh-short.mp3", "offset_s": 0.0, "duration_s": 0.57, "volume": 0.15 },
+    { "frame": 4, "file": "assets/sfx/notification.mp3", "offset_s": 0.0, "duration_s": 2.46, "volume": 0.16 },
+    { "frame": 4, "file": "assets/sfx/click.mp3", "offset_s": 4.4, "duration_s": 0.37, "volume": 0.16 },
+    { "frame": 5, "file": "assets/sfx/chime.mp3", "offset_s": 0.0, "duration_s": 2.5, "volume": 0.20 },
+    { "frame": 5, "file": "assets/sfx/whoosh-cinematic.mp3", "offset_s": 0.0, "duration_s": 2.2, "volume": 0.10 }
+  ],
+  "provenance": {
+    "voice": "Windows SAPI 5 offline fallback, Microsoft Huihui Desktop",
+    "music": "deterministic procedural synthesis on D:",
+    "sfx": "media-use bundled offline library",
+    "note": "HeyGen unauthenticated; Kokoro and MusicGen unavailable; no dependency installed on C:."
+  }
+}

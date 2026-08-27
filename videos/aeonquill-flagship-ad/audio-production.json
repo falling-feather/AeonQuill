@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "duration_s": 26,
+  "voice": {
+    "provider": "Windows SAPI 5 offline fallback",
+    "voice": "Microsoft Huihui Desktop",
+    "master": "assets/voice/aeonquill-voiceover.wav",
+    "lines": [
+      {
+        "id": "frame-01",
+        "text": "灵感，不该散落在工具之间。",
+        "path": "assets/voice/frame-01.wav",
+        "duration_s": 4.2,
+        "source_duration_s": 3.788,
+        "tempo": 1.0
+      },
+      {
+        "id": "frame-02",
+        "text": "光阴砚，让图像、像素和视频，汇成一条链。",
+        "path": "assets/voice/frame-02.wav",
+        "duration_s": 5.0,
+        "source_duration_s": 6.068,
+        "tempo": 1.2966
+      },
+      {
+        "id": "frame-03",
+        "text": "资源与工作流，跨模式复用，随时恢复。",
+        "path": "assets/voice/frame-03.wav",
+        "duration_s": 5.2,
+        "source_duration_s": 5.098,
+        "tempo": 1.0446
+      },
+      {
+        "id": "frame-04",
+        "text": "导演、编剧、分镜与剪辑智能体协作；每一步，由你决定。",
+        "path": "assets/voice/frame-04.wav",
+        "duration_s": 6.2,
+        "source_duration_s": 7.317,
+        "tempo": 1.2444
+      },
+      {
+        "id": "frame-05",
+        "text": "以光为墨，以时为卷。一念落砚，万象成章。",
+        "path": "assets/voice/frame-05.wav",
+        "duration_s": 5.4,
+        "source_duration_s": 6.153,
+        "tempo": 1.2112
+      }
+    ]
+  },
+  "bgm": {
+    "provider": "deterministic procedural synthesis",
+    "path": "assets/bgm/aeonquill-ink-time.wav",
+    "bpm": 92,
+    "prompt": "restrained cinematic Chinese ink and modern technology underscore, no vocals"
+  },
+  "master": {
+    "path": "assets/audio/aeonquill-ad-master.wav",
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "note": "HeyGen was not authenticated and Kokoro/MusicGen were unavailable; no dependency was installed on C:. Voice and music were produced offline on D:."
+}

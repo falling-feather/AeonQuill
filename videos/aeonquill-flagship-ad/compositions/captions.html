@@ -1,0 +1,219 @@
+<template id="captions-template" data-composition-id="captions" data-width="1920" data-height="1080">
+<script src="assets/vendor/gsap-3.14.2.min.js"></script>
+
+
+<style data-brand-tokens>
+      @font-face { font-family: 'Noto Serif SC'; src: url('assets/fonts/NotoSerifSC-Variable.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }
+      @font-face { font-family: 'Noto Sans SC'; src: url('assets/fonts/NotoSansSC-Variable.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }
+      :root {
+      --paper: #F7F8FB;
+      --paper-deep: #A1ABFF;
+      --sun: #6D7DFF;
+      --sun-soft: #94A0FF;
+      --haze: #6D7DFF;
+      --ink: #101216;
+      --ember: #C7A562;
+      --cap-ink: #101216;
+      --cap-canvas: #F7F8FB;
+      --cap-accent: #6D7DFF;
+      --cap-accent-2: #6D7DFF;
+      --font-display: "Noto Serif SC", system-ui, serif;
+      --font-body: "Noto Sans SC", system-ui, sans-serif;
+      --cap-band-top: 900px;
+      --cap-band-height: 180px;
+      }
+    </style>
+
+<style>
+  #captions-root {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .caption-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
+  }
+  /* the keep-out band, from captionBand(H) — frame content stays above it */
+  .caption-stage {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: var(--cap-band-top, 900px);
+    height: var(--cap-band-height, 180px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .caption-group {
+    /* every group is absolutely stacked over the SAME band — exactly one shown at a
+       time via opacity. Must be absolute: in-flow groups would lay out side-by-side. */
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+  }
+
+  /* THE parchment card — single 1px hairline ink border (biennale's only border),
+     square corners, NO shadow */
+  .caption-pill {
+    max-width: 78%;
+    padding: 20px 44px 24px;
+    background: var(--cap-canvas, #e9e5db);
+    border: 1px solid var(--cap-ink, #1b2566);
+    border-radius: 0;
+  }
+  .caption-line {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.1em 0.34em;
+    font-family: "Noto Serif SC", Georgia, serif;
+    font-weight: 400;
+    font-size: clamp(40px, 4.4vw, 58px);
+    line-height: 1.16;
+    letter-spacing: -0.01em;
+  }
+
+  /* upcoming — faint indigo ink, no underprint */
+  .caption-word {
+    display: inline-block;
+    padding: 0 0.06em;
+    color: color-mix(in srgb, var(--cap-ink, #1b2566) 42%, var(--cap-canvas, #e9e5db));
+  }
+  /* current word — THE solar-yellow underprint (box-shadow spread = a hard square
+     block w/o layout shift; no blur), indigo ink reading on top */
+  .caption-word.is-active {
+    color: var(--cap-ink, #1b2566);
+    background: var(--cap-accent, #f1ee2e);
+    box-shadow: 0 0 0 0.06em var(--cap-accent, #f1ee2e);
+  }
+  /* already spoken — solid indigo ink, underprint cleared */
+  .caption-word.is-spoken {
+    color: var(--cap-ink, #1b2566);
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* optional per-word accents (dormant until a word-classer tags them) */
+  /* brand / key term — Instrument Serif italic, biennale's only display inflection */
+  .caption-word.cap-brand {
+    font-style: italic;
+  }
+  /* numerals / data — the mono voice, slightly recessed */
+  .caption-word.cap-num {
+    font-family: "Noto Sans SC", ui-monospace, monospace;
+    color: color-mix(in srgb, var(--cap-ink, #1b2566) 72%, var(--cap-canvas, #e9e5db));
+  }
+  /* emphasis — an ember-red hairline underline (the counter-temperature accent) */
+  .caption-word.cap-cta {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-decoration-color: var(--cap-accent-2, #e26b4a);
+    text-underline-offset: 0.1em;
+  }
+
+  @media (max-aspect-ratio: 9/16) {
+    .caption-pill {
+      max-width: 92%;
+    }
+    .caption-line {
+      font-size: clamp(34px, 5.4vw, 48px);
+    }
+  }
+</style>
+
+<div
+  id="captions-root"
+  data-composition-id="captions"
+  data-timeline-locked
+  data-start="0"
+  data-duration="26"
+  data-fps="30"
+  data-width="1920"
+  data-height="1080"
+>
+  <div class="caption-layer" aria-hidden="true">
+    <div id="caption-stage" class="caption-stage"></div>
+  </div>
+</div>
+
+<script>
+  // captions.mjs injects the engine's scene-aware groups + real duration here.
+  var GROUPS = [{"id":"caption-group-0","frame":1,"start":0.1,"end":3.77,"text":"灵感 不该散落 在工具之间。","words":[{"id":"caption-word-0-0","text":"灵感","start":0.1,"end":0.78},{"id":"caption-word-0-1","text":"不该散落","start":0.9,"end":2.15},{"id":"caption-word-0-2","text":"在工具之间。","start":2.28,"end":3.65}]},{"id":"caption-group-1","frame":2,"start":4.3,"end":8.97,"text":"光阴砚 让图像、像素和视频 汇成一条链。","words":[{"id":"caption-word-1-0","text":"光阴砚","start":4.3,"end":5.18},{"id":"caption-word-1-1","text":"让图像、像素和视频","start":5.3,"end":7.55},{"id":"caption-word-1-2","text":"汇成一条链。","start":7.68,"end":8.85}]},{"id":"caption-group-2","frame":3,"start":9.3,"end":14.17,"text":"资源与工作流 跨模式复用 随时恢复。","words":[{"id":"caption-word-2-0","text":"资源与工作流","start":9.3,"end":10.82},{"id":"caption-word-2-1","text":"跨模式复用","start":10.94,"end":12.68},{"id":"caption-word-2-2","text":"随时恢复。","start":12.82,"end":14.05}]},{"id":"caption-group-3","frame":4,"start":14.5,"end":20.37,"text":"导演、编剧 分镜与剪辑智能体协作 每一步 由你决定。","words":[{"id":"caption-word-3-0","text":"导演、编剧","start":14.5,"end":15.82},{"id":"caption-word-3-1","text":"分镜与剪辑智能体协作","start":15.94,"end":18.32},{"id":"caption-word-3-2","text":"每一步","start":18.44,"end":19.12},{"id":"caption-word-3-3","text":"由你决定。","start":19.24,"end":20.25}]},{"id":"caption-group-4","frame":5,"start":20.7,"end":25.77,"text":"以光为墨 以时为卷。 一念落砚 万象成章。","words":[{"id":"caption-word-4-0","text":"以光为墨","start":20.7,"end":21.78},{"id":"caption-word-4-1","text":"以时为卷。","start":21.9,"end":22.94},{"id":"caption-word-4-2","text":"一念落砚","start":23.08,"end":24.22},{"id":"caption-word-4-3","text":"万象成章。","start":24.34,"end":25.65}]}];
+  var DURATION = 26;
+
+  (function () {
+    var stage = document.getElementById("caption-stage");
+
+    // build DOM: one .caption-group per group, .caption-word per word
+    GROUPS.forEach(function (group, g) {
+      var groupEl = document.createElement("div");
+      groupEl.className = "caption-group";
+      groupEl.id = "caption-group-" + g;
+      var pill = document.createElement("div");
+      pill.className = "caption-pill";
+      var line = document.createElement("div");
+      line.className = "caption-line";
+      (group.words || []).forEach(function (w, i) {
+        var span = document.createElement("span");
+        span.className = "caption-word";
+        span.id = "caption-word-" + g + "-" + i;
+        span.textContent = String(w.text);
+        line.appendChild(span);
+      });
+      pill.appendChild(line);
+      groupEl.appendChild(pill);
+      stage.appendChild(groupEl);
+    });
+
+    window.__timelines = window.__timelines || {};
+    var tl = gsap.timeline({ paused: true });
+
+    GROUPS.forEach(function (group, g) {
+      var groupEl = document.getElementById("caption-group-" + g);
+      var words = group.words || [];
+      var next = GROUPS[g + 1];
+      var isLast = g === GROUPS.length - 1;
+      var start = Math.max(0, Number(group.start));
+      var end = isLast ? DURATION : Math.min(Number(next.start), Number(group.end) + 0.3);
+      if (end <= start) end = start + 0.01;
+
+      // group on/off — exactly one group visible at a time
+      tl.set(groupEl, { opacity: 1 }, start);
+      tl.set(groupEl, { opacity: 0 }, end);
+
+      // 3-state karaoke via className SETS — seek-safe (gsap.set applies on the
+      // engine's frame-by-frame seek; .call callbacks would NOT fire).
+      words.forEach(function (w, i) {
+        var el = document.getElementById("caption-word-" + g + "-" + i);
+        var at = Math.max(start, Number(w.start));
+        tl.set(el, { className: "caption-word" }, start); // upcoming (also resets on reverse-seek)
+        tl.set(el, { className: "caption-word is-active" }, at); // current
+        tl.fromTo(el, { scale: 0.97 }, { scale: 1, duration: 0.14, ease: "power2.out" }, at);
+        if (i + 1 < words.length) {
+          var nextAt = Math.max(start, Number(words[i + 1].start));
+          tl.set(el, { className: "caption-word is-spoken" }, nextAt); // demote when next activates
+        }
+      });
+      if (words.length) {
+        var lastEl = document.getElementById("caption-word-" + g + "-" + (words.length - 1));
+        var lastSpoken = Math.min(end, Number(words[words.length - 1].end) + 0.1);
+        tl.set(lastEl, { className: "caption-word is-spoken" }, lastSpoken);
+      }
+    });
+
+    // full-span anchor so the sub-comp timeline spans the whole video
+    tl.to({}, { duration: DURATION }, 0);
+    window.__timelines["captions"] = tl;
+  })();
+</script>
+
+<style>
+  .caption-line { line-height: 1.1 !important; }
+</style>
+</template>
