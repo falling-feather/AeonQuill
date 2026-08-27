@@ -1967,6 +1967,7 @@ export default function ProductApp() {
           initialKind={videoSession.status === 'ready' ? videoSession.session?.sourceKind : undefined}
           initialResult={videoSession.status === 'ready' ? videoSession.result : undefined}
           projectId={requestedProjectId}
+          workspaceProjectId={activeWorkspaceProjectId ?? undefined}
           projectTitle={activeWorkspaceProject?.title}
           runtime={smartVideoRuntime}
           onBack={goHome}

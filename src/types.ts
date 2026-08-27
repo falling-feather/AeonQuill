@@ -294,8 +294,8 @@ export type VideoJobRequest = {
 
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video'
-  tool: ImageLabMode | ImageOperationId | VideoGenerationMode
+  kind?: 'image' | 'video' | 'provider-video'
+  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'byok-video'
   label: string
   status: ProcessingJobStatus
   phase?: VideoJobPhase
@@ -372,6 +372,12 @@ export type ProcessingJob = {
   }>
   maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
+  libraryAsset?: Record<string, unknown>
+  providerUsage?: {
+    estimatedCostUsd: number
+    actualCostUsd: number | null
+    elapsedMs: number
+  }
   delivery?: {
     status: 'copied' | 'failed'
     filename?: string

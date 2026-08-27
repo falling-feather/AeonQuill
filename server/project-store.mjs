@@ -632,7 +632,12 @@ export class ProjectStore {
     if (this.database.prepare('SELECT 1 FROM library_items WHERE id = ?').get(itemId)) {
       fail('LIBRARY_ITEM_CONFLICT', `Library item already exists: ${itemId}`, 409)
     }
-    const provenance = { source: options.source || 'user-library-import', importedAt: now }
+    const extraProvenance = isRecord(options.provenance) ? cloneJson(options.provenance) : {}
+    const provenance = {
+      ...extraProvenance,
+      source: options.source || 'user-library-import',
+      importedAt: now,
+    }
     const staged = await this.stageLibraryContent(input.dataUrl, provenance, now)
     const mediaKind = libraryMediaKind(staged.asset.mimeType)
     const versionId = libraryVersionId(itemId, 1, staged.asset.id)

@@ -70,6 +70,7 @@ import {
 } from './video-postprocess-workflow.mjs'
 import { WorkflowCenterService } from './workflow-center.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
+import { GenerationAdapterService } from './generation-adapter.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -104,6 +105,7 @@ const workflowCenter = new WorkflowCenterService({
   getComfyRoot: () => localRuntimeConfig.comfyRoot,
 })
 const agentAdapters = new AgentAdapterService()
+const generationAdapters = new GenerationAdapterService()
 const assetPreviewService = new AssetPreviewService({
   rootDirectory: join(cacheDirectory, 'previews'),
   ffmpegPath,
@@ -1505,6 +1507,173 @@ async function runVideoJob(jobId, { signal }) {
   }
 }
 
+const generationRequestFields = {
+  image: new Set(['projectId', 'title', 'prompt', 'negativePrompt', 'size', 'quality', 'budgetUsd', 'referenceAssetId']),
+  speech: new Set(['projectId', 'title', 'text', 'voice', 'format', 'speed', 'budgetUsd']),
+  video: new Set(['projectId', 'title', 'prompt', 'size', 'durationSeconds', 'budgetUsd', 'referenceAssetId']),
+}
+
+function normalizeGenerationRequest(capability, body) {
+  const allowed = generationRequestFields[capability]
+  if (!allowed || !body || typeof body !== 'object' || Array.isArray(body)) {
+    throw Object.assign(new Error('生成适配器请求必须是对象'), { code: 'GENERATION_ADAPTER_INVALID_REQUEST', status: 400 })
+  }
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key))
+  if (unknown.length) {
+    throw Object.assign(new Error('生成适配器请求包含未知字段'), {
+      code: 'GENERATION_ADAPTER_UNKNOWN_FIELD',
+      status: 400,
+      details: { unknown },
+    })
+  }
+  if (typeof body.projectId !== 'string' || typeof body.title !== 'string') {
+    throw Object.assign(new Error('生成请求缺少 projectId 或 title'), { code: 'GENERATION_ADAPTER_INVALID_REQUEST', status: 400 })
+  }
+  const workspaceProject = workspaceStore.getCatalog().catalog.projects.find(({ id }) => id === body.projectId)
+  if (!workspaceProject || workspaceProject.status !== 'active') {
+    throw Object.assign(new Error('生成产物所属项目不存在或当前不可写'), { code: 'WORKSPACE_PROJECT_NOT_FOUND', status: 404 })
+  }
+  const title = body.title.trim()
+  if (!title || title.length > 120) {
+    throw Object.assign(new Error('生成产物标题必须包含 1–120 个字符'), { code: 'GENERATION_ADAPTER_INVALID_REQUEST', status: 400 })
+  }
+  if (body.referenceAssetId !== undefined && !/^[a-f0-9]{64}$/u.test(body.referenceAssetId)) {
+    throw Object.assign(new Error('参考资产必须是受管 SHA-256 资源'), { code: 'GENERATION_ADAPTER_REFERENCE_INVALID', status: 400 })
+  }
+  return { ...body, title }
+}
+
+async function managedReferenceDataUrl(assetId) {
+  if (!assetId) return undefined
+  const asset = projectStore.getAsset(assetId)
+  if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType)) {
+    throw Object.assign(new Error('参考资产不存在或不是受支持的图像'), { code: 'GENERATION_ADAPTER_REFERENCE_INVALID', status: 409 })
+  }
+  if (asset.bytes > 24 * 1024 * 1024) {
+    throw Object.assign(new Error('参考资产超过 24 MiB 上限'), { code: 'GENERATION_ADAPTER_REFERENCE_INVALID', status: 413 })
+  }
+  const bytes = await readFile(projectStore.assetPath(asset))
+  if (bytes.length !== asset.bytes) {
+    throw Object.assign(new Error('参考资产字节与登记信息不一致'), { code: 'GENERATION_ADAPTER_REFERENCE_INVALID', status: 409 })
+  }
+  return `data:${asset.mimeType};base64,${bytes.toString('base64')}`
+}
+
+function generationServiceInput(capability, request, referenceDataUrl) {
+  if (capability === 'image') return {
+    prompt: request.prompt,
+    negativePrompt: request.negativePrompt,
+    size: request.size,
+    quality: request.quality,
+    budgetUsd: request.budgetUsd,
+    referenceDataUrl,
+  }
+  if (capability === 'speech') return {
+    text: request.text,
+    voice: request.voice,
+    format: request.format,
+    speed: request.speed,
+    budgetUsd: request.budgetUsd,
+  }
+  return {
+    prompt: request.prompt,
+    size: request.size,
+    durationSeconds: request.durationSeconds,
+    budgetUsd: request.budgetUsd,
+    referenceDataUrl,
+  }
+}
+
+async function persistGenerationAsset(capability, request, result) {
+  const dataUrl = `data:${result.mimeType};base64,${result.bytes.toString('base64')}`
+  const asset = await projectStore.createLibraryAsset({
+    scope: 'project',
+    projectId: request.projectId,
+    title: request.title,
+    description: `${result.adapter.providerLabel} · ${result.adapter.model} · ${result.adapter.profile}`,
+    tags: ['byok', capability],
+    collectionIds: [],
+    dataUrl,
+  }, {
+    source: 'byok-generation-adapter',
+    provenance: {
+      capability,
+      providerLabel: result.adapter.providerLabel,
+      model: result.adapter.model,
+      profile: result.adapter.profile,
+      usage: result.usage,
+      remoteRequestId: result.remoteRequestId,
+    },
+  })
+  return asset
+}
+
+function publicGenerationResult(asset, result) {
+  return {
+    asset,
+    adapter: result.adapter,
+    usage: result.usage,
+    remoteRequestId: result.remoteRequestId,
+  }
+}
+
+async function executeSynchronousGeneration(capability, body, signal) {
+  const request = normalizeGenerationRequest(capability, body)
+  const referenceDataUrl = await managedReferenceDataUrl(request.referenceAssetId)
+  const serviceInput = generationServiceInput(capability, request, referenceDataUrl)
+  const result = capability === 'image'
+    ? await generationAdapters.generateImage(serviceInput, { signal })
+    : await generationAdapters.synthesizeSpeech(serviceInput, { signal })
+  const asset = await persistGenerationAsset(capability, request, result)
+  return publicGenerationResult(asset, result)
+}
+
+async function runProviderVideoJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  try {
+    await store.update(jobId, { phase: 'preparing', progress: 1, detail: '正在校验外部视频会话与参考资产' })
+    const referenceDataUrl = await managedReferenceDataUrl(job.request.referenceAssetId)
+    let progressWrites = Promise.resolve()
+    const result = await generationAdapters.generateVideo(generationServiceInput('video', job.request, referenceDataUrl), {
+      signal,
+      onProgress: ({ status, progress }) => {
+        progressWrites = progressWrites.then(() => store.update(jobId, {
+          phase: status === 'queued' || status === 'pending' ? 'queued' : status === 'completed' ? 'saving' : 'processing',
+          progress: Math.max(2, Math.min(99, progress)),
+          detail: status === 'completed' ? '远端生成完成，正在写入项目资源库' : `外部视频任务：${status}`,
+        })).catch(() => {})
+      },
+    })
+    await progressWrites
+    const asset = await persistGenerationAsset('video', job.request, result)
+    await store.log(jobId, 'success', '外部视频已校验并写入项目资源库')
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: '外部视频生成完成，已进入项目资源库',
+      outputUrl: asset.version.url,
+      libraryAsset: asset,
+      outputVersion: {
+        id: asset.version.id,
+        logicalAssetId: asset.id,
+        version: asset.version.version,
+        assetId: asset.version.assetId,
+        mimeType: asset.version.mimeType,
+        bytes: asset.version.bytes,
+        provenance: asset.version.provenance,
+      },
+      providerUsage: result.usage,
+      completedAt: Date.now(),
+    })
+  } catch (error) {
+    const latest = store.get(jobId)
+    if (latest?.status === 'cancelled' || signal.aborted) return
+    throw error
+  }
+}
+
 async function runtimeIsIdle() {
   const localBusy = store.list().some((job) => ['queued', 'running'].includes(job.status))
   if (localBusy) return false
@@ -1692,6 +1861,76 @@ async function createSemanticImageJob(body, retrySource, options = {}) {
   return { job: store.publicJob(store.get(job.id)), reused: false }
 }
 
+function newProviderVideoJob(request, options = {}) {
+  const id = `provider-video-${randomUUID()}`
+  const now = Date.now()
+  const adapterStatus = generationAdapters.status().video
+  if (!adapterStatus.configured) {
+    throw Object.assign(new Error('尚未配置本次运行使用的外部视频 API'), {
+      code: 'GENERATION_ADAPTER_NOT_CONFIGURED',
+      status: 409,
+    })
+  }
+  const scheduling = createScheduling({
+    resourceClass: 'cpu',
+    priority: options.priority ?? 45,
+    timeoutMs: adapterStatus.timeoutMs,
+    idempotencyKey: options.idempotencyKey,
+    attempt: options.attempt || 1,
+    maxAttempts: 3,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: 'provider-video',
+    tool: 'byok-video',
+    label: '外部 API 视频',
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: '等待外部视频适配器',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: adapterStatus.profile,
+    requestHash: options.requestHash,
+    retryOf: options.retryOf,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, 'cpu', Math.max(1_000, request.durationSeconds * 1_000), now)],
+    providerEstimateUsd: Number((adapterStatus.costRateUsd * request.durationSeconds).toFixed(6)),
+    request,
+    logs: [{ at: now, level: 'info', message: '外部视频任务已创建；密钥未写入任务记录' }],
+  }
+}
+
+async function createProviderVideoJob(body, retrySource, options = {}) {
+  const request = retrySource ? structuredClone(retrySource.request) : normalizeGenerationRequest('video', body)
+  if (!generationAdapters.status().video.configured) {
+    throw Object.assign(new Error('本次 sidecar 会话没有外部视频密钥，请重新配置后再提交'), {
+      code: 'GENERATION_ADAPTER_NOT_CONFIGURED',
+      status: 409,
+    })
+  }
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('provider-video-retry', { sourceJobId: retrySource.id, sourceRequestHash: retrySource.requestHash, attempt })
+    : hashRequest('provider-video', request)
+  const existing = existingIdempotentJob('provider-video', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  await assertStorageCapacity(runtimeDirectory, 320 * 1024 * 1024)
+  const job = newProviderVideoJob(request, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+    attempt,
+    retryOf: retrySource?.id,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
 function queueContains(queue, promptId) {
   return (queue || []).some((entry) => Array.isArray(entry) && entry[1] === promptId)
 }
@@ -1762,6 +2001,20 @@ async function prepareRecoveredJobs() {
       }
       await store.update(job.id, { outputPath: undefined, temporaryOutputPath: undefined })
     }
+    if (job.kind === 'provider-video' && job.status === 'queued') {
+      await store.update(job.id, {
+        status: 'failed',
+        phase: 'failed',
+        detail: '桥接已重启，内存型外部视频会话已失效',
+        error: {
+          code: 'GENERATION_ADAPTER_SESSION_EXPIRED',
+          title: '外部视频会话需要重新授权',
+          message: '为避免密钥落盘，外部视频任务不会在 sidecar 重启后静默恢复。请重新配置本次会话密钥并快速重试。',
+          suggestions: ['重新配置外部视频 API', '使用快速重试重新提交'],
+        },
+      })
+      continue
+    }
     if (job.status !== 'queued' || job.scheduling?.schemaVersion === 1) continue
     const resourceClass = job.kind === 'video' || gpuImageOperations.has(job.request?.operation) ? 'gpu' : 'cpu'
     await store.update(job.id, {
@@ -1783,7 +2036,7 @@ async function prepareRecoveredJobs() {
   }
 }
 
-scheduler.register('image', runImageJob).register('video', runVideoJob)
+scheduler.register('image', runImageJob).register('video', runVideoJob).register('provider-video', runProviderVideoJob)
 await prepareRecoveredJobs()
 await scheduler.recover()
 
@@ -2067,6 +2320,25 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && pathname === '/api/agent-proposals') {
       const body = await readJsonBody(request, 2 * 1024 * 1024)
       return sendJson(response, 200, await agentAdapters.propose(body))
+    }
+    if (request.method === 'GET' && pathname === '/api/generation-adapters') {
+      return sendJson(response, 200, generationAdapters.status())
+    }
+    const generationAdapterMatch = /^\/api\/generation-adapters\/(image|video|speech)$/u.exec(pathname)
+    if (request.method === 'PUT' && generationAdapterMatch) {
+      const body = await readJsonBody(request, 32 * 1024)
+      return sendJson(response, 200, generationAdapters.configure(generationAdapterMatch[1], body))
+    }
+    if (request.method === 'DELETE' && generationAdapterMatch) {
+      return sendJson(response, 200, generationAdapters.clear(generationAdapterMatch[1]))
+    }
+    if (request.method === 'POST' && pathname === '/api/generation/image') {
+      const body = await readJsonBody(request, 32 * 1024)
+      return sendJson(response, 201, await executeSynchronousGeneration('image', body))
+    }
+    if (request.method === 'POST' && pathname === '/api/generation/speech') {
+      const body = await readJsonBody(request, 32 * 1024)
+      return sendJson(response, 201, await executeSynchronousGeneration('speech', body))
     }
     if (request.method === 'GET' && pathname === '/api/workflow-center/jobs') {
       return sendJson(response, 200, { jobs: workflowCenter.jobs() })
@@ -2585,6 +2857,16 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, result.reused ? 200 : 202, result)
     }
+    if (request.method === 'POST' && pathname === '/api/jobs/provider-video') {
+      const body = await readJsonBody(request, 32 * 1024)
+      const result = await createProviderVideoJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 45),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
     const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname)
     if (request.method === 'GET' && jobMatch) {
       const job = store.get(decodeURIComponent(jobMatch[1]))
@@ -2618,6 +2900,8 @@ const server = createServer(async (request, response) => {
         ? source.request?.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
           ? await createSemanticImageJob({}, source, options)
           : await createImageJob({}, source, options)
+        : source.kind === 'provider-video'
+          ? await createProviderVideoJob({}, source, options)
         : await createVideoJob({}, source, options)
       return sendJson(response, result.reused ? 200 : 202, result)
     }

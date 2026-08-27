@@ -104,6 +104,7 @@ export type SmartVideoWorkbenchProps = {
   initialKind?: StorySourceKind
   initialResult?: SmartVideoPlanResult
   projectId?: string
+  workspaceProjectId?: string
   projectTitle?: string
   runtime?: SmartVideoRuntimeSummary
   onBack?: () => void
@@ -295,6 +296,7 @@ export function SmartVideoWorkbench({
   initialKind = 'script',
   initialResult,
   projectId,
+  workspaceProjectId,
   projectTitle,
   runtime = { state: 'offline', label: 'ComfyUI 休眠', detail: '生成阶段才会按策略启动' },
   onBack,
@@ -802,6 +804,7 @@ export function SmartVideoWorkbench({
         <ProductionStudio
           active={activeWorkspace === 'production'}
           runtimeLabel={liveRuntimeLabel}
+          workspaceProjectId={workspaceProjectId}
           project={result.production}
           onProjectChange={updateProductionProject}
           onBridgeToStory={bridgeProductionSource}

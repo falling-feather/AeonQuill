@@ -176,6 +176,29 @@ try {
   const clearedAgentAdapter = await requestJson(bridge.baseUrl, '/api/agent-adapters/text', { method: 'DELETE' })
   assert.deepEqual(clearedAgentAdapter, { text: { configured: false, persistence: 'memory-only' } })
 
+  const emptyGenerationAdapters = await requestJson(bridge.baseUrl, '/api/generation-adapters')
+  assert.deepEqual(Object.keys(emptyGenerationAdapters), ['image', 'video', 'speech'])
+  assert.ok(Object.values(emptyGenerationAdapters).every(({ configured, persistence }) => !configured && persistence === 'memory-only'))
+  const unsafeGenerationAdapter = await requestJson(bridge.baseUrl, '/api/generation-adapters/video', {
+    method: 'PUT',
+    body: JSON.stringify({
+      providerLabel: '不安全视频接口', endpoint: 'http://10.0.0.8/v1', model: 'video-model', apiKey: 'generation-secret-1234',
+    }),
+  }, 400)
+  assert.equal(unsafeGenerationAdapter.error.code, 'GENERATION_ADAPTER_ENDPOINT_UNSAFE')
+  const configuredGenerationAdapters = await requestJson(bridge.baseUrl, '/api/generation-adapters/video', {
+    method: 'PUT',
+    body: JSON.stringify({
+      providerLabel: '视频会话测试', endpoint: 'http://127.0.0.1:65533/v1', model: 'fixture-video', apiKey: 'generation-secret-1234',
+      timeoutMs: 5_000, pollIntervalMs: 250, maxCostUsd: 2, costRateUsd: 0.1,
+    }),
+  })
+  assert.equal(configuredGenerationAdapters.video.configured, true)
+  assert.equal(configuredGenerationAdapters.video.persistence, 'memory-only')
+  assert.equal(JSON.stringify(configuredGenerationAdapters).includes('generation-secret-1234'), false)
+  const clearedGenerationAdapters = await requestJson(bridge.baseUrl, '/api/generation-adapters/video', { method: 'DELETE' })
+  assert.equal(clearedGenerationAdapters.video.configured, false)
+
   const promptPlan = await requestJson(bridge.baseUrl, '/api/video/prompt/compile', {
     method: 'POST',
     body: JSON.stringify({

@@ -45,6 +45,7 @@ import {
   requestAgentProposal,
   type AgentAdapterStatus,
 } from '../../lib/agentAdapterApi'
+import { GenerationAdaptersPanel } from './GenerationAdaptersPanel'
 import './production-studio.css'
 
 export type ApprovedProductionStorySource = {
@@ -59,6 +60,7 @@ export type ApprovedProductionStorySource = {
 type ProductionStudioProps = {
   active: boolean
   runtimeLabel: string
+  workspaceProjectId?: string
   project: VideoProductionProject
   onProjectChange: (project: VideoProductionProject) => void
   onBridgeToStory: (source: ApprovedProductionStorySource) => void
@@ -103,7 +105,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, project, onProjectChange, onBridgeToStory }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, project, onProjectChange, onBridgeToStory }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -511,6 +513,12 @@ export function ProductionStudio({ active, runtimeLabel, project, onProjectChang
             <button type="button" className="is-save" onClick={() => void configureAdapter()} disabled={adapterBusy !== null || !adapterForm.endpoint.trim() || !adapterForm.model.trim() || !adapterForm.apiKey.trim()}>{adapterBusy === 'save' ? <Loader2 size={13} className="is-spinning" /> : <KeyRound size={13} />}{adapterStatus.text.configured ? '替换配置' : '仅本次运行启用'}</button>
           </footer>
         </section>
+
+        <GenerationAdaptersPanel
+          projectId={workspaceProjectId}
+          projectTitle={project.title}
+          defaultPrompt={project.brief}
+        />
 
         <div className="aq-production-node-actions">
           {!['waiting', 'failed'].includes(selectedNode.status) ? <button type="button" className="is-agent" onClick={requestLocalProposal}><Sparkles size={14} /> 请求本地建议</button> : null}

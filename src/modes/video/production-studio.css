@@ -764,6 +764,214 @@
   cursor: not-allowed;
 }
 
+.aq-generation-adapters {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #dfe1e7;
+  border-radius: 9px;
+  background: #f8f8fb;
+}
+
+.aq-generation-adapters > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-generation-adapters > header span,
+.aq-generation-adapters-boundary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aq-generation-adapters > header span {
+  color: #555a65;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.aq-generation-adapters > header b {
+  color: #28775a;
+  font-size: 8px;
+}
+
+.aq-generation-adapters-boundary,
+.aq-generation-adapter-notice {
+  margin: 0;
+  color: #737984;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.aq-generation-adapter-list {
+  display: grid;
+  gap: 6px;
+}
+
+.aq-generation-adapter-list details {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e0e2e8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aq-generation-adapter-list details.is-ready { border-color: #b9decf; }
+
+.aq-generation-adapter-list summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  color: #4e535e;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aq-generation-adapter-list summary::-webkit-details-marker { display: none; }
+
+.aq-generation-adapter-list summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.aq-generation-adapter-list summary small {
+  overflow: hidden;
+  color: #858a94;
+  font-size: 8px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-generation-adapter-list details.is-ready summary > svg { color: #2f7b5d; }
+.aq-generation-adapter-list details:not(.is-ready) summary > svg { color: #a47b2b; }
+
+.aq-generation-adapter-config {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  padding: 0 8px 8px;
+}
+
+.aq-generation-adapter-config label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: #747984;
+  font-size: 8px;
+}
+
+.aq-generation-adapter-config label:nth-child(2),
+.aq-generation-adapter-config label:nth-child(4) { grid-column: 1 / -1; }
+
+.aq-generation-adapter-config input,
+.aq-generation-adapter-smoke input,
+.aq-generation-adapter-smoke textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid #dcdee4;
+  border-radius: 6px;
+  color: #343741;
+  background: #fff;
+  font-size: 9px;
+}
+
+.aq-generation-adapter-config input,
+.aq-generation-adapter-smoke input { height: 31px; }
+
+.aq-generation-adapter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.aq-generation-adapter-actions button,
+.aq-generation-adapter-smoke button,
+.aq-generation-job button {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid #d8d9df;
+  border-radius: 6px;
+  color: #666b75;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-generation-adapter-actions button.is-save,
+.aq-generation-adapter-smoke > button {
+  color: #fff;
+  border-color: #2f7660;
+  background: #2f7660;
+}
+
+.aq-generation-adapter-actions button:disabled,
+.aq-generation-adapter-smoke button:disabled,
+.aq-generation-job button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.aq-generation-adapter-smoke {
+  display: grid;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.aq-generation-adapter-smoke textarea {
+  min-height: 64px;
+  resize: vertical;
+  padding-top: 7px;
+  line-height: 1.45;
+}
+
+.aq-generation-adapter-smoke > button { justify-self: end; }
+
+.aq-generation-job {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 7px;
+  border-radius: 6px;
+  color: #695f38;
+  background: #fbf6e7;
+  font-size: 8px;
+}
+
+.aq-generation-job.is-completed { color: #2d7158; background: #eaf7f0; }
+.aq-generation-job.is-failed,
+.aq-generation-job.is-cancelled { color: #9a3d43; background: #fff0f1; }
+.aq-generation-job small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.aq-generation-asset-result {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  color: #2b7057;
+  background: #eaf7f0;
+  font-size: 8px;
+  text-decoration: none;
+}
+
 .aq-production-dependencies > span,
 .aq-production-history > span,
 .aq-production-editor-field > span {
