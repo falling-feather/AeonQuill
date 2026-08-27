@@ -34,13 +34,17 @@ function parseChecksums(source) {
 
 async function inspectSignature(pathname) {
   const escaped = basename(pathname).replaceAll("'", "''")
-  const script = `$signature = Get-AuthenticodeSignature -LiteralPath '${escaped}'; [pscustomobject]@{ Status = [string]$signature.Status; Subject = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Subject } } | ConvertTo-Json -Compress`
+  const script = `$raw = [System.Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile('${escaped}'); $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($raw); try { $subjectBytes = [System.Text.Encoding]::UTF8.GetBytes([string]$certificate.Subject); [pscustomobject]@{ Status = 'EmbeddedSignature'; SubjectBase64 = [System.Convert]::ToBase64String($subjectBytes); Thumbprint = [string]$certificate.Thumbprint } | ConvertTo-Json -Compress } finally { $certificate.Dispose(); $raw.Dispose() }`
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     cwd: dirname(pathname),
     windowsHide: true,
     encoding: 'utf8',
   })
-  return JSON.parse(stdout.trim())
+  const result = JSON.parse(stdout.trim())
+  return {
+    ...result,
+    Subject: Buffer.from(result.SubjectBase64, 'base64').toString('utf8'),
+  }
 }
 
 const entries = await readdir(packageRoot, { withFileTypes: true })
