@@ -670,7 +670,10 @@ export class WorkflowCenterService {
     return pack
   }
 
-  async #inspectArtifact(artifact, comfyRoot) {
+  // @yao-pkg/pkg 6.22 misclassifies await inside private class methods as
+  // top-level await. Keep async packaging-boundary methods conventionally
+  // internal so the ESM-to-CJS transform includes this module in the snapshot.
+  async _inspectArtifact(artifact, comfyRoot) {
     if (!comfyRoot) return { present: false, verified: false, status: 'runtime-unconfigured' }
     if (artifact.relativePath) {
       const target = resolveInside(comfyRoot, artifact.relativePath)
@@ -706,7 +709,7 @@ export class WorkflowCenterService {
     const activeJobs = new Map(this.state.jobs.filter((job) => ['queued', 'running', 'waiting-user'].includes(job.status)).map((job) => [job.packId, job]))
     const packs = []
     for (const pack of this.packs) {
-      const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this.#inspectArtifact(artifact, comfyRoot)))
+      const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this._inspectArtifact(artifact, comfyRoot)))
       const artifacts = pack.artifacts.map((artifact, index) => publicArtifact(artifact, artifactStates[index]))
       const missingArtifacts = artifacts.filter(({ present }) => !present)
       const unverifiedArtifacts = artifacts.filter(({ present, verified, kind }) => present && !verified && kind === 'model')
@@ -818,11 +821,11 @@ export class WorkflowCenterService {
     this.#emit(job)
     const controller = new AbortController()
     this.controllers.set(job.id, controller)
-    void this.#runInstall(job.id, pack, controller.signal)
+    void this._runInstall(job.id, pack, controller.signal)
     return clone(job)
   }
 
-  async #updateJob(jobId, patch) {
+  async _updateJob(jobId, patch) {
     const job = this.state.jobs.find(({ id }) => id === jobId)
     if (!job) return null
     Object.assign(job, patch, { updatedAt: Date.now() })
@@ -831,7 +834,7 @@ export class WorkflowCenterService {
     return job
   }
 
-  async #downloadArtifact(job, artifact, signal, progressBase, totalBytes) {
+  async _downloadArtifact(job, artifact, signal, progressBase, totalBytes) {
     const comfyRoot = this.getComfyRoot()
     const target = resolveInside(comfyRoot, artifact.relativePath)
     const targetStats = await pathStats(target)
@@ -870,14 +873,14 @@ export class WorkflowCenterService {
         const now = Date.now()
         if (now - lastReportedAt >= 500 || (artifact.bytes && received === artifact.bytes)) {
           lastReportedAt = now
-          await this.#updateJob(job.id, { downloadedBytes, progress, phase: 'downloading', currentArtifactId: artifact.id })
+          await this._updateJob(job.id, { downloadedBytes, progress, phase: 'downloading', currentArtifactId: artifact.id })
         }
       }
     } finally {
       await file.close()
     }
     if (artifact.bytes && received !== artifact.bytes) throw workflowError(`${artifact.label} 下载大小不完整`, 'WORKFLOW_DOWNLOAD_SIZE_MISMATCH', 502, { artifactId: artifact.id, expectedBytes: artifact.bytes, actualBytes: received })
-    await this.#updateJob(job.id, { phase: 'verifying', currentArtifactId: artifact.id })
+    await this._updateJob(job.id, { phase: 'verifying', currentArtifactId: artifact.id })
     const digest = await sha256File(partial)
     if (digest !== artifact.sha256) {
       const quarantine = join(this.quarantineDirectory, `${artifact.id}-${Date.now()}.invalid`)
@@ -895,25 +898,25 @@ export class WorkflowCenterService {
     return received
   }
 
-  async #runInstall(jobId, pack, signal) {
+  async _runInstall(jobId, pack, signal) {
     const job = this.state.jobs.find(({ id }) => id === jobId)
     if (!job) return
     try {
-      await this.#updateJob(jobId, { status: 'running', phase: 'preflight', progress: 0 })
+      await this._updateJob(jobId, { status: 'running', phase: 'preflight', progress: 0 })
       let completedBytes = 0
       const automaticArtifacts = pack.artifacts.filter(({ downloadUrl }) => downloadUrl)
       for (const artifact of automaticArtifacts) {
-        const artifactBytes = await this.#downloadArtifact(job, artifact, signal, completedBytes, job.totalBytes)
+        const artifactBytes = await this._downloadArtifact(job, artifact, signal, completedBytes, job.totalBytes)
         completedBytes += artifactBytes
       }
       const comfyRoot = this.getComfyRoot()
       const manualMissing = []
       for (const artifact of pack.artifacts.filter(({ downloadUrl }) => !downloadUrl)) {
-        const state = await this.#inspectArtifact(artifact, comfyRoot)
+        const state = await this._inspectArtifact(artifact, comfyRoot)
         if (!state.present) manualMissing.push({ id: artifact.id, label: artifact.label, instruction: artifact.instruction, sourceUrl: artifact.sourceUrl })
       }
       if (manualMissing.length) {
-        await this.#updateJob(jobId, {
+        await this._updateJob(jobId, {
           status: 'waiting-user',
           phase: 'manual-dependencies',
           progress: 100,
@@ -924,7 +927,7 @@ export class WorkflowCenterService {
         return
       }
       if (!this.state.enabledPackIds.includes(pack.id)) this.state.enabledPackIds.push(pack.id)
-      await this.#updateJob(jobId, {
+      await this._updateJob(jobId, {
         status: 'completed',
         phase: 'enabled',
         progress: 100,
@@ -934,7 +937,7 @@ export class WorkflowCenterService {
       })
     } catch (error) {
       const cancelled = error?.name === 'AbortError'
-      await this.#updateJob(jobId, {
+      await this._updateJob(jobId, {
         status: cancelled ? 'cancelled' : 'failed',
         phase: cancelled ? 'cancelled' : 'failed',
         error: { code: cancelled ? 'WORKFLOW_INSTALL_CANCELLED' : error?.code || 'WORKFLOW_INSTALL_FAILED', message: error?.message || '能力包安装失败', details: error?.details },
@@ -959,7 +962,7 @@ export class WorkflowCenterService {
     const requiredLicenses = requiredLicenseIds(pack)
     if (requiredLicenses.some((id) => !this.state.acceptedLicenses[id])) throw workflowError('许可证尚未确认', 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED', 409)
     for (const artifact of pack.artifacts) {
-      const inspection = await this.#inspectArtifact(artifact, comfyRoot)
+      const inspection = await this._inspectArtifact(artifact, comfyRoot)
       if (!inspection.present) throw workflowError(`${artifact.label} 尚未安装`, 'WORKFLOW_DEPENDENCY_MISSING', 409, { artifactId: artifact.id })
       if (artifact.relativePath && !inspection.verified) {
         const target = resolveInside(comfyRoot, artifact.relativePath)

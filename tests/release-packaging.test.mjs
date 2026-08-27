@@ -193,6 +193,18 @@ test('packaging scripts contain no legacy MiaoHui artifact identities', async ()
   assert.match(combined, /MIAOHUI_RUNTIME_DIR/, 'Legacy MIAOHUI_* compatibility input must remain available')
 })
 
+test('lightweight release fails closed unless the packaged sidecar and hidden Tauri lifecycle pass', async () => {
+  const packageSource = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+  const command = packageSource.scripts['package:desktop:lightweight']
+  const signedAt = command.indexOf('package:desktop:signed')
+  const sidecarAt = command.indexOf('validate:desktop:sidecar')
+  const tauriAt = command.indexOf('validate:desktop:tauri:release')
+  const stageAt = command.indexOf('stage:desktop:lightweight')
+  assert.ok(signedAt >= 0 && sidecarAt > signedAt)
+  assert.ok(tauriAt > sidecarAt)
+  assert.ok(stageAt > tauriAt, 'Download staging must happen only after both executable lifecycle gates pass')
+})
+
 test('new user-visible jobs and diagnostics use AEONQUILL while legacy protocols remain readable', async () => {
   const [workflowBuilder, t2vTemplate, i2vTemplate, imageProcessor, projectStore, security, validator] = await Promise.all([
     readFile(join(projectRoot, 'server', 'workflow-builder.mjs'), 'utf8'),
