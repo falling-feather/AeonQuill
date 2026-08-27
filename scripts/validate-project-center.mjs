@@ -41,9 +41,13 @@ async function createProject(page, { title, mode }) {
   await openCreateDialog(page)
   await page.getByPlaceholder('输入项目名称').fill(title)
   if (mode === 'pixel') {
-    await page.getByRole('button', { name: /像素模式 精细像素绘制与动画/ }).click()
+    const option = page.getByRole('button', { name: /像素模式 精细像素绘制与动画/ })
+    await option.click()
+    assert.equal(await option.getAttribute('aria-pressed'), 'true')
   } else if (mode === 'smart-video') {
-    await page.getByRole('button', { name: /智能视频 从灵感或剧本开始制片/ }).click()
+    const option = page.getByRole('button', { name: /智能视频 从灵感或剧本开始制片/ })
+    await option.click()
+    assert.equal(await option.getAttribute('aria-pressed'), 'true')
   }
   await page.getByRole('button', { name: '创建并进入', exact: true }).click()
 }

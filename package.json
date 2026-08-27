@@ -18,6 +18,7 @@
     "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "validate:workflow-center": "npm run build && node scripts/validate-workflow-center-ui.mjs",
     "validate:production-agent": "npm run build && node scripts/validate-production-agent-ui.mjs",
+    "validate:p7": "npm run validate && node scripts/validate-p7-integration.mjs",
     "benchmark:canvas": "node scripts/benchmark-canvas.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
     "validate:workflows": "node server/validate-workflows.mjs",

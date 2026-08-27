@@ -61,6 +61,7 @@ export interface AeonQuillShellProps {
   runtime: LocalRuntimeSummary
   recentProjects?: readonly RecentProjectSummary[]
   recentProjectsFeedback?: ShellFeedback
+  projectCatalogReady?: boolean
   refreshingRuntime?: boolean
   onModeSelect?: (modeId: ProductModeId) => void
   onCreateProject?: (input: ProjectCreateInput) => void
@@ -82,6 +83,7 @@ export function AeonQuillShell({
   runtime,
   recentProjects = [],
   recentProjectsFeedback,
+  projectCatalogReady = true,
   refreshingRuntime = false,
   onModeSelect,
   onCreateProject,
@@ -129,13 +131,24 @@ export function AeonQuillShell({
   }
 
   const create = (input: ProjectCreateInput) => {
+    if (!projectCatalogReady) return
     onCreateProject?.(input)
     setDialogOpen(false)
   }
 
+  const openCreateDialog = () => {
+    if (projectCatalogReady) setDialogOpen(true)
+  }
+
   return (
     <div className="aq-shell aq-project-center-shell">
-      <HomeHeader onOpenSettings={onOpenSettings} onOpenLibrary={onOpenLibrary} onOpenWorkflowCenter={onOpenWorkflowCenter} onCreateProject={() => setDialogOpen(true)} />
+      <HomeHeader
+        onOpenSettings={onOpenSettings}
+        onOpenLibrary={onOpenLibrary}
+        onOpenWorkflowCenter={onOpenWorkflowCenter}
+        onCreateProject={openCreateDialog}
+        createProjectDisabled={!projectCatalogReady}
+      />
 
       <main className="aq-project-center">
         <aside className="aq-project-sidebar" aria-label="项目导航">
@@ -219,7 +232,11 @@ export function AeonQuillShell({
                 <span><FolderOpen size={25} /></span>
                 <strong>{query ? '没有符合条件的项目' : collection === 'trashed' ? '回收站为空' : '从第一个项目开始'}</strong>
                 <p>{query ? '尝试更换关键词、集合或模式筛选。' : '创建项目后，三种模式的文档会在这里统一管理。'}</p>
-                {!query && collection !== 'trashed' ? <button type="button" onClick={() => setDialogOpen(true)}>创建新项目</button> : null}
+                {!query && collection !== 'trashed' ? (
+                  <button type="button" onClick={openCreateDialog} disabled={!projectCatalogReady}>
+                    {projectCatalogReady ? '创建新项目' : '正在同步项目目录'}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <ul className="aq-project-rows">

@@ -1,0 +1,205 @@
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { chromium } from 'playwright'
+import { startIsolatedBridge } from './qa-runtime.mjs'
+
+const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const artifactDirectory = join(projectRoot, '.runtime', 'qa')
+const temporaryRoot = join(projectRoot, '.runtime', 'qa-temp', 'p7')
+const reportPath = join(artifactDirectory, 'p7-integration.json')
+const phases = []
+const childEnvironment = {
+  ...process.env,
+  TEMP: temporaryRoot,
+  TMP: temporaryRoot,
+  MIAOHUI_QA_SKIP_BUILD: '1',
+}
+
+await mkdir(artifactDirectory, { recursive: true })
+await mkdir(temporaryRoot, { recursive: true })
+process.env.TEMP = temporaryRoot
+process.env.TMP = temporaryRoot
+
+function runPhase(label, script, extraEnvironment = {}) {
+  const startedAt = Date.now()
+  return new Promise((resolvePromise, rejectPromise) => {
+    const output = []
+    const child = spawn(process.execPath, [script], {
+      cwd: projectRoot,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...childEnvironment, ...extraEnvironment },
+    })
+    const record = (chunk) => {
+      const text = String(chunk)
+      output.push(text)
+      process.stdout.write(text)
+    }
+    child.stdout.on('data', record)
+    child.stderr.on('data', record)
+    const timeout = setTimeout(() => {
+      if (process.platform === 'win32') {
+        spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      } else {
+        child.kill('SIGKILL')
+      }
+    }, 300_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      phases.push({ label, status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+      rejectPromise(error)
+    })
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout)
+      const durationMs = Date.now() - startedAt
+      if (code === 0) {
+        phases.push({ label, status: 'passed', durationMs })
+        resolvePromise()
+        return
+      }
+      const tail = output.join('').slice(-4_000)
+      const error = new Error(`${label} exited with ${signal || code}\n${tail}`)
+      phases.push({ label, status: 'failed', durationMs, error: error.message.slice(0, 4_000) })
+      rejectPromise(error)
+    })
+  })
+}
+
+function observePage(page, issues) {
+  page.on('pageerror', (error) => issues.push(`pageerror: ${error.message}`))
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') issues.push(`${message.type()}: ${message.text()}`)
+  })
+  page.on('response', (response) => {
+    if (response.status() >= 400) issues.push(`http ${response.status()}: ${response.url()}`)
+  })
+}
+
+async function waitForDownloads(downloads, count, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  while (downloads.length < count && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
+  }
+  assert.equal(downloads.length, count, `Expected ${count} game bundle downloads, received ${downloads.length}`)
+}
+
+async function validatePixelGameUi(baseUrl) {
+  const startedAt = Date.now()
+  const executablePath = process.platform === 'win32'
+    ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+    : undefined
+  const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true })
+  const page = await context.newPage()
+  const issues = []
+  const downloads = []
+  observePage(page, issues)
+  page.on('download', (download) => downloads.push(download))
+  try {
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible' })
+    const createProjectButton = page.locator('.aq-home-header').getByRole('button', { name: '创建新项目', exact: true })
+    await createProjectButton.waitFor({ state: 'visible', timeout: 10_000 })
+    await assert.doesNotReject(() => createProjectButton.click({ timeout: 10_000 }))
+    await page.getByPlaceholder('输入项目名称').fill('P7 像素游戏交付')
+    const pixelModeOption = page.getByRole('button', { name: /像素模式 精细像素绘制与动画/u })
+    await pixelModeOption.click()
+    assert.equal(await pixelModeOption.getAttribute('aria-pressed'), 'true')
+    await page.getByRole('button', { name: '创建并进入', exact: true }).click()
+    await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
+
+    await page.getByRole('button', { name: /本地智能清理/u }).click()
+    await page.getByText('本地智能清理未发现孤立噪点或单像素针孔', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: /补齐八方向/u }).click()
+    await page.getByText(/八方向槽已就绪/u).waitFor({ state: 'visible' })
+    const frameButtons = page.locator('.aq-pixel-frame-strip > button')
+    assert.equal(await frameButtons.count(), 8)
+    assert.deepEqual(await frameButtons.locator('strong').allInnerTexts(), ['南', '西南', '西', '西北', '北', '东北', '东', '东南'])
+
+    await page.getByRole('button', { name: /游戏资产包/u }).click()
+    await waitForDownloads(downloads, 6)
+    await page.getByText(/游戏资产包完成/u).waitFor({ state: 'visible' })
+    const byFilename = new Map(downloads.map((download) => [download.suggestedFilename(), download]))
+    const filenames = [...byFilename.keys()]
+    assert.equal(filenames.some((name) => name.endsWith('.aeonpixel.json')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-sprite-sheet.png')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-game-manifest.json')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-tileset.tsj')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-tilemap.tmj')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-preview.html')), true)
+
+    const readDownload = async (suffix) => {
+      const entry = [...byFilename.entries()].find(([name]) => name.endsWith(suffix))
+      assert.ok(entry, `Missing ${suffix}`)
+      return readFile(await entry[1].path())
+    }
+    const sprite = await readDownload('-sprite-sheet.png')
+    assert.deepEqual([...sprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+    const manifest = JSON.parse((await readDownload('-game-manifest.json')).toString('utf8'))
+    const tileset = JSON.parse((await readDownload('-tileset.tsj')).toString('utf8'))
+    const tilemap = JSON.parse((await readDownload('-tilemap.tmj')).toString('utf8'))
+    const viewer = (await readDownload('-preview.html')).toString('utf8')
+    assert.equal(manifest.directions.length, 8)
+    assert.equal(manifest.frames.length, 8)
+    assert.equal(tileset.image, manifest.image)
+    assert.equal(tilemap.tilesets[0].source.endsWith('-tileset.tsj'), true)
+    assert.equal(/https?:\/\//u.test(viewer), false)
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
+    assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
+    assert.equal(await page.locator('html').evaluate((html) => html.scrollWidth <= html.clientWidth), true)
+    await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
+    assert.deepEqual(issues, [])
+    phases.push({
+      label: 'pixel game UI and six-file delivery',
+      status: 'passed',
+      durationMs: Date.now() - startedAt,
+      downloads: filenames.sort(),
+    })
+  } catch (error) {
+    phases.push({ label: 'pixel game UI and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
+    throw error
+  } finally {
+    await browser.close().catch(() => undefined)
+  }
+}
+
+let projectBridge
+let failure
+try {
+  projectBridge = await startIsolatedBridge('p7-project-pixel')
+  await runPhase('project catalog, recovery and migration UI', 'scripts/validate-project-center.mjs', {
+    AEONQUILL_PROJECT_CENTER_URL: projectBridge.baseUrl,
+  })
+  await validatePixelGameUi(projectBridge.baseUrl)
+  await projectBridge.stop({ keepRuntime: false })
+  projectBridge = undefined
+
+  await runPhase('balanced canvas, restart, package and responsive UI', 'scripts/validate-browser.mjs')
+  await runPhase('one immutable resource across three modes', 'scripts/validate-asset-library-ui.mjs')
+  await runPhase('workflow center dependency and safe-import UI', 'scripts/validate-workflow-center-ui.mjs')
+  await runPhase('multi-agent, BYOK media, costs and recovery UI', 'scripts/validate-production-agent-ui.mjs')
+} catch (error) {
+  failure = error
+} finally {
+  await projectBridge?.stop({ keepRuntime: Boolean(failure) }).catch(() => undefined)
+  await writeFile(reportPath, `${JSON.stringify({
+    schemaVersion: 1,
+    status: failure ? 'failed' : 'passed',
+    generatedAt: new Date().toISOString(),
+    node: process.version,
+    platform: `${process.platform}-${process.arch}`,
+    temporaryRoot,
+    phases,
+    error: failure?.message,
+  }, null, 2)}\n`, 'utf8')
+}
+
+if (failure) throw failure
+console.log(`✓ P7 integration passed (${phases.length} phases); report ${reportPath}`)

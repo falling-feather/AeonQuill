@@ -5,9 +5,16 @@ interface HomeHeaderProps {
   onOpenLibrary?: () => void
   onOpenWorkflowCenter?: () => void
   onCreateProject?: () => void
+  createProjectDisabled?: boolean
 }
 
-export function HomeHeader({ onOpenSettings, onOpenLibrary, onOpenWorkflowCenter, onCreateProject }: HomeHeaderProps) {
+export function HomeHeader({
+  onOpenSettings,
+  onOpenLibrary,
+  onOpenWorkflowCenter,
+  onCreateProject,
+  createProjectDisabled = false,
+}: HomeHeaderProps) {
   return (
     <header className="aq-home-header">
       <div className="aq-home-header__brand" aria-label="光阴砚 AEONQUILL">
@@ -45,9 +52,15 @@ export function HomeHeader({ onOpenSettings, onOpenLibrary, onOpenWorkflowCenter
           <Settings size={17} strokeWidth={1.8} aria-hidden="true" />
           <span>设置</span>
         </button>
-        <button type="button" className="aq-primary-action" onClick={onCreateProject}>
+        <button
+          type="button"
+          className="aq-primary-action"
+          onClick={onCreateProject}
+          disabled={createProjectDisabled}
+          title={createProjectDisabled ? '正在同步本机项目目录' : undefined}
+        >
           <FilePlus2 size={17} strokeWidth={1.8} aria-hidden="true" />
-          创建新项目
+          {createProjectDisabled ? '正在同步项目' : '创建新项目'}
         </button>
       </div>
     </header>

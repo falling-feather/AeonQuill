@@ -25,13 +25,18 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
   const [color, setColor] = useState<ProjectCreateInput['color']>('amber')
   const titleRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLFormElement>(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     if (!open) return
     setModeId(initialModeId)
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus())
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') onCloseRef.current()
       if (event.key !== 'Tab') return
       const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -52,7 +57,7 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
       window.cancelAnimationFrame(frame)
       window.removeEventListener('keydown', handleKey)
     }
-  }, [initialModeId, onClose, open])
+  }, [initialModeId, open])
 
   if (!open) return null
 

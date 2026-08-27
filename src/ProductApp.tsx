@@ -1990,6 +1990,7 @@ export default function ProductApp() {
         runtime={runtimeSummary}
         recentProjects={recentProjects}
         recentProjectsFeedback={recentProjectsFeedback}
+        projectCatalogReady={clientStateReady}
         refreshingRuntime={refreshingRuntime}
         onModeSelect={chooseMode}
         onCreateProject={handleCreateProject}
