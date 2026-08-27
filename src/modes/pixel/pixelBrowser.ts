@@ -5,6 +5,7 @@ import {
   deserializePixelProject,
   type PixelDocument,
   type PixelExportBundle,
+  type PixelGameExportBundle,
   type RgbaImage,
 } from '../../lib/pixel/index'
 
@@ -137,4 +138,13 @@ export async function downloadPixelExportBundle(
   if (includeFrame) downloadPixelBlob(await rgbaToPngBlob(bundle.frame.pixels, bundle.frame.width, bundle.frame.height), bundle.frame.filename)
   if (includeSprite) downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
   if (includeMetadata) downloadPixelText(bundle.metadata.text, bundle.metadata.filename, PIXEL_METADATA_MIME)
+}
+
+export async function downloadPixelGameExportBundle(bundle: PixelGameExportBundle) {
+  downloadPixelText(bundle.project.text, bundle.project.filename, bundle.project.mime)
+  downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
+  downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+  downloadPixelText(bundle.tiledTileset.text, bundle.tiledTileset.filename, bundle.tiledTileset.mime)
+  downloadPixelText(bundle.tiledMap.text, bundle.tiledMap.filename, bundle.tiledMap.mime)
+  downloadPixelText(bundle.viewer.text, bundle.viewer.filename, bundle.viewer.mime)
 }

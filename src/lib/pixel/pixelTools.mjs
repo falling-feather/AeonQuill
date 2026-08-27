@@ -207,3 +207,52 @@ export function createSelectionPatch(cel, width, height, selectionInput, operati
   }
   return changed
 }
+
+export function createSmartPixelCleanupPatch(cel, width, height, options = {}) {
+  assertSize(width, height)
+  if (!Array.isArray(cel) || cel.length !== width * height) fail('INVALID_CEL', 'cel size does not match the pixel surface')
+  if (!options || typeof options !== 'object' || Array.isArray(options)) fail('INVALID_OPTIONS', 'options must be an object')
+  const unknown = Object.keys(options).filter((key) => !['removeIsolated', 'fillPinholes'].includes(key))
+  if (unknown.length > 0) fail('UNKNOWN_FIELD', `options.${unknown[0]} is not allowed`)
+  const removeIsolated = options.removeIsolated !== false
+  const fillPinholes = options.fillPinholes !== false
+  const pixels = []
+  let isolatedRemoved = 0
+  let pinholesFilled = 0
+  const at = (x, y) => (x < 0 || y < 0 || x >= width || y >= height ? undefined : cel[y * width + x])
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const value = at(x, y)
+      if (value === null && fillPinholes && x > 0 && y > 0 && x < width - 1 && y < height - 1) {
+        const cardinal = [at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1)]
+        if (cardinal[0] !== null && cardinal.every((colorId) => colorId === cardinal[0])) {
+          pixels.push({ x, y, value: cardinal[0] })
+          pinholesFilled += 1
+        }
+        continue
+      }
+      if (value === null || !removeIsolated) continue
+      let occupiedNeighbors = 0
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (dx === 0 && dy === 0) continue
+          const neighbor = at(x + dx, y + dy)
+          if (neighbor !== undefined && neighbor !== null) occupiedNeighbors += 1
+        }
+      }
+      if (occupiedNeighbors === 0) {
+        pixels.push({ x, y, value: null })
+        isolatedRemoved += 1
+      }
+    }
+  }
+  return {
+    pixels,
+    report: {
+      scannedPixels: width * height,
+      isolatedRemoved,
+      pinholesFilled,
+      changedPixels: pixels.length,
+    },
+  }
+}

@@ -863,6 +863,38 @@
   font-size: 10px;
 }
 
+.aq-pixel-game-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.aq-pixel-game-actions button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--aq-pixel-line);
+  border-radius: 7px;
+  color: var(--aq-pixel-text);
+  background: var(--aq-pixel-panel-soft);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.aq-pixel-game-actions button:hover:not(:disabled) {
+  border-color: #c9c7fb;
+  color: #4338ca;
+  background: #f1efff;
+}
+
+.aq-pixel-game-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 @media (max-width: 980px) {
   .aq-pixel-mode {
     height: auto;

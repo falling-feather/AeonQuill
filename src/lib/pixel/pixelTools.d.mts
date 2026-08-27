@@ -32,3 +32,17 @@ export function createSelectionPatch(
   operation: 'clear' | 'flip-horizontal' | 'flip-vertical' | 'move' | 'copy',
   options?: { dx?: number; dy?: number },
 ): PixelPatchPoint[]
+
+export type SmartPixelCleanupReport = {
+  scannedPixels: number
+  isolatedRemoved: number
+  pinholesFilled: number
+  changedPixels: number
+}
+
+export function createSmartPixelCleanupPatch(
+  cel: Array<string | null>,
+  width: number,
+  height: number,
+  options?: { removeIsolated?: boolean; fillPinholes?: boolean },
+): { pixels: PixelPatchPoint[]; report: SmartPixelCleanupReport }

@@ -5,6 +5,7 @@ import {
   ArrowUp,
   ArrowLeft as ArrowLeftSmall,
   Copy,
+  Compass,
   Download,
   Eraser,
   Eye,
@@ -25,10 +26,12 @@ import {
   Pipette,
   Play,
   Plus,
+  PackageOpen,
   Redo2,
   Settings2,
   Square,
   SquareDashedMousePointer,
+  Sparkles,
   Trash2,
   Undo2,
   Unlock,
@@ -52,10 +55,12 @@ import {
   convertRgbaToPixelDocument,
   createBlankPixelArray,
   createPixelExportBundle,
+  createPixelGameExportBundle,
   createPixelCommand,
   createPixelDocument,
   createSpriteSheetMetadata,
   createSelectionPatch,
+  createSmartPixelCleanupPatch,
   expandPixelBrush,
   floodFillPixels,
   migratePixelDocument,
@@ -81,6 +86,7 @@ import {
   PixelBrowserError,
   decodePixelImageFile,
   downloadPixelExportBundle,
+  downloadPixelGameExportBundle,
   downloadPixelText,
   readPixelProjectFile,
 } from './pixelBrowser'
@@ -850,6 +856,84 @@ export function PixelModeWorkbench({
     }
   }, [onSpriteSheetReady])
 
+  const cleanupActivePixelLayer = useCallback(() => {
+    const current = historyRef.current.document
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    const layer = current.layers.find((item) => item.id === current.activeLayerId)
+    const cel = frame?.cels[current.activeLayerId]
+    if (!frame || !layer || !cel) {
+      setStatus('当前帧或图层不可用')
+      return
+    }
+    if (layer.locked) {
+      setStatus(`图层 ${layer.name} 已锁定`)
+      return
+    }
+    try {
+      const cleanup = createSmartPixelCleanupPatch(cel, current.width, current.height)
+      if (cleanup.pixels.length === 0) {
+        setStatus('本地智能清理未发现孤立噪点或单像素针孔')
+        return
+      }
+      if (apply('pixels.patch', { frameId: frame.id, layerId: layer.id, pixels: cleanup.pixels })) {
+        setStatus(`智能清理完成：移除 ${cleanup.report.isolatedRemoved} 个孤点，填补 ${cleanup.report.pinholesFilled} 个针孔 · 1 个撤销单元`)
+      }
+    } catch (error) {
+      setStatus(readablePixelError(error, '智能清理失败'))
+    }
+  }, [apply])
+
+  const ensureEightDirectionSlots = useCallback(() => {
+    const directions = [
+      ['south', '南'], ['south-west', '西南'], ['west', '西'], ['north-west', '西北'],
+      ['north', '北'], ['north-east', '东北'], ['east', '东'], ['south-east', '东南'],
+    ] as const
+    const sourceFrames = [...historyRef.current.document.frames]
+    let changed = 0
+    for (let index = 0; index < directions.length; index += 1) {
+      const [, label] = directions[index]
+      const current = historyRef.current.document
+      const existing = current.frames[index]
+      if (existing) {
+        if (existing.name !== label && apply('frames.patch', { frameId: existing.id, patch: { name: label } })) changed += 1
+        continue
+      }
+      const [directionId] = directions[index]
+      const id = uniqueId(`direction-${directionId}`, current.frames.map((frame) => frame.id), current.revision)
+      const copyFromFrameId = sourceFrames[index % sourceFrames.length]?.id ?? current.frames[0].id
+      if (apply('frames.add', {
+        frame: { id, name: label, durationMs: 140 },
+        copyFromFrameId,
+      })) changed += 1
+    }
+    setStatus(changed > 0
+      ? `八方向槽已就绪：南、西南、西、西北、北、东北、东、东南 · ${changed} 项变更`
+      : '当前前八帧已经是标准八方向槽')
+  }, [apply])
+
+  const exportPixelGameBundle = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const current = historyRef.current.document
+      const mapWidth = Math.max(1, Math.ceil(Math.sqrt(current.frames.length)))
+      const mapHeight = Math.max(1, Math.ceil(current.frames.length / mapWidth))
+      const bundle = createPixelGameExportBundle(current, {
+        columns: Math.min(4, current.frames.length),
+        padding: 1,
+        spacing: 1,
+        mapWidth,
+        mapHeight,
+        anchor: { x: Math.floor(current.width / 2), y: current.height },
+      })
+      await downloadPixelGameExportBundle(bundle)
+      setStatus('游戏资产包完成：项目、Sprite、八方向/锚点 manifest、Tiled Tileset/Tilemap 与离线预览页')
+    } catch (error) {
+      setStatus(readablePixelError(error, '游戏资产包导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [])
+
   return (
     <section
       className={`aq-pixel-mode ${className}`.trim()}
@@ -1435,6 +1519,17 @@ export function PixelModeWorkbench({
             <span>Sprite Sheet</span>
             <strong>{spriteMetadata.width} × {spriteMetadata.height}</strong>
             <p>{spriteMetadata.columns} 列 · {spriteMetadata.rows} 行 · {spriteMetadata.frames.length} 帧</p>
+            <div className="aq-pixel-game-actions" aria-label="像素游戏资产工具">
+              <button type="button" onClick={cleanupActivePixelLayer}>
+                <Sparkles size={14} /> 本地智能清理
+              </button>
+              <button type="button" onClick={ensureEightDirectionSlots}>
+                <Compass size={14} /> 补齐八方向
+              </button>
+              <button type="button" onClick={() => void exportPixelGameBundle()} disabled={isExporting}>
+                <PackageOpen size={14} /> 游戏资产包
+              </button>
+            </div>
           </div>
         </aside>
       </div>
