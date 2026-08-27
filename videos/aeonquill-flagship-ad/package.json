@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "npx --yes hyperframes@0.8.16 preview --background --no-open --port 3017",
     "check": "npx --yes hyperframes@0.8.16 check",
+    "test:delivery-validator": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-final-validator.ps1",
     "render": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/render-final-720p.ps1",
     "render:approved": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/render-final-720p.ps1 -Approved",
     "publish": "npx --yes hyperframes@0.8.16 publish"

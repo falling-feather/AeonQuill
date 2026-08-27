@@ -33,9 +33,7 @@ $env:npm_config_cache = $npmCacheRoot
 $env:HYPERFRAMES_NO_TELEMETRY = "1"
 
 $ffmpegCommand = Get-Command ffmpeg -ErrorAction Stop
-$ffprobeCommand = Get-Command ffprobe -ErrorAction Stop
 $ffmpeg = $ffmpegCommand.Source
-$ffprobe = $ffprobeCommand.Source
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $masterPath = Join-Path $outputRoot "AEONQUILL-flagship-ad-$stamp-master-1080p.mp4"
@@ -49,18 +47,34 @@ function Invoke-CheckedCommand {
     [Parameter(Mandatory = $true)][string]$FailureMessage
   )
 
-  & $Executable @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "$FailureMessage (exit=$LASTEXITCODE)"
+  $capturedExitCode = $null
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $Executable @Arguments
+    $capturedExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($null -eq $capturedExitCode -or $capturedExitCode -ne 0) {
+    throw "$FailureMessage (exit=$capturedExitCode)"
   }
 }
 
-function Convert-ToInvariantDouble {
-  param([Parameter(Mandatory = $true)][object]$Value)
-  return [double]::Parse(
-    [string]$Value,
-    [Globalization.CultureInfo]::InvariantCulture
-  )
+function Get-Sha256Hex {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $stream = [IO.File]::OpenRead($Path)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = $algorithm.ComputeHash($stream)
+  }
+  finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
+  return ([BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
 }
 
 Push-Location $projectRoot
@@ -104,101 +118,16 @@ Invoke-CheckedCommand -Executable $ffmpeg -Arguments @(
   $deliveryPath
 ) -FailureMessage "720p delivery encode failed"
 
-$probeText = & $ffprobe -v error -show_entries `
-  "format=duration,size,bit_rate:stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels" `
-  -of json $deliveryPath 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-  throw "ffprobe failed to inspect the delivery file (exit=$LASTEXITCODE)"
+$validatorPath = Join-Path $PSScriptRoot "validate-final-video.ps1"
+$qaResult = & $validatorPath -InputPath $deliveryPath -ReportPath $reportPath
+if ($null -eq $qaResult -or -not $qaResult.Ok) {
+  throw "Final video validation did not return a passing result."
 }
 
-$probe = $probeText | ConvertFrom-Json
-$videoStream = @($probe.streams | Where-Object codec_type -eq "video")[0]
-$audioStream = @($probe.streams | Where-Object codec_type -eq "audio")[0]
-$durationSeconds = Convert-ToInvariantDouble $probe.format.duration
-
-if ($videoStream.codec_name -ne "h264") {
-  throw "Delivery video codec is not H.264: $($videoStream.codec_name)"
-}
-if ([int]$videoStream.width -ne 1280 -or [int]$videoStream.height -ne 720) {
-  throw "Delivery resolution is not 1280x720: $($videoStream.width)x$($videoStream.height)"
-}
-if ($durationSeconds -lt 20 -or $durationSeconds -gt 27) {
-  throw "Delivery duration is outside the accepted range: $durationSeconds seconds"
-}
-if ($audioStream.codec_name -ne "aac") {
-  throw "Delivery audio codec is not AAC: $($audioStream.codec_name)"
-}
-
-Invoke-CheckedCommand -Executable $ffmpeg -Arguments @(
-  "-v", "error",
-  "-ss", "00:00:13.000",
-  "-i", $deliveryPath,
-  "-frames:v", "1",
-  "-f", "null", "-"
-) -FailureMessage "Delivery seek/decode test failed"
-
-$blackLog = & $ffmpeg -hide_banner -nostats -i $deliveryPath `
-  -vf "blackdetect=d=0.15:pix_th=0.10" -an -f null - 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-  throw "Black-frame analysis failed (exit=$LASTEXITCODE)"
-}
-
-$blackSegments = @(
-  [regex]::Matches(
-    $blackLog,
-    "black_start:(?<start>[0-9.]+)\s+black_end:(?<end>[0-9.]+)\s+black_duration:(?<duration>[0-9.]+)"
-  ) | ForEach-Object {
-    [ordered]@{
-      start = Convert-ToInvariantDouble $_.Groups["start"].Value
-      end = Convert-ToInvariantDouble $_.Groups["end"].Value
-      duration = Convert-ToInvariantDouble $_.Groups["duration"].Value
-    }
-  }
-)
-
-$interiorBlackSegments = @(
-  $blackSegments | Where-Object {
-    $_.duration -gt 0.5 -and $_.start -gt 0.25 -and $_.end -lt ($durationSeconds - 0.25)
-  }
-)
-if ($interiorBlackSegments.Count -gt 0) {
-  throw "An interior black segment longer than 0.5 seconds was detected."
-}
-
-$freezeLog = & $ffmpeg -hide_banner -nostats -i $deliveryPath `
-  -vf "freezedetect=n=-55dB:d=2.0" -an -f null - 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-  throw "Freeze analysis failed (exit=$LASTEXITCODE)"
-}
-$freezeEvents = @(
-  [regex]::Matches($freezeLog, "freeze_(?:start|end|duration):\s*[0-9.]+") |
-    ForEach-Object Value
-)
-
-$loudnessLog = & $ffmpeg -hide_banner -nostats -i $deliveryPath `
-  -af "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json" -f null - 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-  throw "Loudness analysis failed (exit=$LASTEXITCODE)"
-}
-$loudnessMatch = [regex]::Match($loudnessLog, '(?s)\{\s*"input_i".*?\}')
-if (-not $loudnessMatch.Success) {
-  throw "Unable to parse loudness measurements from FFmpeg output."
-}
-$loudness = $loudnessMatch.Value | ConvertFrom-Json
-$integratedLufs = Convert-ToInvariantDouble $loudness.input_i
-if ($integratedLufs -lt -18 -or $integratedLufs -gt -11) {
-  throw "Integrated loudness is outside the release range: $integratedLufs LUFS"
-}
-
-$deliveryItem = Get-Item -LiteralPath $deliveryPath
 $masterItem = Get-Item -LiteralPath $masterPath
-$deliveryHash = (Get-FileHash -LiteralPath $deliveryPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$masterHash = (Get-FileHash -LiteralPath $masterPath -Algorithm SHA256).Hash.ToLowerInvariant()
-
-$report = [ordered]@{
-  ok = $true
-  generatedAt = (Get-Date).ToString("o")
-  render = [ordered]@{
+$masterHash = Get-Sha256Hex -Path $masterPath
+$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$report | Add-Member -NotePropertyName render -NotePropertyValue ([ordered]@{
     hyperframesVersion = "0.8.16"
     fps = 30
     quality = "high"
@@ -206,43 +135,23 @@ $report = [ordered]@{
     deliveryCrf = 16
     deliveryPreset = "slow"
     workers = $Workers
-  }
-  master = [ordered]@{
+  })
+$report | Add-Member -NotePropertyName master -NotePropertyValue ([ordered]@{
     path = $masterPath
     bytes = $masterItem.Length
     sha256 = $masterHash
-  }
-  delivery = [ordered]@{
-    path = $deliveryPath
-    bytes = $deliveryItem.Length
-    sha256 = $deliveryHash
-    durationSeconds = $durationSeconds
-    videoCodec = $videoStream.codec_name
-    width = [int]$videoStream.width
-    height = [int]$videoStream.height
-    frameRate = $videoStream.r_frame_rate
-    audioCodec = $audioStream.codec_name
-    audioSampleRate = [int]$audioStream.sample_rate
-    audioChannels = [int]$audioStream.channels
-  }
-  qa = [ordered]@{
-    seekAt13Seconds = "pass"
-    interiorBlackSegments = $interiorBlackSegments
-    allBlackSegments = $blackSegments
-    freezeEvents = $freezeEvents
-    loudness = $loudness
-  }
-}
-
+  })
 $reportJson = $report | ConvertTo-Json -Depth 12
 [IO.File]::WriteAllText($reportPath, $reportJson, [Text.UTF8Encoding]::new($false))
 
 [pscustomobject]@{
+  Master = $masterPath
   Delivery = $deliveryPath
-  DurationSeconds = $durationSeconds
-  Resolution = "$($videoStream.width)x$($videoStream.height)"
-  Codecs = "$($videoStream.codec_name)/$($audioStream.codec_name)"
-  IntegratedLufs = $integratedLufs
-  Sha256 = $deliveryHash
+  DurationSeconds = $qaResult.DurationSeconds
+  Resolution = $qaResult.Resolution
+  Codecs = $qaResult.Codecs
+  IntegratedLufs = $qaResult.IntegratedLufs
+  TruePeakDb = $qaResult.TruePeakDb
+  Sha256 = $qaResult.Sha256
   QaReport = $reportPath
 } | Format-List
