@@ -1,9 +1,11 @@
 import type {
+  FinalCutJobRequest,
   ProcessingJob,
   RuntimeConfigurationRequest,
   RuntimeConfigurationResult,
   RuntimeDiagnostics,
   RuntimeStatus,
+  VideoChainJobRequest,
   VideoJobRequest,
 } from '../types'
 
@@ -141,6 +143,36 @@ export async function createVideoJob(request: VideoJobRequest, options: CreateVi
   }
   if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/video', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  })
+  return payload.job
+}
+
+export async function createFinalCutJob(request: FinalCutJobRequest, options: CreateVideoJobOptions = {}) {
+  const idempotencyKey = options.idempotencyKey ?? `final-cut-${crypto.randomUUID()}`
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'idempotency-key': idempotencyKey,
+  }
+  if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
+  const payload = await api<{ job: ProcessingJob }>('/api/jobs/final-cut', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  })
+  return payload.job
+}
+
+export async function createVideoChainJob(request: VideoChainJobRequest, options: CreateVideoJobOptions = {}) {
+  const idempotencyKey = options.idempotencyKey ?? `video-chain-${crypto.randomUUID()}`
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'idempotency-key': idempotencyKey,
+  }
+  if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
+  const payload = await api<{ job: ProcessingJob }>('/api/jobs/video-chain', {
     method: 'POST',
     headers,
     body: JSON.stringify(request),

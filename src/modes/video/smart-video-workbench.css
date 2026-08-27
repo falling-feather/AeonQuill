@@ -1553,6 +1553,31 @@
   font-size: 8px;
 }
 
+.aq-video-final-cut-button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid rgba(92, 84, 196, 0.22);
+  border-radius: 8px;
+  background: rgba(92, 84, 196, 0.08);
+  color: #5751a8;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.aq-video-final-cut-button:not(:disabled):hover {
+  border-color: rgba(92, 84, 196, 0.42);
+  background: rgba(92, 84, 196, 0.13);
+}
+
+.aq-video-final-cut-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .aq-video-submitted-ledger > div:last-child {
   display: grid;
   gap: 5px;
@@ -1562,7 +1587,7 @@
 .aq-video-submitted-ledger article {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(130px, auto) minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(130px, auto) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 9px;
   padding: 7px 8px;
@@ -1616,6 +1641,18 @@
 .aq-video-submitted-ledger article b {
   color: #a9a69e;
   font-weight: 500;
+}
+
+.aq-video-submitted-ledger article > a {
+  color: #5751a8;
+  font-size: 8px;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.aq-video-submitted-ledger article > a:hover {
+  text-decoration: underline;
 }
 
 .is-spinning {
@@ -2274,6 +2311,12 @@
   color: #ffffff;
   border-color: var(--aq-video-accent);
   background: var(--aq-video-accent);
+}
+
+.aq-video-confirmation .aq-video-chain-button {
+  border-color: #a96713;
+  background: linear-gradient(135deg, #a96713, #d99a2b);
+  box-shadow: 0 7px 18px rgba(169, 103, 19, 0.18);
 }
 
 .aq-video-checklist {

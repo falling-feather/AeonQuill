@@ -68,6 +68,11 @@ import {
   assertAllowedVideoPostprocessWorkflow,
   buildSeedVr2VideoWorkflow,
 } from './video-postprocess-workflow.mjs'
+import {
+  renderFinalCut,
+  validateFinalCutRequest,
+  VIDEO_FINALIZER_VERSION,
+} from './video-finalizer.mjs'
 import { WorkflowCenterService } from './workflow-center.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
@@ -85,6 +90,7 @@ const port = Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || lo
 const host = process.env.AEONQUILL_HOST || process.env.MIAOHUI_HOST || '127.0.0.1'
 const security = new LocalBridgeSecurity({ host, port, allowedOrigins: localRuntimeConfig.allowedOrigins })
 const ffmpegPath = process.env.FFMPEG_PATH || localRuntimeConfig.imageTools?.ffmpegPath || 'ffmpeg'
+const ffprobePath = process.env.FFPROBE_PATH || localRuntimeConfig.imageTools?.ffprobePath || 'ffprobe'
 const runtimeManager = new ComfyRuntimeManager(localRuntimeConfig)
 const comfy = new ComfyClient(localRuntimeConfig.comfyUrl)
 const imageProcessor = new ImageProcessor({
@@ -161,7 +167,7 @@ const gpuImageOperations = new Set([
 ])
 const scheduler = new JobScheduler({
   store,
-  resourceLimits: { cpu: imageJobConcurrency, gpu: 1 },
+  resourceLimits: { cpu: imageJobConcurrency, gpu: 1, orchestration: 1 },
 })
 let runtimeCache = null
 let runtimeCacheAt = 0
@@ -359,6 +365,60 @@ function validateVideoRequest(body) {
   }
 }
 
+function validateVideoChainRequest(body) {
+  const allowed = new Set(['projectId', 'title', 'shots', 'transitionSeconds', 'width', 'height', 'fps'])
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key))) {
+    throw Object.assign(new Error('连续长片请求字段无效'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+  }
+  const projectId = String(body.projectId || '').trim()
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u.test(projectId)) {
+    throw Object.assign(new Error('连续长片需要受管项目 ID'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+  }
+  const title = String(body.title || '').trim()
+  if (!title || title.length > 120) {
+    throw Object.assign(new Error('连续长片标题需要在 1–120 个字符之间'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+  }
+  if (!Array.isArray(body.shots) || body.shots.length < 2 || body.shots.length > 24) {
+    throw Object.assign(new Error('连续长片需要 2–24 个镜头'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+  }
+  const shots = body.shots.map((shot, index) => {
+    if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
+      throw Object.assign(new Error(`镜头 ${index + 1} 请求无效`), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+    }
+    const normalized = validateVideoRequest({
+      ...shot,
+      mode: index === 0 ? 'text-to-video' : 'image-to-video',
+      duration: 5,
+    })
+    return { ...normalized, duration: 5, hasLastFrame: false }
+  })
+  const aspectRatio = shots[0].aspectRatio
+  if (shots.some((shot) => shot.aspectRatio !== aspectRatio)) {
+    throw Object.assign(new Error('连续长片的全部镜头必须使用同一画幅'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
+  }
+  const finalCut = validateFinalCutRequest({
+    sourceJobIds: [
+      'video-11111111-1111-4111-8111-111111111111',
+      'video-22222222-2222-4222-8222-222222222222',
+    ],
+    projectId,
+    title,
+    transitionSeconds: body.transitionSeconds,
+    width: body.width,
+    height: body.height,
+    fps: body.fps,
+  })
+  return {
+    projectId,
+    title,
+    shots,
+    transitionSeconds: finalCut.transitionSeconds,
+    width: finalCut.width,
+    height: finalCut.height,
+    fps: finalCut.fps,
+  }
+}
+
 function terminateChildProcess(child) {
   if (!child?.pid) return
   if (process.platform === 'win32') {
@@ -417,6 +477,16 @@ async function createDeliveryVideo(inputPath, outputPath, dimensions, signal) {
     '-c:a', 'copy', '-movflags', '+faststart',
     outputPath,
   ], 10 * 60 * 1000, signal)
+}
+
+async function extractVideoHandoffFrame(inputPath, outputPath, aspectRatio, signal) {
+  const dimensions = VIDEO_DIMENSIONS[aspectRatio]
+  await runProcess(ffmpegPath, [
+    '-y', '-sseof', '-0.12', '-i', inputPath,
+    '-vf', `scale=${dimensions.width}:${dimensions.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${dimensions.width}:${dimensions.height}`,
+    '-frames:v', '1', '-compression_level', '4',
+    outputPath,
+  ], 2 * 60 * 1000, signal)
 }
 
 async function inspectRuntime(force = false) {
@@ -665,6 +735,85 @@ function newJob(request, inputPath, lastFramePath, options = {}) {
     inputPath,
     lastFramePath,
     logs: [{ at: now, level: 'info', message: '任务已创建' }],
+  }
+}
+
+function newFinalCutJob(request, options = {}) {
+  const id = `final-cut-${randomUUID()}`
+  const now = Date.now()
+  const scheduling = createScheduling({
+    resourceClass: 'cpu',
+    priority: options.priority ?? 40,
+    timeoutMs: 60 * 60 * 1_000,
+    idempotencyKey: options.idempotencyKey,
+    attempt: options.attempt || 1,
+    maxAttempts: 3,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: 'final-cut',
+    tool: 'final-cut',
+    label: '智能视频成片',
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: '等待本地剪辑执行器',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: VIDEO_FINALIZER_VERSION,
+    requestHash: options.requestHash,
+    retryOf: options.retryOf,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, 'cpu', 10 * 60_000, now)],
+    request,
+    sourceElementId: request.projectId,
+    logs: [{ at: now, level: 'info', message: `成片任务已创建，共 ${request.sourceJobIds.length} 个受管镜头` }],
+  }
+}
+
+function newVideoChainJob(request, options = {}) {
+  const id = `video-chain-${randomUUID()}`
+  const now = Date.now()
+  const estimatedMilliseconds = request.shots.reduce(
+    (total, shot) => total + estimateVideoMilliseconds(shot),
+    10 * 60_000,
+  )
+  const scheduling = createScheduling({
+    resourceClass: 'orchestration',
+    priority: options.priority ?? 35,
+    timeoutMs: 3 * 60 * 60 * 1_000,
+    idempotencyKey: options.idempotencyKey,
+    attempt: options.attempt || 1,
+    maxAttempts: 3,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: 'video-chain',
+    tool: 'video-chain',
+    label: '连续长片生成',
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: '等待连续长片编排器',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: 'aeonquill-video-chain-v1',
+    requestHash: options.requestHash,
+    retryOf: options.retryOf,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, 'orchestration', estimatedMilliseconds, now)],
+    request,
+    sourceElementId: request.projectId,
+    childJobIds: [...(options.resumeChildJobIds || [])],
+    logs: [{
+      at: now,
+      level: 'info',
+      message: options.resumeChildJobIds?.length
+        ? `连续长片重试任务已创建；将检查 ${options.resumeChildJobIds.length} 个既有镜头断点`
+        : `连续长片任务已创建，共 ${request.shots.length} 个 5 秒镜头`,
+    }],
   }
 }
 
@@ -1507,6 +1656,349 @@ async function runVideoJob(jobId, { signal }) {
   }
 }
 
+function finalCutSourceJobs(request) {
+  return request.sourceJobIds.map((sourceJobId) => {
+    const source = store.get(sourceJobId)
+    if (!source) {
+      throw Object.assign(new Error(`成片源镜头不存在：${sourceJobId}`), {
+        code: 'FINAL_CUT_SOURCE_NOT_FOUND',
+        status: 409,
+      })
+    }
+    if (!['video', 'provider-video'].includes(source.kind) || source.status !== 'completed' || !source.outputPath) {
+      throw Object.assign(new Error(`成片源镜头尚未完成或不可用：${sourceJobId}`), {
+        code: 'FINAL_CUT_SOURCE_NOT_READY',
+        status: 409,
+      })
+    }
+    return {
+      job: source,
+      path: assertManagedPrivatePath(source.outputPath, assetDirectory),
+    }
+  })
+}
+
+async function runFinalCutJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  const outputFilename = `${job.id}-720p.mp4`
+  const outputPath = join(assetDirectory, outputFilename)
+  const temporaryOutputPath = join(assetDirectory, `${job.id}.part.mp4`)
+  let completed = false
+  try {
+    await store.update(jobId, {
+      status: 'running',
+      phase: 'preparing',
+      progress: 4,
+      detail: '验证镜头来源与成片契约',
+      outputPath,
+      temporaryOutputPath,
+    })
+    const sources = finalCutSourceJobs(job.request)
+    await Promise.all(sources.map(({ path }) => stat(path)))
+    await store.log(jobId, 'success', `已锁定 ${sources.length} 个不可变视频源版本`)
+    await store.update(jobId, {
+      phase: 'encoding',
+      progress: 8,
+      detail: '探测镜头媒体规格',
+    })
+    const finalCutMetadata = await renderFinalCut({
+      ffmpegPath,
+      ffprobePath,
+      inputPaths: sources.map(({ path }) => path),
+      outputPath: temporaryOutputPath,
+      request: job.request,
+      signal,
+      onProgress(update) {
+        const detail = update.phase === 'probing' ? '探测并统一镜头媒体规格' : '正在进行 720P 转场、响度与成片编码'
+        void store.update(jobId, { phase: update.phase, progress: update.progress, detail })
+      },
+    })
+    await rename(temporaryOutputPath, outputPath)
+    await store.update(jobId, {
+      phase: 'saving',
+      progress: 97,
+      detail: '写入成片资产与交付副本',
+      temporaryOutputPath: undefined,
+    })
+    const outputVersion = await describeOutputVersion(job, outputPath, 'video/mp4')
+    const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
+    await store.log(jobId, 'success', `成片媒体质检通过：${finalCutMetadata.outputProbe.width}×${finalCutMetadata.outputProbe.height} / ${finalCutMetadata.outputProbe.duration.toFixed(2)} 秒`)
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: '成片完成，镜头源文件保持不变',
+      outputUrl: `/api/assets/${encodeURIComponent(outputFilename)}`,
+      output: { filename: outputFilename, subfolder: '', type: 'output' },
+      outputVersion,
+      finalCutMetadata: {
+        ...finalCutMetadata,
+        sourceJobIds: job.request.sourceJobIds,
+      },
+      delivery,
+      completedAt: Date.now(),
+      temporaryOutputPath: undefined,
+    })
+    completed = true
+  } catch (error) {
+    const latest = store.get(jobId)
+    if (error.name === 'AbortError' || latest?.cancelRequested || signal.reason?.code === 'JOB_CANCELLED') {
+      await store.update(jobId, {
+        status: 'cancelled',
+        phase: 'cancelled',
+        detail: '成片任务已取消，镜头源文件未改变',
+      })
+      await store.log(jobId, 'warning', '成片任务已由用户取消')
+      return
+    }
+    if (signal.reason?.code === 'JOB_TIMEOUT') throw error
+    await store.log(jobId, 'error', `${error.code || 'FINAL_CUT_FAILED'}：${redactSensitiveText(error.message)}`)
+    await store.update(jobId, {
+      status: 'failed',
+      phase: 'failed',
+      detail: '成片合成失败',
+      error: {
+        code: error.code || 'FINAL_CUT_FAILED',
+        title: '成片合成失败',
+        message: redactSensitiveText(error.message || '本地剪辑执行器返回未知错误'),
+        suggestions: ['确认所有镜头 Job 已完成', '检查 FFmpeg/FFprobe 运行时', '保留源镜头后重试成片'],
+        details: error.details,
+      },
+    })
+  } finally {
+    await unlink(temporaryOutputPath).catch(() => {})
+    if (!completed) await unlink(outputPath).catch(() => {})
+  }
+}
+
+async function waitForManagedChildJob(parentJobId, childJobId, {
+  signal,
+  phase,
+  detailPrefix,
+  progressStart,
+  progressEnd,
+}) {
+  let lastProgress = -1
+  let lastStatus = ''
+  while (true) {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error('连续长片任务已取消'), { name: 'AbortError' })
+    const child = store.get(childJobId)
+    if (!child) {
+      throw Object.assign(new Error(`连续长片子任务不存在：${childJobId}`), {
+        code: 'VIDEO_CHAIN_CHILD_NOT_FOUND',
+      })
+    }
+    if (child.status === 'completed') return child
+    if (child.status === 'failed' || child.status === 'cancelled') {
+      throw Object.assign(new Error(child.error?.message || `${detailPrefix}未能完成`), {
+        code: 'VIDEO_CHAIN_CHILD_FAILED',
+        details: {
+          childJobId,
+          childStatus: child.status,
+          childError: child.error,
+        },
+      })
+    }
+    const childProgress = Math.max(0, Math.min(100, Number(child.progress || 0)))
+    const progress = Math.min(progressEnd, Math.round(progressStart + ((progressEnd - progressStart) * childProgress) / 100))
+    if (progress !== lastProgress || child.status !== lastStatus) {
+      lastProgress = progress
+      lastStatus = child.status
+      await store.update(parentJobId, {
+        phase,
+        progress,
+        detail: `${detailPrefix} · ${child.detail || child.status}`,
+      })
+    }
+    await abortableDelay(1_000, signal)
+  }
+}
+
+async function runVideoChainJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  const childJobIds = [...(job.childJobIds || [])]
+  let activeChildJobId
+  const handoffPaths = new Set()
+  try {
+    await store.update(jobId, {
+      status: 'running',
+      phase: 'planning',
+      progress: 1,
+      detail: `锁定 ${job.request.shots.length} 镜连续 H3 生成计划`,
+      error: null,
+    })
+    await store.log(jobId, 'success', '连续长片计划已锁定：首镜 T2V，后续镜头末帧接力 I2V')
+
+    let previousVideoPath
+    for (let index = 0; index < job.request.shots.length; index += 1) {
+      const shot = job.request.shots[index]
+      const shotNumber = index + 1
+      const progressStart = 2 + Math.round((index / job.request.shots.length) * 84)
+      const progressEnd = 2 + Math.round(((index + 1) / job.request.shots.length) * 84)
+      const resumableChildId = childJobIds[index]
+      const resumableChild = resumableChildId ? store.get(resumableChildId) : null
+      if (resumableChild?.status === 'completed' && resumableChild.outputPath) {
+        const candidatePath = assertManagedPrivatePath(resumableChild.outputPath, assetDirectory)
+        const candidateReadable = await stat(candidatePath).then(() => true).catch(() => false)
+        if (candidateReadable) {
+          previousVideoPath = candidatePath
+          await store.update(jobId, {
+            childJobIds,
+            phase: 'recovering',
+            progress: progressEnd,
+            detail: `复用第 ${shotNumber}/${job.request.shots.length} 镜断点`,
+          })
+          await store.log(jobId, 'success', `第 ${shotNumber} 镜复用已完成断点：${resumableChildId}`)
+          continue
+        }
+      }
+      if (resumableChildId) {
+        childJobIds.splice(index)
+        await store.update(jobId, { childJobIds })
+        await store.log(jobId, 'warning', `第 ${shotNumber} 镜断点不可复用，从本镜继续生成`)
+      }
+      let handoffPath
+      let sourceImageDataUrl
+      if (index > 0) {
+        if (!previousVideoPath) {
+          throw Object.assign(new Error(`第 ${shotNumber} 镜缺少上一镜视频资产`), { code: 'VIDEO_CHAIN_HANDOFF_MISSING' })
+        }
+        handoffPath = join(inputDirectory, `${job.id}-handoff-${String(index).padStart(2, '0')}.png`)
+        handoffPaths.add(handoffPath)
+        await store.update(jobId, {
+          phase: 'handoff',
+          progress: progressStart,
+          detail: `提取第 ${index} 镜末帧，接力第 ${shotNumber} 镜`,
+        })
+        await extractVideoHandoffFrame(
+          assertManagedPrivatePath(previousVideoPath, assetDirectory),
+          handoffPath,
+          shot.aspectRatio,
+          signal,
+        )
+        const frameBytes = await readFile(assertManagedPrivatePath(handoffPath, inputDirectory))
+        sourceImageDataUrl = `data:image/png;base64,${frameBytes.toString('base64')}`
+      }
+
+      const childRequest = {
+        ...shot,
+        mode: index === 0 ? 'text-to-video' : 'image-to-video',
+        duration: 5,
+        ...(sourceImageDataUrl ? { sourceImageDataUrl } : {}),
+      }
+      const childResult = await createVideoJob(childRequest, undefined, {
+        idempotencyKey: `video-chain:${job.id}:shot:${index}`,
+        priority: 52,
+      })
+      activeChildJobId = childResult.job.id
+      if (!childJobIds.includes(activeChildJobId)) childJobIds.push(activeChildJobId)
+      await store.update(jobId, {
+        childJobIds,
+        activeChildJobId,
+        phase: 'generating',
+        progress: progressStart,
+        detail: `正在生成第 ${shotNumber}/${job.request.shots.length} 镜`,
+      })
+      await store.log(jobId, 'info', `第 ${shotNumber} 镜已提交：${activeChildJobId}`)
+      if (handoffPath) {
+        await unlink(handoffPath).catch(() => {})
+        handoffPaths.delete(handoffPath)
+      }
+      const completedChild = await waitForManagedChildJob(jobId, activeChildJobId, {
+        signal,
+        phase: 'generating',
+        detailPrefix: `第 ${shotNumber}/${job.request.shots.length} 镜`,
+        progressStart,
+        progressEnd,
+      })
+      previousVideoPath = completedChild.outputPath
+      await store.log(jobId, 'success', `第 ${shotNumber} 镜完成；${shotNumber < job.request.shots.length ? '末帧将用于下一镜接力' : '准备进入成片'}`)
+    }
+
+    const finalCutResult = await createFinalCutJob({
+      sourceJobIds: childJobIds,
+      projectId: job.request.projectId,
+      title: job.request.title,
+      transitionSeconds: job.request.transitionSeconds,
+      width: job.request.width,
+      height: job.request.height,
+      fps: job.request.fps,
+    }, undefined, {
+      idempotencyKey: `video-chain:${job.id}:final-cut`,
+      priority: 45,
+    })
+    activeChildJobId = finalCutResult.job.id
+    await store.update(jobId, {
+      activeChildJobId,
+      finalCutJobId: activeChildJobId,
+      phase: 'finalizing',
+      progress: 87,
+      detail: '全部镜头完成，正在执行 720P 成片与音频连续化',
+    })
+    await store.log(jobId, 'info', `成片任务已提交：${activeChildJobId}`)
+    const finalCut = await waitForManagedChildJob(jobId, activeChildJobId, {
+      signal,
+      phase: 'finalizing',
+      detailPrefix: '720P 成片',
+      progressStart: 87,
+      progressEnd: 99,
+    })
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: '连续长片生成、接力、剪辑与媒体质检全部完成',
+      outputPath: finalCut.outputPath,
+      outputUrl: finalCut.outputUrl,
+      output: finalCut.output,
+      outputVersion: finalCut.outputVersion,
+      finalCutMetadata: finalCut.finalCutMetadata,
+      delivery: finalCut.delivery,
+      childJobIds,
+      activeChildJobId: undefined,
+      finalCutJobId: finalCut.id,
+      completedAt: Date.now(),
+    })
+    await store.log(jobId, 'success', `一站式连续长片完成：${finalCut.outputUrl}`)
+  } catch (error) {
+    const latest = store.get(jobId)
+    const childId = latest?.activeChildJobId || activeChildJobId
+    if (childId) {
+      const child = store.get(childId)
+      if (child && ['queued', 'running'].includes(child.status)) await cancelJob(child)
+    }
+    if (error.name === 'AbortError' || latest?.cancelRequested || signal.reason?.code === 'JOB_CANCELLED') {
+      await store.update(jobId, {
+        status: 'cancelled',
+        phase: 'cancelled',
+        detail: '连续长片任务已取消；已完成镜头仍保留',
+        activeChildJobId: undefined,
+      })
+      await store.log(jobId, 'warning', '连续长片编排已由用户取消')
+      return
+    }
+    if (signal.reason?.code === 'JOB_TIMEOUT') throw error
+    await store.update(jobId, {
+      status: 'failed',
+      phase: 'failed',
+      detail: '连续长片生成失败；已完成镜头仍保留',
+      activeChildJobId: undefined,
+      error: {
+        code: error.code || 'VIDEO_CHAIN_FAILED',
+        title: '连续长片生成失败',
+        message: redactSensitiveText(error.message || '连续长片编排器返回未知错误'),
+        suggestions: ['查看父任务与当前子任务日志', '确认 H3 工作流与模型完整后快速重试', '已完成镜头可以单独打开或手动成片'],
+        details: error.details,
+      },
+    })
+    await store.log(jobId, 'error', `${error.code || 'VIDEO_CHAIN_FAILED'}：${redactSensitiveText(error.message)}`)
+  } finally {
+    for (const handoffPath of handoffPaths) await unlink(handoffPath).catch(() => {})
+  }
+}
+
 const generationRequestFields = {
   image: new Set(['projectId', 'title', 'prompt', 'negativePrompt', 'size', 'quality', 'budgetUsd', 'referenceAssetId']),
   speech: new Set(['projectId', 'title', 'text', 'voice', 'format', 'speed', 'budgetUsd']),
@@ -1746,6 +2238,58 @@ async function createVideoJob(body, retrySource, options = {}) {
     for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
     return { job: store.publicJob(added.job), reused: true }
   }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
+async function createFinalCutJob(body, retrySource, options = {}) {
+  const request = retrySource ? validateFinalCutRequest(retrySource.request) : validateFinalCutRequest(body)
+  finalCutSourceJobs(request)
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('final-cut-retry', { sourceJobId: retrySource.id, sourceRequestHash: retrySource.requestHash, attempt })
+    : hashRequest('final-cut', request)
+  const existing = existingIdempotentJob('final-cut', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  await assertStorageCapacity(runtimeDirectory, 768 * 1024 * 1024)
+  const job = newFinalCutJob(request, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+    attempt,
+    retryOf: retrySource?.id,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
+async function createVideoChainJob(body, retrySource, options = {}) {
+  const request = retrySource ? validateVideoChainRequest(retrySource.request) : validateVideoChainRequest(body)
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('video-chain-retry', { sourceJobId: retrySource.id, sourceRequestHash: retrySource.requestHash, attempt })
+    : hashRequest('video-chain', request)
+  const existing = existingIdempotentJob('video-chain', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  const requiredStorageBytes = request.shots.reduce(
+    (total, shot) => total + estimateVideoStorageBytes(shot),
+    1024 * 1024 * 1024,
+  )
+  await assertStorageCapacity(runtimeDirectory, requiredStorageBytes)
+  const job = newVideoChainJob(request, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+    attempt,
+    retryOf: retrySource?.id,
+    resumeChildJobIds: retrySource?.childJobIds,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
   await scheduler.enqueue(job.id)
   return { job: store.publicJob(store.get(job.id)), reused: false }
 }
@@ -2036,7 +2580,12 @@ async function prepareRecoveredJobs() {
   }
 }
 
-scheduler.register('image', runImageJob).register('video', runVideoJob).register('provider-video', runProviderVideoJob)
+scheduler
+  .register('image', runImageJob)
+  .register('video', runVideoJob)
+  .register('provider-video', runProviderVideoJob)
+  .register('final-cut', runFinalCutJob)
+  .register('video-chain', runVideoChainJob)
 await prepareRecoveredJobs()
 await scheduler.recover()
 
@@ -2867,6 +3416,26 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, result.reused ? 200 : 202, result)
     }
+    if (request.method === 'POST' && pathname === '/api/jobs/final-cut') {
+      const body = await readJsonBody(request, 32 * 1024)
+      const result = await createFinalCutJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 40),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
+    if (request.method === 'POST' && pathname === '/api/jobs/video-chain') {
+      const body = await readJsonBody(request, 256 * 1024)
+      const result = await createVideoChainJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 35),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
     const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname)
     if (request.method === 'GET' && jobMatch) {
       const job = store.get(decodeURIComponent(jobMatch[1]))
@@ -2902,7 +3471,11 @@ const server = createServer(async (request, response) => {
           : await createImageJob({}, source, options)
         : source.kind === 'provider-video'
           ? await createProviderVideoJob({}, source, options)
-        : await createVideoJob({}, source, options)
+          : source.kind === 'final-cut'
+            ? await createFinalCutJob({}, source, options)
+            : source.kind === 'video-chain'
+              ? await createVideoChainJob({}, source, options)
+              : await createVideoJob({}, source, options)
       return sendJson(response, result.reused ? 200 : 202, result)
     }
     const assetMatch = /^\/api\/assets\/([^/]+)$/.exec(pathname)

@@ -292,10 +292,38 @@ export type VideoJobRequest = {
   }
 }
 
+export type FinalCutJobRequest = {
+  sourceJobIds: string[]
+  projectId?: string
+  title: string
+  transitionSeconds: number
+  width: 1280
+  height: 720
+  fps: 24 | 25 | 30
+}
+
+export type VideoChainShotRequest = Omit<
+  VideoJobRequest,
+  'sourceImageDataUrl' | 'lastFrameImageDataUrl' | 'mode' | 'duration'
+> & {
+  mode?: VideoGenerationMode
+  duration?: 5
+}
+
+export type VideoChainJobRequest = {
+  projectId: string
+  title: string
+  shots: VideoChainShotRequest[]
+  transitionSeconds: number
+  width: 1280
+  height: 720
+  fps: 24 | 25 | 30
+}
+
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video' | 'provider-video'
-  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'byok-video'
+  kind?: 'image' | 'video' | 'provider-video' | 'final-cut' | 'video-chain'
+  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'byok-video' | 'final-cut' | 'video-chain'
   label: string
   status: ProcessingJobStatus
   phase?: VideoJobPhase
@@ -358,6 +386,8 @@ export type ProcessingJob = {
   request?:
     | (Omit<VideoJobRequest, 'sourceImageDataUrl' | 'lastFrameImageDataUrl'> & { hasLastFrame?: boolean })
     | StoredImageJobRequest
+    | FinalCutJobRequest
+    | VideoChainJobRequest
   sourceElementId?: string
   comfyPromptId?: string
   sampleStep?: number
@@ -378,6 +408,38 @@ export type ProcessingJob = {
     actualCostUsd: number | null
     elapsedMs: number
   }
+  finalCutMetadata?: {
+    version: string
+    sourceCount: number
+    sourceJobIds: string[]
+    transitionSeconds: number
+    expectedDuration: number
+    sourceProbes: Array<{
+      duration: number
+      hasAudio: boolean
+      width: number
+      height: number
+      videoCodec: string
+      audioCodec: string | null
+      frameRate: string
+      sampleRate: number | null
+      channels: number | null
+    }>
+    outputProbe: {
+      duration: number
+      hasAudio: boolean
+      width: number
+      height: number
+      videoCodec: string
+      audioCodec: string | null
+      frameRate: string
+      sampleRate: number | null
+      channels: number | null
+    }
+  }
+  childJobIds?: string[]
+  activeChildJobId?: string
+  finalCutJobId?: string
   delivery?: {
     status: 'copied' | 'failed'
     filename?: string

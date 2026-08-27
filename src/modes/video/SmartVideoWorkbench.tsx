@@ -63,6 +63,8 @@ import {
 } from '../../lib/story/productionPipeline.mjs'
 import {
   cancelVideoJob,
+  createFinalCutJob,
+  createVideoChainJob,
   createVideoJob,
   fetchRuntimeStatus,
   fetchVideoJobs,
@@ -419,6 +421,14 @@ export function SmartVideoWorkbench({
     () => submittedJobIds.map((id) => jobById.get(id)).filter((job): job is ProcessingJob => Boolean(job)),
     [submittedJobIds, jobById],
   )
+  const completedShotJobs = useMemo(
+    () => submittedJobs.filter((job) => ['video', 'provider-video'].includes(job.kind ?? '') && job.status === 'completed' && job.outputUrl),
+    [submittedJobs],
+  )
+  const finalCutJobs = useMemo(
+    () => submittedJobs.filter((job) => job.kind === 'final-cut'),
+    [submittedJobs],
+  )
 
   const invalidateExecution = () => {
     setChecklist(null)
@@ -717,6 +727,68 @@ export function SmartVideoWorkbench({
       revealWorkspace('plan')
     } catch (nextError) {
       setError(errorMessage(nextError))
+    }
+  }
+
+  const submitContinuousFilm = async () => {
+    if (!checklist || !confirmation) return
+    setActionBusy('video-chain')
+    setExecutionError(null)
+    try {
+      const current = await refreshChecklistBeforeAction(checklist)
+      const confirmedItems = current.items.filter(({ id }) => confirmation.confirmedItemIds.includes(id))
+      if (confirmedItems.length < 2) throw new Error('连续成片至少需要确认两个镜头。')
+      if (confirmedItems.some(({ mode }) => mode !== 'text-to-video')) {
+        throw new Error('当前一键连续成片以首镜文生视频启动；请切换为文生视频后重新检查清单。')
+      }
+      const submissions = compileConfirmedVideoRequests(current, confirmation, [])
+      const job = await createVideoChainJob({
+        projectId: workspaceProjectId ?? projectId ?? result.project.id,
+        title: `${projectTitle ?? result.project.title} · 连续长片`,
+        shots: submissions.map(({ request }) => {
+          const {
+            sourceImageDataUrl: _sourceImageDataUrl,
+            lastFrameImageDataUrl: _lastFrameImageDataUrl,
+            mode: _mode,
+            duration: _duration,
+            ...shot
+          } = request
+          return { ...shot, mode: 'text-to-video' as const, duration: 5 as const }
+        }),
+        transitionSeconds: 0.24,
+        width: 1280,
+        height: 720,
+        fps: 24,
+      }, { priority: 35 })
+      setJobs((existing) => upsertJob(existing, job))
+      setSubmittedJobIds((existing) => existing.includes(job.id) ? existing : [...existing, job.id])
+    } catch (nextError) {
+      setExecutionError(errorMessage(nextError))
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
+  const submitFinalCut = async () => {
+    if (completedShotJobs.length < 2) return
+    setActionBusy('final-cut')
+    setExecutionError(null)
+    try {
+      const job = await createFinalCutJob({
+        sourceJobIds: completedShotJobs.map(({ id }) => id),
+        projectId: workspaceProjectId ?? projectId,
+        title: `${projectTitle ?? result.project.title} · 720P 成片`,
+        transitionSeconds: 0.24,
+        width: 1280,
+        height: 720,
+        fps: 24,
+      }, { priority: 40 })
+      setJobs((existing) => upsertJob(existing, job))
+      setSubmittedJobIds((existing) => existing.includes(job.id) ? existing : [...existing, job.id])
+    } catch (nextError) {
+      setExecutionError(errorMessage(nextError))
+    } finally {
+      setActionBusy(null)
     }
   }
 
@@ -1295,6 +1367,15 @@ export function SmartVideoWorkbench({
                       {actionBusy === 'submit' ? <Loader2 size={15} className="is-spinning" /> : <Send size={15} />}
                       提交 {confirmation?.confirmedItemIds.length ?? 0} 个 Job
                     </button>
+                    <button
+                      type="button"
+                      className="is-primary aq-video-chain-button"
+                      onClick={submitContinuousFilm}
+                      disabled={!confirmation || confirmation.confirmedItemIds.length < 2 || actionBusy !== null}
+                    >
+                      {actionBusy === 'video-chain' ? <Loader2 size={15} className="is-spinning" /> : <Clapperboard size={15} />}
+                      一键连续生成并成片
+                    </button>
                   </div>
                   {confirmation ? (
                     <small><CheckCircle2 size={13} /> 已锁定确认指纹 {confirmation.digest.slice(0, 16)}…；任何字段变化都需要重新确认。</small>
@@ -1305,7 +1386,20 @@ export function SmartVideoWorkbench({
 
             {submittedJobs.length ? (
               <div className="aq-video-submitted-ledger">
-                <div><Send size={15} /><strong>已提交 Job</strong><small>来自当前工作台会话，状态由共享 SSE 更新</small></div>
+                <div>
+                  <Send size={15} />
+                  <strong>已提交 Job</strong>
+                  <small>来自当前工作台会话，状态由共享 SSE 更新</small>
+                  <button
+                    type="button"
+                    className="aq-video-final-cut-button"
+                    disabled={completedShotJobs.length < 2 || finalCutJobs.some(({ status }) => ['queued', 'running'].includes(status)) || actionBusy !== null}
+                    onClick={submitFinalCut}
+                  >
+                    {actionBusy === 'final-cut' ? <Loader2 size={14} className="is-spinning" /> : <Clapperboard size={14} />}
+                    合成 {completedShotJobs.length} 镜 720P 成片
+                  </button>
+                </div>
                 <div>
                   {submittedJobs.map((job) => (
                     <article key={job.id}>
@@ -1313,6 +1407,7 @@ export function SmartVideoWorkbench({
                       <code>{job.id}</code>
                       <p>{job.detail}</p>
                       <b>{job.progress}%</b>
+                      {job.status === 'completed' && job.outputUrl ? <a href={job.outputUrl} target="_blank" rel="noreferrer">打开 MP4</a> : null}
                     </article>
                   ))}
                 </div>
