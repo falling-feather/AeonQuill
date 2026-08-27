@@ -1,4 +1,4 @@
-export const VIDEO_PRODUCTION_SCHEMA_VERSION = 1
+export const VIDEO_PRODUCTION_SCHEMA_VERSION = 2
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION = 1
 
 export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
@@ -7,11 +7,16 @@ export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
   maxOutputCharacters: 12_000,
   maxDurationMinutes: 30,
   maxEvents: 200,
+  maxChangeCards: 80,
+  maxCharacters: 16,
 })
 
 const PROJECT_KIND = 'aeonquill.video-production'
 const NODE_STATUSES = new Set(['waiting', 'ready', 'running', 'paused', 'review', 'approved', 'revision', 'failed'])
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1'])
+const GENERATION_MODES = new Set(['fast', 'quality'])
+const CHARACTER_MODES = new Set(['quick', 'professional'])
+const CHANGE_CARD_STATUSES = new Set(['proposed', 'accepted', 'rejected', 'superseded'])
 const COMMAND_TYPES = new Set([
   'project.patch',
   'project.pause',
@@ -25,6 +30,9 @@ const COMMAND_TYPES = new Set([
   'node.request-revision',
   'node.fail',
   'node.reset',
+  'proposal.create',
+  'proposal.accept',
+  'proposal.reject',
 ])
 
 const NODE_BLUEPRINTS = Object.freeze([
@@ -184,12 +192,131 @@ function stableToken(value) {
   return (hash >>> 0).toString(36)
 }
 
+export function recommendProductionProfiles(input = {}) {
+  const value = record(input, 'input')
+  knownFields(value, new Set(['durationMinutes', 'genre', 'brief']), 'input')
+  const durationMinutes = integer(value.durationMinutes ?? 1, 'input.durationMinutes', 1, VIDEO_PRODUCTION_LIMITS.maxDurationMinutes)
+  const genre = string(value.genre ?? '综合创作', 'input.genre', 1, 40)
+  const brief = string(value.brief ?? genre, 'input.brief', 1, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
+  const qualitySignal = /广告|品牌|产品|电影|质感|展示|宣传|预告/u.test(`${genre} ${brief}`)
+  const characterSignal = /人物|角色|主角|演员|武侠|剧情|短剧|故事|对话/u.test(`${genre} ${brief}`)
+  const generationMode = durationMinutes <= 2 || qualitySignal ? 'quality' : 'fast'
+  const characterMode = characterSignal ? 'professional' : 'quick'
+  const reasons = [
+    generationMode === 'quality'
+      ? '时长或视觉诉求适合逐镜头质量母版；系统建议 Base/时序精修，但仍由用户最终选择。'
+      : '总时长较长，系统建议先用极速链打通全片，再挑重点镜头精修。',
+    characterMode === 'professional'
+      ? '文本包含持续角色信号，建议三视图、身份锁和服饰状态约束。'
+      : '未检测到强角色连续性需求，单立绘快速方案更节省准备时间。',
+  ]
+  return { generationMode, characterMode, reasons }
+}
+
+function createCharacterProfiles(characterMode, now, genre) {
+  const professional = characterMode === 'professional'
+  return [{
+    id: 'character-lead',
+    name: genre.includes('武侠') ? '沈砚' : '主角',
+    role: 'lead',
+    mode: characterMode,
+    status: 'draft',
+    identityLock: professional
+      ? '脸型、发型、年龄、体态、主色与标志性道具不得跨镜头漂移。'
+      : '保留正面立绘中的主体轮廓、主色和标志物。',
+    views: (professional ? ['front', 'side', 'back'] : ['front']).map((view) => ({
+      id: `character-lead-${view}`,
+      view,
+      status: 'planned',
+      assetVersionId: null,
+    })),
+    wardrobeStates: (professional
+      ? [
+          { id: 'wardrobe-base', label: '基础造型', trigger: '默认场景' },
+          { id: 'wardrobe-variant', label: '场景变体', trigger: '剧本声明换装/天气/受损时' },
+        ]
+      : [{ id: 'wardrobe-base', label: '基础造型', trigger: '全片复用' }]
+    ).map((wardrobe) => ({ ...wardrobe, status: 'planned', assetVersionId: null })),
+    revision: 0,
+    updatedAt: now,
+  }]
+}
+
+function assertRecommendation(value, path) {
+  const recommendation = record(value, path)
+  knownFields(recommendation, new Set(['generationMode', 'characterMode', 'reasons']), path)
+  if (!GENERATION_MODES.has(recommendation.generationMode)) fail('INVALID_GENERATION_MODE', `${path}.generationMode is unsupported`)
+  if (!CHARACTER_MODES.has(recommendation.characterMode)) fail('INVALID_CHARACTER_MODE', `${path}.characterMode is unsupported`)
+  if (!Array.isArray(recommendation.reasons) || recommendation.reasons.length < 1 || recommendation.reasons.length > 4) fail('INVALID_RECOMMENDATION', `${path}.reasons is invalid`)
+  recommendation.reasons.forEach((reason, index) => string(reason, `${path}.reasons[${index}]`, 1, 300))
+}
+
+function assertCharacterProfile(value, path) {
+  const profile = record(value, path)
+  knownFields(profile, new Set(['id', 'name', 'role', 'mode', 'status', 'identityLock', 'views', 'wardrobeStates', 'revision', 'updatedAt']), path)
+  id(profile.id, `${path}.id`)
+  string(profile.name, `${path}.name`, 1, 80)
+  string(profile.role, `${path}.role`, 1, 40)
+  if (!CHARACTER_MODES.has(profile.mode)) fail('INVALID_CHARACTER_MODE', `${path}.mode is unsupported`)
+  if (!['draft', 'review', 'approved', 'revision'].includes(profile.status)) fail('INVALID_CHARACTER_STATUS', `${path}.status is unsupported`)
+  string(profile.identityLock, `${path}.identityLock`, 1, 1_000)
+  if (!Array.isArray(profile.views) || profile.views.length < 1 || profile.views.length > 8) fail('INVALID_CHARACTER_VIEWS', `${path}.views is invalid`)
+  for (const [index, viewInput] of profile.views.entries()) {
+    const view = record(viewInput, `${path}.views[${index}]`)
+    knownFields(view, new Set(['id', 'view', 'status', 'assetVersionId']), `${path}.views[${index}]`)
+    id(view.id, `${path}.views[${index}].id`)
+    if (!['front', 'side', 'back', 'expression', 'action'].includes(view.view)) fail('INVALID_CHARACTER_VIEW', `${path}.views[${index}].view is unsupported`)
+    if (!['planned', 'ready', 'approved'].includes(view.status)) fail('INVALID_CHARACTER_ASSET_STATUS', `${path}.views[${index}].status is unsupported`)
+    if (view.assetVersionId !== null) id(view.assetVersionId, `${path}.views[${index}].assetVersionId`)
+  }
+  if (profile.mode === 'professional' && !['front', 'side', 'back'].every((view) => profile.views.some((item) => item.view === view))) {
+    fail('CHARACTER_CONSTRAINT_INCOMPLETE', `${path} professional mode requires front, side and back views`)
+  }
+  if (!Array.isArray(profile.wardrobeStates) || profile.wardrobeStates.length < 1 || profile.wardrobeStates.length > 12) fail('INVALID_WARDROBE_STATES', `${path}.wardrobeStates is invalid`)
+  for (const [index, wardrobeInput] of profile.wardrobeStates.entries()) {
+    const wardrobe = record(wardrobeInput, `${path}.wardrobeStates[${index}]`)
+    knownFields(wardrobe, new Set(['id', 'label', 'trigger', 'status', 'assetVersionId']), `${path}.wardrobeStates[${index}]`)
+    id(wardrobe.id, `${path}.wardrobeStates[${index}].id`)
+    string(wardrobe.label, `${path}.wardrobeStates[${index}].label`, 1, 80)
+    string(wardrobe.trigger, `${path}.wardrobeStates[${index}].trigger`, 1, 200)
+    if (!['planned', 'ready', 'approved'].includes(wardrobe.status)) fail('INVALID_CHARACTER_ASSET_STATUS', `${path}.wardrobeStates[${index}].status is unsupported`)
+    if (wardrobe.assetVersionId !== null) id(wardrobe.assetVersionId, `${path}.wardrobeStates[${index}].assetVersionId`)
+  }
+  integer(profile.revision, `${path}.revision`, 0, Number.MAX_SAFE_INTEGER)
+  integer(profile.updatedAt, `${path}.updatedAt`, 1, Number.MAX_SAFE_INTEGER)
+}
+
+function assertChangeCard(value, path, knownNodeIds) {
+  const card = record(value, path)
+  knownFields(card, new Set(['id', 'nodeId', 'baseNodeRevision', 'status', 'source', 'title', 'rationale', 'proposedInstructions', 'proposedOutputSummary', 'createdAt', 'resolvedAt']), path)
+  id(card.id, `${path}.id`)
+  id(card.nodeId, `${path}.nodeId`)
+  if (!knownNodeIds.has(card.nodeId)) fail('UNKNOWN_NODE', `${path}.nodeId is unknown`)
+  integer(card.baseNodeRevision, `${path}.baseNodeRevision`, 0, Number.MAX_SAFE_INTEGER)
+  if (!CHANGE_CARD_STATUSES.has(card.status)) fail('INVALID_CHANGE_CARD_STATUS', `${path}.status is unsupported`)
+  if (!['deterministic-local', 'byok-text'].includes(card.source)) fail('INVALID_CHANGE_CARD_SOURCE', `${path}.source is unsupported`)
+  string(card.title, `${path}.title`, 1, 120)
+  string(card.rationale, `${path}.rationale`, 1, 1_000)
+  if (card.proposedInstructions !== null) string(card.proposedInstructions, `${path}.proposedInstructions`, 1, VIDEO_PRODUCTION_LIMITS.maxInstructionCharacters)
+  if (card.proposedOutputSummary !== null) string(card.proposedOutputSummary, `${path}.proposedOutputSummary`, 1, VIDEO_PRODUCTION_LIMITS.maxOutputCharacters)
+  if (card.proposedInstructions === null && card.proposedOutputSummary === null) fail('EMPTY_PROPOSAL', `${path} must propose instructions or output`)
+  integer(card.createdAt, `${path}.createdAt`, 1, Number.MAX_SAFE_INTEGER)
+  if (card.resolvedAt !== null) integer(card.resolvedAt, `${path}.resolvedAt`, card.createdAt, Number.MAX_SAFE_INTEGER)
+  if (card.status === 'proposed' && card.resolvedAt !== null) fail('INVALID_CHANGE_CARD_STATUS', `${path}.resolvedAt must be null while proposed`)
+  if (card.status !== 'proposed' && card.resolvedAt === null) fail('INVALID_CHANGE_CARD_STATUS', `${path}.resolvedAt is required after resolution`)
+}
+
 function defaultInstructions(blueprint, settings) {
   if (blueprint.role === 'screenwriter') {
     return `基于制片计划设计完整${settings.genre}短剧：三幕结构、约 ${settings.sceneCount} 场、人物弧光、关键冲突和中文对白；不得把概述冒充终稿。`
   }
   if (blueprint.role === 'storyboard-director') {
-    return `把已审批剧本拆为约 ${settings.shotCount} 个平均 5 秒镜头，逐镜头声明景别、运动、角色、地点、连续性和首尾帧。`
+    return `把已审批剧本拆为约 ${settings.shotCount} 个平均 5 秒镜头，逐镜头声明景别、运动、角色、地点、连续性和首尾帧；采用${settings.generationMode === 'quality' ? '质量母版' : '极速预演'}策略。`
+  }
+  if (blueprint.role === 'character-designer') {
+    return settings.characterMode === 'professional'
+      ? '建立人物圣经、正侧背三视图、身份锁、基础服饰与按场景触发的服饰变体；每个版本必须独立审批。'
+      : '快速建立单张正面角色立绘、主色和标志物约束，优先缩短首个可用镜头时间。'
   }
   if (blueprint.role === 'video-director') {
     return `把已审批且资产就绪的镜头按每批最多 5 个编入固定 MiniMax H3 清单；单卡顺序执行，不提交任意 ComfyUI JSON。`
@@ -270,6 +397,15 @@ function invalidateDownstream(project, nodeId, at) {
   }
 }
 
+function supersedeNodeProposals(project, nodeId, at, exceptId = null) {
+  for (const card of project.changeCards) {
+    if (card.nodeId === nodeId && card.id !== exceptId && card.status === 'proposed') {
+      card.status = 'superseded'
+      card.resolvedAt = at
+    }
+  }
+}
+
 function assertNode(input, path, knownIds) {
   const node = record(input, path)
   knownFields(node, new Set(['id', 'order', 'role', 'title', 'purpose', 'adapter', 'status', 'dependsOn', 'instructions', 'outputSummary', 'artifact', 'revision', 'updatedAt', 'stale', 'error']), path)
@@ -293,16 +429,19 @@ function assertNode(input, path, knownIds) {
 
 export function assertVideoProductionProject(input) {
   const project = record(input, 'project')
-  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
+  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
   if (project.kind !== PROJECT_KIND || project.schemaVersion !== VIDEO_PRODUCTION_SCHEMA_VERSION) fail('UNSUPPORTED_SCHEMA', 'Unsupported video production schema')
   id(project.id, 'project.id')
   string(project.title, 'project.title', 1, 120)
   string(project.brief, 'project.brief', 1, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
   const settings = record(project.settings, 'project.settings')
-  knownFields(settings, new Set(['durationMinutes', 'genre', 'aspectRatio']), 'project.settings')
+  knownFields(settings, new Set(['durationMinutes', 'genre', 'aspectRatio', 'generationMode', 'characterMode', 'recommendation']), 'project.settings')
   integer(settings.durationMinutes, 'project.settings.durationMinutes', 1, VIDEO_PRODUCTION_LIMITS.maxDurationMinutes)
   string(settings.genre, 'project.settings.genre', 1, 40)
   if (!ASPECT_RATIOS.has(settings.aspectRatio)) fail('INVALID_ASPECT_RATIO', 'project.settings.aspectRatio is unsupported')
+  if (!GENERATION_MODES.has(settings.generationMode)) fail('INVALID_GENERATION_MODE', 'project.settings.generationMode is unsupported')
+  if (!CHARACTER_MODES.has(settings.characterMode)) fail('INVALID_CHARACTER_MODE', 'project.settings.characterMode is unsupported')
+  assertRecommendation(settings.recommendation, 'project.settings.recommendation')
   const estimates = record(project.estimates, 'project.estimates')
   knownFields(estimates, new Set(['sceneCount', 'shotCount', 'batchCount', 'generationMinutesLow', 'generationMinutesHigh']), 'project.estimates')
   integer(estimates.sceneCount, 'project.estimates.sceneCount', 1, 80)
@@ -320,6 +459,13 @@ export function assertVideoProductionProject(input) {
       fail('INVALID_DEPENDENCY', `project.nodes[${index}].dependsOn must only reference earlier production nodes`)
     }
   }
+  if (!Array.isArray(project.characterProfiles) || project.characterProfiles.length < 1 || project.characterProfiles.length > VIDEO_PRODUCTION_LIMITS.maxCharacters) fail('INVALID_CHARACTER_PROFILES', 'project.characterProfiles is invalid')
+  project.characterProfiles.forEach((profile, index) => assertCharacterProfile(profile, `project.characterProfiles[${index}]`))
+  if (new Set(project.characterProfiles.map(({ id: profileId }) => profileId)).size !== project.characterProfiles.length) fail('DUPLICATE_ID', 'project.characterProfiles contains duplicate ids')
+  if (project.characterProfiles.some(({ mode }) => mode !== settings.characterMode)) fail('CHARACTER_MODE_MISMATCH', 'Character profiles must match project.settings.characterMode')
+  if (!Array.isArray(project.changeCards) || project.changeCards.length > VIDEO_PRODUCTION_LIMITS.maxChangeCards) fail('INVALID_CHANGE_CARDS', 'project.changeCards is invalid')
+  project.changeCards.forEach((card, index) => assertChangeCard(card, `project.changeCards[${index}]`, knownIds))
+  if (new Set(project.changeCards.map(({ id: cardId }) => cardId)).size !== project.changeCards.length) fail('DUPLICATE_ID', 'project.changeCards contains duplicate ids')
   boolean(project.globalPaused, 'project.globalPaused')
   boolean(project.autoAdvance, 'project.autoAdvance')
   integer(project.revision, 'project.revision', 0, Number.MAX_SAFE_INTEGER)
@@ -340,49 +486,60 @@ export function assertVideoProductionProject(input) {
 
 export function createVideoProductionProject(input = {}) {
   const value = record(input, 'input')
-  knownFields(value, new Set(['id', 'title', 'brief', 'durationMinutes', 'genre', 'aspectRatio', 'now']), 'input')
+  knownFields(value, new Set(['id', 'title', 'brief', 'durationMinutes', 'genre', 'aspectRatio', 'generationMode', 'characterMode', 'now']), 'input')
   const brief = string(value.brief ?? '我想要生成一部十分钟左右的武侠剧', 'input.brief', 1, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
   const durationMinutes = integer(value.durationMinutes ?? 10, 'input.durationMinutes', 1, VIDEO_PRODUCTION_LIMITS.maxDurationMinutes)
   const genre = string(value.genre ?? '武侠', 'input.genre', 1, 40)
   const aspectRatio = value.aspectRatio ?? '16:9'
   if (!ASPECT_RATIOS.has(aspectRatio)) fail('INVALID_ASPECT_RATIO', 'input.aspectRatio is unsupported')
+  const recommendation = recommendProductionProfiles({ durationMinutes, genre, brief })
+  const generationMode = value.generationMode ?? recommendation.generationMode
+  const characterMode = value.characterMode ?? recommendation.characterMode
+  if (!GENERATION_MODES.has(generationMode)) fail('INVALID_GENERATION_MODE', 'input.generationMode is unsupported')
+  if (!CHARACTER_MODES.has(characterMode)) fail('INVALID_CHARACTER_MODE', 'input.characterMode is unsupported')
   const now = integer(value.now ?? Date.now(), 'input.now', 1, Number.MAX_SAFE_INTEGER)
   const sceneCount = Math.max(3, Math.min(80, Math.round(durationMinutes * 1.2)))
   const shotCount = Math.max(sceneCount, Math.min(320, durationMinutes * 12))
   const batchCount = Math.ceil(shotCount / 5)
-  const settings = { durationMinutes, genre, aspectRatio, sceneCount, shotCount }
+  const perShotLow = generationMode === 'quality' ? 20 : 6
+  const perShotHigh = generationMode === 'quality' ? 40 : 16
+  const generationMinutesLow = shotCount * perShotLow
+  const generationMinutesHigh = shotCount * perShotHigh
+  const settings = { durationMinutes, genre, aspectRatio, sceneCount, shotCount, generationMode, characterMode }
   const project = {
     kind: PROJECT_KIND,
     schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
     id: value.id ? id(value.id, 'input.id') : `production-${stableToken(`${brief}|${durationMinutes}|${genre}|${aspectRatio}`)}`,
-    title: value.title ? string(value.title, 'input.title', 1, 120) : `${durationMinutes} 分钟${genre}短剧`,
+    title: value.title ? string(value.title, 'input.title', 1, 120) : `${durationMinutes} 分钟${genre}视频项目`,
     brief,
-    settings: { durationMinutes, genre, aspectRatio },
+    settings: { durationMinutes, genre, aspectRatio, generationMode, characterMode, recommendation },
     estimates: {
       sceneCount,
       shotCount,
       batchCount,
-      generationMinutesLow: shotCount * 20,
-      generationMinutesHigh: shotCount * 40,
+      generationMinutesLow,
+      generationMinutesHigh,
     },
     nodes: NODE_BLUEPRINTS.map((blueprint, index) => ({
       ...blueprint,
       order: index + 1,
       status: blueprint.id === 'producer' ? 'approved' : blueprint.id === 'screenwriter' ? 'review' : 'waiting',
       instructions: defaultInstructions(blueprint, settings),
-      outputSummary: blueprint.id === 'producer' || blueprint.id === 'screenwriter' ? draftOutput(blueprint.role, { estimates: { sceneCount, shotCount, batchCount, generationMinutesLow: shotCount * 20, generationMinutesHigh: shotCount * 40 } }) : '',
+      outputSummary: blueprint.id === 'producer' || blueprint.id === 'screenwriter' ? draftOutput(blueprint.role, { estimates: { sceneCount, shotCount, batchCount, generationMinutesLow, generationMinutesHigh } }) : '',
       revision: blueprint.id === 'producer' || blueprint.id === 'screenwriter' ? 1 : 0,
       updatedAt: now,
       stale: false,
       error: null,
     })),
+    characterProfiles: createCharacterProfiles(characterMode, now, genre),
+    changeCards: [],
     globalPaused: false,
     autoAdvance: false,
     revision: 0,
     createdAt: now,
     updatedAt: now,
     events: [
-      { id: 'event-0-1', at: now, type: 'project.created', nodeId: null, message: '已建立本地确定性生产图；剧本大纲等待用户审批。' },
+      { id: 'event-0-1', at: now, type: 'project.created', nodeId: null, message: `已建立${generationMode === 'quality' ? '质量' : '极速'}生产图与${characterMode === 'professional' ? '专业人物' : '快速人物'}方案；剧本大纲等待用户审批。` },
     ],
   }
   return assertVideoProductionProject(project)
@@ -393,11 +550,55 @@ export function serializeVideoProductionProject(project, options = {}) {
   return JSON.stringify(project, null, options?.pretty === true ? 2 : 0)
 }
 
+function migrateVideoProductionProjectV1(value) {
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.kind !== PROJECT_KIND) return value
+  const recommendation = recommendProductionProfiles({
+    durationMinutes: value.settings?.durationMinutes,
+    genre: value.settings?.genre,
+    brief: value.brief,
+  })
+  const characterMode = recommendation.characterMode
+  return {
+    ...value,
+    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    settings: {
+      ...value.settings,
+      generationMode: 'quality',
+      characterMode,
+      recommendation,
+    },
+    characterProfiles: createCharacterProfiles(characterMode, value.updatedAt, value.settings.genre),
+    changeCards: [],
+  }
+}
+
 export function deserializeVideoProductionProject(serialized) {
   if (typeof serialized !== 'string') fail('INVALID_SERIALIZED_PROJECT', 'Serialized production project must be a string')
   let parsed
   try { parsed = JSON.parse(serialized) } catch { fail('INVALID_JSON', 'Serialized production project is not valid JSON') }
-  return clone(assertVideoProductionProject(parsed))
+  return clone(assertVideoProductionProject(migrateVideoProductionProjectV1(parsed)))
+}
+
+export function createVideoProductionProjectForStory(storyInput, options = {}) {
+  const story = record(storyInput, 'story')
+  const source = record(story.source, 'story.source')
+  const settings = record(story.settings, 'story.settings')
+  if (!Array.isArray(story.scenes)) fail('INVALID_STORY_PROJECT', 'story.scenes must be an array')
+  const totalSeconds = story.scenes.reduce((total, scene) => total + (Array.isArray(scene?.shots)
+    ? scene.shots.reduce((shotTotal, shot) => shotTotal + (Number.isSafeInteger(shot?.durationSeconds) ? shot.durationSeconds : 0), 0)
+    : 0), 0)
+  const durationMinutes = Math.max(1, Math.min(VIDEO_PRODUCTION_LIMITS.maxDurationMinutes, Math.ceil(totalSeconds / 60)))
+  const brief = String(source.text ?? story.title ?? '智能视频项目').slice(0, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
+  return createVideoProductionProject({
+    title: String(story.title ?? '智能视频项目').slice(0, 120),
+    brief,
+    durationMinutes,
+    genre: options.genre ?? '综合创作',
+    aspectRatio: settings.aspectRatio,
+    generationMode: options.generationMode,
+    characterMode: options.characterMode,
+    now: options.now ?? story.createdAt ?? Date.now(),
+  })
 }
 
 export function createVideoProductionCommand(projectInput, type, payload = {}, options = {}) {
@@ -436,6 +637,25 @@ export function assertVideoProductionCommand(input, projectInput) {
     knownFields(payload, new Set(), 'command.payload')
     return command
   }
+  if (command.type === 'proposal.create') {
+    knownFields(payload, new Set(['cardId', 'nodeId', 'source', 'title', 'rationale', 'proposedInstructions', 'proposedOutputSummary']), 'command.payload')
+    id(payload.cardId, 'command.payload.cardId')
+    id(payload.nodeId, 'command.payload.nodeId')
+    if (project && !project.nodes.some((node) => node.id === payload.nodeId)) fail('UNKNOWN_NODE', `Unknown production node ${payload.nodeId}`)
+    if (!['deterministic-local', 'byok-text'].includes(payload.source)) fail('INVALID_CHANGE_CARD_SOURCE', 'command.payload.source is unsupported')
+    string(payload.title, 'command.payload.title', 1, 120)
+    string(payload.rationale, 'command.payload.rationale', 1, 1_000)
+    if (payload.proposedInstructions !== null && payload.proposedInstructions !== undefined) string(payload.proposedInstructions, 'command.payload.proposedInstructions', 1, VIDEO_PRODUCTION_LIMITS.maxInstructionCharacters)
+    if (payload.proposedOutputSummary !== null && payload.proposedOutputSummary !== undefined) string(payload.proposedOutputSummary, 'command.payload.proposedOutputSummary', 1, VIDEO_PRODUCTION_LIMITS.maxOutputCharacters)
+    if (!payload.proposedInstructions && !payload.proposedOutputSummary) fail('EMPTY_PROPOSAL', 'Proposal must change instructions or output')
+    return command
+  }
+  if (command.type === 'proposal.accept' || command.type === 'proposal.reject') {
+    knownFields(payload, new Set(['cardId']), 'command.payload')
+    id(payload.cardId, 'command.payload.cardId')
+    if (project && !project.changeCards.some((card) => card.id === payload.cardId)) fail('UNKNOWN_CHANGE_CARD', `Unknown change card ${payload.cardId}`)
+    return command
+  }
   knownFields(payload, new Set(command.type === 'node.edit'
     ? ['nodeId', 'instructions', 'outputSummary']
     : command.type === 'node.submit-review'
@@ -453,6 +673,22 @@ export function assertVideoProductionCommand(input, projectInput) {
   if (command.type === 'node.submit-review') string(payload.outputSummary, 'command.payload.outputSummary', 1, VIDEO_PRODUCTION_LIMITS.maxOutputCharacters)
   if (command.type === 'node.fail') string(payload.message, 'command.payload.message', 1, 1_000)
   return command
+}
+
+export function createVideoProductionProposalCommand(projectInput, nodeId, proposalInput, options = {}) {
+  const project = assertVideoProductionProject(projectInput)
+  const proposal = record(proposalInput, 'proposal')
+  knownFields(proposal, new Set(['source', 'title', 'rationale', 'proposedInstructions', 'proposedOutputSummary']), 'proposal')
+  const token = stableToken(`${project.id}|${project.revision}|${nodeId}|${proposal.title ?? ''}|${proposal.proposedOutputSummary ?? ''}`)
+  return createVideoProductionCommand(project, 'proposal.create', {
+    cardId: `change-${project.revision + 1}-${token}`,
+    nodeId,
+    source: proposal.source ?? 'deterministic-local',
+    title: proposal.title,
+    rationale: proposal.rationale,
+    proposedInstructions: proposal.proposedInstructions ?? null,
+    proposedOutputSummary: proposal.proposedOutputSummary ?? null,
+  }, options)
 }
 
 function requireStatus(node, statuses, action) {
@@ -515,6 +751,7 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       node.status = payload.outputSummary !== undefined || wasApproved ? 'review' : node.status
       node.error = null
       node.stale = false
+      supersedeNodeProposals(next, node.id, now)
       invalidateDownstream(next, node.id, now)
       appendEvent(next, 'node.edited', node.id, `${node.title}已被用户编辑；下游产物已标记过期。`, now)
       break
@@ -526,6 +763,7 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       node.revision += 1
       node.error = null
       node.stale = false
+      supersedeNodeProposals(next, node.id, now)
       appendEvent(next, 'node.review', node.id, `${node.title}已提交用户审批。`, now)
       break
     case 'node.approve':
@@ -563,6 +801,63 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       node.error = null
       appendEvent(next, 'node.reset', node.id, `${node.title}已重置。`, now)
       break
+    case 'proposal.create': {
+      const proposalNode = next.nodes.find((item) => item.id === payload.nodeId)
+      if (!proposalNode) fail('UNKNOWN_NODE', `Unknown production node ${payload.nodeId}`)
+      if (proposalNode.status === 'waiting' || proposalNode.status === 'failed') fail('INVALID_TRANSITION', `${proposalNode.title} cannot receive a proposal from ${proposalNode.status}`)
+      if (next.changeCards.some((card) => card.id === payload.cardId)) fail('DUPLICATE_ID', `Change card already exists: ${payload.cardId}`)
+      supersedeNodeProposals(next, proposalNode.id, now)
+      next.changeCards.push({
+        id: payload.cardId,
+        nodeId: proposalNode.id,
+        baseNodeRevision: proposalNode.revision,
+        status: 'proposed',
+        source: payload.source,
+        title: payload.title.trim(),
+        rationale: payload.rationale.trim(),
+        proposedInstructions: payload.proposedInstructions?.trim() || null,
+        proposedOutputSummary: payload.proposedOutputSummary?.trim() || null,
+        createdAt: now,
+        resolvedAt: null,
+      })
+      if (next.changeCards.length > VIDEO_PRODUCTION_LIMITS.maxChangeCards) {
+        const removable = next.changeCards.findIndex((card) => card.status !== 'proposed')
+        if (removable >= 0) next.changeCards.splice(removable, 1)
+        else fail('CHANGE_CARD_LIMIT', 'Resolve an existing proposal before creating another one')
+      }
+      appendEvent(next, 'proposal.created', proposalNode.id, `${proposalNode.title}收到一张待审批变更卡。`, now)
+      break
+    }
+    case 'proposal.accept': {
+      const card = next.changeCards.find((item) => item.id === payload.cardId)
+      if (!card) fail('UNKNOWN_CHANGE_CARD', `Unknown change card ${payload.cardId}`)
+      if (card.status !== 'proposed') fail('INVALID_CHANGE_CARD_STATUS', `${card.title} is already ${card.status}`)
+      const proposalNode = next.nodes.find((item) => item.id === card.nodeId)
+      if (!proposalNode) fail('UNKNOWN_NODE', `Unknown production node ${card.nodeId}`)
+      if (card.baseNodeRevision !== proposalNode.revision) fail('PROPOSAL_STALE', '节点已变化；这张变更卡必须重新生成', { cardId: card.id, nodeRevision: proposalNode.revision })
+      if (card.proposedInstructions !== null) proposalNode.instructions = card.proposedInstructions
+      if (card.proposedOutputSummary !== null) proposalNode.outputSummary = card.proposedOutputSummary
+      proposalNode.revision += 1
+      proposalNode.status = 'review'
+      proposalNode.error = null
+      proposalNode.stale = false
+      proposalNode.updatedAt = now
+      card.status = 'accepted'
+      card.resolvedAt = now
+      supersedeNodeProposals(next, proposalNode.id, now, card.id)
+      invalidateDownstream(next, proposalNode.id, now)
+      appendEvent(next, 'proposal.accepted', proposalNode.id, `已接受变更卡“${card.title}”；下游产物已失效并等待重新审批。`, now)
+      break
+    }
+    case 'proposal.reject': {
+      const card = next.changeCards.find((item) => item.id === payload.cardId)
+      if (!card) fail('UNKNOWN_CHANGE_CARD', `Unknown change card ${payload.cardId}`)
+      if (card.status !== 'proposed') fail('INVALID_CHANGE_CARD_STATUS', `${card.title} is already ${card.status}`)
+      card.status = 'rejected'
+      card.resolvedAt = now
+      appendEvent(next, 'proposal.rejected', card.nodeId, `已拒绝变更卡“${card.title}”；正式节点未改变。`, now)
+      break
+    }
     default:
       fail('UNKNOWN_COMMAND', `Unsupported production command ${command.type}`)
   }
@@ -589,6 +884,26 @@ export function advanceVideoProduction(projectInput, options = {}) {
   const ready = project.nodes.find((node) => node.status === 'ready' || node.status === 'revision')
   if (!ready) fail('NO_READY_NODE', 'There is no production node ready to run')
   return applyVideoProductionCommand(project, createVideoProductionCommand(project, 'node.start', { nodeId: ready.id }, { actor: 'orchestrator' }), options)
+}
+
+export function createLocalAgentProposal(projectInput, nodeId) {
+  const project = assertVideoProductionProject(projectInput)
+  const node = project.nodes.find((item) => item.id === nodeId)
+  if (!node) fail('UNKNOWN_NODE', `Unknown production node ${nodeId}`)
+  const strategy = project.settings.generationMode === 'quality'
+    ? '质量模式：重点镜头采用 Base 母片与时序精修，所有参考资产先审批。'
+    : '极速模式：先形成可观看全链预演，再把用户指定镜头提升到质量母版。'
+  const character = project.settings.characterMode === 'professional'
+    ? '人物采用正侧背三视图、身份锁和按场景触发的服饰状态。'
+    : '人物采用单立绘与最小身份约束，优先缩短准备时间。'
+  const roleOutput = node.outputSummary || draftOutput(node.role, project)
+  return {
+    source: 'deterministic-local',
+    title: `${node.title} · 本地受控建议`,
+    rationale: '根据已选择的生产与人物策略补齐执行边界；这是待审批提案，不会直接覆盖正式节点。',
+    proposedInstructions: `${node.instructions}\n\n生产策略：${strategy}\n人物策略：${character}`.slice(0, VIDEO_PRODUCTION_LIMITS.maxInstructionCharacters),
+    proposedOutputSummary: roleOutput,
+  }
 }
 
 export function productionProgress(projectInput) {

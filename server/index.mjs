@@ -69,6 +69,7 @@ import {
   buildSeedVr2VideoWorkflow,
 } from './video-postprocess-workflow.mjs'
 import { WorkflowCenterService } from './workflow-center.mjs'
+import { AgentAdapterService } from './agent-adapter.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -102,6 +103,7 @@ const workflowCenter = new WorkflowCenterService({
   rootDirectory: join(dataDirectory, 'workflow-center'),
   getComfyRoot: () => localRuntimeConfig.comfyRoot,
 })
+const agentAdapters = new AgentAdapterService()
 const assetPreviewService = new AssetPreviewService({
   rootDirectory: join(cacheDirectory, 'previews'),
   ffmpegPath,
@@ -2051,6 +2053,20 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/workflow-center/catalog') {
       const context = await inspectWorkflowCenterContext({ force: url.searchParams.get('refresh') === '1' })
       return sendJson(response, 200, await workflowCenter.catalog(context))
+    }
+    if (request.method === 'GET' && pathname === '/api/agent-adapters') {
+      return sendJson(response, 200, agentAdapters.status())
+    }
+    if (request.method === 'PUT' && pathname === '/api/agent-adapters/text') {
+      const body = await readJsonBody(request, 16 * 1024)
+      return sendJson(response, 200, agentAdapters.configureText(body))
+    }
+    if (request.method === 'DELETE' && pathname === '/api/agent-adapters/text') {
+      return sendJson(response, 200, agentAdapters.clearText())
+    }
+    if (request.method === 'POST' && pathname === '/api/agent-proposals') {
+      const body = await readJsonBody(request, 2 * 1024 * 1024)
+      return sendJson(response, 200, await agentAdapters.propose(body))
     }
     if (request.method === 'GET' && pathname === '/api/workflow-center/jobs') {
       return sendJson(response, 200, { jobs: workflowCenter.jobs() })

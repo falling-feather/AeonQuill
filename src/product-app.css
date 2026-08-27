@@ -26,8 +26,9 @@
 .aq-product-workflow-launcher {
   position: fixed;
   z-index: 180;
-  right: 18px;
-  top: 76px;
+  right: 378px;
+  top: auto;
+  bottom: 58px;
   min-height: 36px;
   display: inline-flex;
   align-items: center;
@@ -44,7 +45,7 @@
 }
 
 .aq-product-workflow-launcher {
-  right: 108px;
+  right: 468px;
 }
 
 .aq-product-library-launcher:hover,
@@ -165,7 +166,8 @@
   .aq-product-library-launcher,
   .aq-product-workflow-launcher {
     right: 10px;
-    top: 66px;
+    top: auto;
+    bottom: 70px;
     width: 38px;
     padding: 0;
     justify-content: center;

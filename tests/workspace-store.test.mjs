@@ -79,7 +79,7 @@ test('pixel and smart-video documents remain isolated by project and document id
     })
     const plan = createGenerationPlan(story, { now: 4_000 })
     const smartVideo = JSON.stringify({
-      schemaVersion: SMART_VIDEO_DOCUMENT_SCHEMA_VERSION,
+      schemaVersion: 1,
       project: story,
       plan,
     })
@@ -94,7 +94,10 @@ test('pixel and smart-video documents remain isolated by project and document id
     }, { now: 6_000 })
 
     assert.equal(store.getModeDocument('document-pixel').projectId, 'project-pixel')
-    assert.equal(JSON.parse(store.getModeDocument('document-video').value).plan.projectId, 'document-video')
+    const storedVideo = JSON.parse(store.getModeDocument('document-video').value)
+    assert.equal(storedVideo.schemaVersion, SMART_VIDEO_DOCUMENT_SCHEMA_VERSION)
+    assert.equal(storedVideo.plan.projectId, 'document-video')
+    assert.equal(storedVideo.production.schemaVersion, 2)
     assert.throws(
       () => store.saveModeDocument({
         projectId: 'project-ad', documentId: 'document-pixel', modeId: 'pixel',

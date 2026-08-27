@@ -58,6 +58,10 @@ import {
   type VideoFrameMode,
 } from '../../lib/story/storyExecution.mjs'
 import {
+  createVideoProductionProjectForStory,
+  type VideoProductionProject,
+} from '../../lib/story/productionPipeline.mjs'
+import {
   cancelVideoJob,
   createVideoJob,
   fetchRuntimeStatus,
@@ -92,6 +96,7 @@ export type SmartVideoRuntimeSummary = {
 export type SmartVideoPlanResult = {
   project: StoryProject
   plan: GenerationPlan
+  production: VideoProductionProject
 }
 
 export type SmartVideoWorkbenchProps = {
@@ -206,6 +211,7 @@ function createPreviewPlan(
   frameStrategy: FrameStrategy,
   projectId?: string,
   projectTitle?: string,
+  production?: VideoProductionProject,
 ): SmartVideoPlanResult {
   const now = Date.now()
   const project = compileStoryProject({
@@ -218,7 +224,11 @@ function createPreviewPlan(
     defaultShotSeconds: 5,
     now,
   })
-  return { project, plan: createGenerationPlan(project, { now }) }
+  return {
+    project,
+    plan: createGenerationPlan(project, { now }),
+    production: production ?? createVideoProductionProjectForStory(project, { now }),
+  }
 }
 
 function errorMessage(error: unknown) {
@@ -687,6 +697,7 @@ export function SmartVideoWorkbench({
         source.frameStrategy,
         projectId,
         projectTitle,
+        result.production,
       )
       const nextFirstShotId = next.project.scenes[0]?.shots[0]?.id ?? ''
       setKind(source.kind)
@@ -705,6 +716,12 @@ export function SmartVideoWorkbench({
     } catch (nextError) {
       setError(errorMessage(nextError))
     }
+  }
+
+  const updateProductionProject = (production: VideoProductionProject) => {
+    const next = { ...result, production }
+    setResult(next)
+    onPlanReady?.(next)
   }
 
   useEffect(() => {
@@ -785,6 +802,8 @@ export function SmartVideoWorkbench({
         <ProductionStudio
           active={activeWorkspace === 'production'}
           runtimeLabel={liveRuntimeLabel}
+          project={result.production}
+          onProjectChange={updateProductionProject}
           onBridgeToStory={bridgeProductionSource}
         />
         {activeWorkspace !== 'production' ? (

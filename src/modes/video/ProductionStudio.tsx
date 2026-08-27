@@ -7,6 +7,7 @@ import {
   Clock3,
   Download,
   Loader2,
+  KeyRound,
   Pause,
   Play,
   RefreshCw,
@@ -23,7 +24,9 @@ import {
   applyVideoProductionCommand,
   canBridgeProductionToStory,
   createApprovedStorySource,
+  createLocalAgentProposal,
   createVideoProductionCommand,
+  createVideoProductionProposalCommand,
   createVideoProductionProject,
   productionProgress,
   serializeVideoProductionProject,
@@ -31,8 +34,17 @@ import {
   type VideoProductionNode,
   type VideoProductionNodeStatus,
   type VideoProductionProject,
+  type VideoGenerationMode,
+  type VideoCharacterMode,
 } from '../../lib/story/productionPipeline.mjs'
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib/story/storyProject.mjs'
+import {
+  clearTextAgentAdapter,
+  configureTextAgentAdapter,
+  fetchAgentAdapterStatus,
+  requestAgentProposal,
+  type AgentAdapterStatus,
+} from '../../lib/agentAdapterApi'
 import './production-studio.css'
 
 export type ApprovedProductionStorySource = {
@@ -47,6 +59,8 @@ export type ApprovedProductionStorySource = {
 type ProductionStudioProps = {
   active: boolean
   runtimeLabel: string
+  project: VideoProductionProject
+  onProjectChange: (project: VideoProductionProject) => void
   onBridgeToStory: (source: ApprovedProductionStorySource) => void
 }
 
@@ -89,28 +103,80 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: ProductionStudioProps) {
-  const [project, setProject] = useState<VideoProductionProject>(() => createVideoProductionProject())
+export function ProductionStudio({ active, runtimeLabel, project, onProjectChange, onBridgeToStory }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
   const [genre, setGenre] = useState(project.settings.genre)
   const [aspectRatio, setAspectRatio] = useState<StoryAspectRatio>(project.settings.aspectRatio)
+  const [generationMode, setGenerationMode] = useState<VideoGenerationMode>(project.settings.generationMode)
+  const [characterMode, setCharacterMode] = useState<VideoCharacterMode>(project.settings.characterMode)
   const [instructionsDraft, setInstructionsDraft] = useState('')
   const [outputDraft, setOutputDraft] = useState('')
   const [notice, setNotice] = useState('剧本大纲等待用户审批；未批准节点不会越级。')
   const sequenceRef = useRef(1)
+  const projectRef = useRef(project)
+  const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
+  const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
+  const [adapterNotice, setAdapterNotice] = useState('密钥只驻留本次 sidecar 内存，关闭应用即清除。')
+  const [adapterForm, setAdapterForm] = useState<{
+    providerLabel: string
+    endpoint: string
+    model: string
+    apiKey: string
+    jsonMode: 'json-object' | 'prompt-only'
+    timeoutMs: number
+  }>({
+    providerLabel: 'OpenAI-compatible',
+    endpoint: '',
+    model: '',
+    apiKey: '',
+    jsonMode: 'json-object',
+    timeoutMs: 60_000,
+  })
 
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId) ?? project.nodes[0]
   const progress = useMemo(() => productionProgress(project), [project])
   const canBridge = useMemo(() => canBridgeProductionToStory(project), [project])
   const hasReviewGate = project.nodes.some((node) => node.status === 'review')
   const nodeById = useMemo(() => new Map(project.nodes.map((node) => [node.id, node])), [project.nodes])
+  const selectedChangeCards = useMemo(
+    () => project.changeCards.filter((card) => card.nodeId === selectedNode.id).slice().reverse(),
+    [project.changeCards, selectedNode.id],
+  )
+
+  useEffect(() => {
+    projectRef.current = project
+  }, [project])
+
+  useEffect(() => {
+    let disposed = false
+    void fetchAgentAdapterStatus()
+      .then((status) => {
+        if (!disposed) setAdapterStatus(status)
+      })
+      .catch((error) => {
+        if (!disposed) setAdapterNotice(messageOf(error))
+      })
+      .finally(() => {
+        if (!disposed) setAdapterBusy(null)
+      })
+    return () => { disposed = true }
+  }, [])
 
   useEffect(() => {
     setInstructionsDraft(selectedNode.instructions)
     setOutputDraft(selectedNode.outputSummary)
   }, [selectedNode.id, selectedNode.instructions, selectedNode.outputSummary])
+
+  useEffect(() => {
+    setBrief(project.brief)
+    setDurationMinutes(project.settings.durationMinutes)
+    setGenre(project.settings.genre)
+    setAspectRatio(project.settings.aspectRatio)
+    setGenerationMode(project.settings.generationMode)
+    setCharacterMode(project.settings.characterMode)
+  }, [project.id])
 
   const execute = (
     type: VideoProductionCommandType,
@@ -123,7 +189,7 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
         actor: 'user',
       })
       const next = applyVideoProductionCommand(project, command, { now: Math.max(Date.now(), project.updatedAt) })
-      setProject(next)
+      onProjectChange(next)
       setNotice(successMessage ?? '制片状态已更新。')
       return next
     } catch (error) {
@@ -135,7 +201,7 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
   const runNext = () => {
     try {
       const next = advanceVideoProduction(project, { now: Math.max(Date.now(), project.updatedAt) })
-      setProject(next)
+      onProjectChange(next)
       const nextProgress = productionProgress(next)
       if (nextProgress.currentNodeId) setSelectedNodeId(nextProgress.currentNodeId)
       setNotice(next.nodes.find((node) => node.status === 'running')
@@ -148,8 +214,8 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
 
   const createProject = () => {
     try {
-      const next = createVideoProductionProject({ brief, durationMinutes, genre, aspectRatio, now: Date.now() })
-      setProject(next)
+      const next = createVideoProductionProject({ brief, durationMinutes, genre, aspectRatio, generationMode, characterMode, now: Date.now() })
+      onProjectChange(next)
       setSelectedNodeId('screenwriter')
       setNotice('已建立新的本地生产图；剧本设计节点等待用户审批。')
     } catch (error) {
@@ -163,6 +229,73 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
       instructions: instructionsDraft,
       outputSummary: outputDraft,
     }, '已保存人工编辑；任何受影响的下游节点均已标记过期。')
+  }
+
+  const requestLocalProposal = () => {
+    try {
+      const command = createVideoProductionProposalCommand(
+        project,
+        selectedNode.id,
+        createLocalAgentProposal(project, selectedNode.id),
+        { id: `production-ui-${sequenceRef.current++}`, actor: 'orchestrator' },
+      )
+      const next = applyVideoProductionCommand(project, command, { now: Math.max(Date.now(), project.updatedAt) })
+      onProjectChange(next)
+      setNotice('本地角色智能体已生成变更卡；正式节点尚未改变，请接受或拒绝。')
+    } catch (error) {
+      setNotice(messageOf(error))
+    }
+  }
+
+  const configureAdapter = async () => {
+    setAdapterBusy('save')
+    try {
+      const status = await configureTextAgentAdapter(adapterForm)
+      setAdapterStatus(status)
+      setAdapterForm((current) => ({ ...current, apiKey: '' }))
+      setAdapterNotice('文本适配器已在本次运行中启用；密钥未写入浏览器或项目。')
+    } catch (error) {
+      setAdapterNotice(messageOf(error))
+    } finally {
+      setAdapterBusy(null)
+    }
+  }
+
+  const clearAdapter = async () => {
+    setAdapterBusy('clear')
+    try {
+      const status = await clearTextAgentAdapter()
+      setAdapterStatus(status)
+      setAdapterNotice('本次运行中的文本 API 密钥已从 sidecar 内存清除。')
+    } catch (error) {
+      setAdapterNotice(messageOf(error))
+    } finally {
+      setAdapterBusy(null)
+    }
+  }
+
+  const requestByokProposal = async () => {
+    const baseRevision = project.revision
+    setAdapterBusy('propose')
+    try {
+      const result = await requestAgentProposal(project, selectedNode.id)
+      const current = projectRef.current
+      if (current.revision !== baseRevision) {
+        setAdapterNotice('模型返回期间生产项目已变化；提案未写入，请重新请求。')
+        return
+      }
+      const command = createVideoProductionProposalCommand(current, selectedNode.id, result.proposal, {
+        id: `production-ui-${sequenceRef.current++}`,
+        actor: 'orchestrator',
+      })
+      const next = applyVideoProductionCommand(current, command, { now: Math.max(Date.now(), current.updatedAt) })
+      onProjectChange(next)
+      setAdapterNotice(`${result.adapter.providerLabel} · ${result.adapter.model} 已返回变更卡${result.usage?.totalTokens !== null && result.usage?.totalTokens !== undefined ? ` · ${result.usage.totalTokens} tokens` : ''}；尚未修改正式节点。`)
+    } catch (error) {
+      setAdapterNotice(messageOf(error))
+    } finally {
+      setAdapterBusy(null)
+    }
   }
 
   const bridgeToStory = () => {
@@ -191,6 +324,7 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
             <div><dt>场景</dt><dd>{project.estimates.sceneCount}</dd></div>
             <div><dt>镜头</dt><dd>约 {project.estimates.shotCount}</dd></div>
             <div><dt>生成批次</dt><dd>{project.estimates.batchCount}</dd></div>
+            <div><dt>生产策略</dt><dd>{project.settings.generationMode === 'quality' ? '质量' : '极速'} / {project.settings.characterMode === 'professional' ? '专业人物' : '快速人物'}</dd></div>
             <div className="is-wide"><dt>4060 · 720P 单卡生成</dt><dd>{formatProductionHours(project.estimates.generationMinutesLow, project.estimates.generationMinutesHigh)}</dd></div>
           </dl>
         </header>
@@ -204,8 +338,15 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
             <label><span>分钟</span><input type="number" min={1} max={30} value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.valueAsNumber)} /></label>
             <label><span>类型</span><input value={genre} maxLength={40} onChange={(event) => setGenre(event.target.value)} /></label>
             <label><span>画幅</span><select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value as StoryAspectRatio)}><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option></select></label>
+            <label><span>生成方案</span><select value={generationMode} onChange={(event) => setGenerationMode(event.target.value as VideoGenerationMode)}><option value="fast">极速 · 全链预演</option><option value="quality">质量 · 母版精修</option></select></label>
+            <label><span>人物方案</span><select value={characterMode} onChange={(event) => setCharacterMode(event.target.value as VideoCharacterMode)}><option value="quick">快速 · 单立绘</option><option value="professional">专业 · 三视图/服饰状态</option></select></label>
             <button type="button" onClick={createProject}><Sparkles size={15} /> 建立生产图</button>
           </div>
+          <aside className="aq-production-recommendation">
+            <strong>系统建议：{project.settings.recommendation.generationMode === 'quality' ? '质量' : '极速'} + {project.settings.recommendation.characterMode === 'professional' ? '专业人物' : '快速人物'}</strong>
+            <span>当前选择由你决定；建议不会静默覆盖。</span>
+            {project.settings.recommendation.reasons.map((reason) => <small key={reason}>{reason}</small>)}
+          </aside>
         </section>
 
         <section className="aq-production-control-bar" aria-label="全局生产控制">
@@ -273,7 +414,7 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
 
         <section className="aq-production-truth">
           <ShieldCheck size={16} />
-          <p><strong>执行边界</strong> 当前多智能体层是本地、确定性、可审批的编排状态机；文本模型和语音 Adapter 尚未连接。只有“分镜导演”产物获批后，镜头才可同步到既有严格 StoryProject，并继续经过 H3 执行清单、帧资产、显存和固定工作流复检。</p>
+          <p><strong>执行边界</strong> 本地角色建议与可选 BYOK 文本模型都只能生成结构化变更卡；密钥仅驻留本次 sidecar 内存，提案未经用户接受不会改写节点。只有“分镜导演”产物获批后，镜头才可同步到严格 StoryProject，并继续经过 H3 执行清单、帧资产、显存和固定工作流复检。</p>
           <button type="button" onClick={() => downloadProject(project)}><Download size={14} /> 导出生产图</button>
           <button type="button" className="is-bridge" disabled={!canBridge} onClick={bridgeToStory}><Check size={14} /> 同步已批分镜</button>
         </section>
@@ -295,6 +436,20 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
           }) : <span className="is-approved">无前置依赖<small>可独立执行</small></span>}</div>
         </section>
 
+        {selectedNode.id === 'character-designer' ? (
+          <section className="aq-production-character-sessions" aria-label="人物一致性会话">
+            <span>人物一致性会话 · {project.settings.characterMode === 'professional' ? '专业' : '快速'}</span>
+            {project.characterProfiles.map((profile) => (
+              <article key={profile.id}>
+                <header><strong>{profile.name}</strong><small>{profile.status === 'approved' ? '已批准' : '待完善'} · revision {profile.revision}</small></header>
+                <p>{profile.identityLock}</p>
+                <div>{profile.views.map((view) => <span key={view.id}>{view.view === 'front' ? '正面' : view.view === 'side' ? '侧面' : view.view === 'back' ? '背面' : view.view}<small>{view.status}</small></span>)}</div>
+                <footer>{profile.wardrobeStates.map((wardrobe) => <span key={wardrobe.id}>{wardrobe.label}<small>{wardrobe.trigger}</small></span>)}</footer>
+              </article>
+            ))}
+          </section>
+        ) : null}
+
         <label className="aq-production-editor-field">
           <span>执行指令（可编辑）</span>
           <textarea value={instructionsDraft} maxLength={4_000} onChange={(event) => setInstructionsDraft(event.target.value)} />
@@ -315,7 +470,51 @@ export function ProductionStudio({ active, runtimeLabel, onBridgeToStory }: Prod
           </div>
         </section>
 
+        <section className="aq-production-change-cards" aria-label="节点变更卡">
+          <div><span>结构化变更卡</span><small>{selectedChangeCards.filter((card) => card.status === 'proposed').length} 待处理</small></div>
+          {selectedChangeCards.length ? selectedChangeCards.slice(0, 4).map((card) => (
+            <article key={card.id} className={`is-${card.status}`}>
+              <header><strong>{card.title}</strong><span>{card.source === 'byok-text' ? 'BYOK' : '本地'} · {card.status}</span></header>
+              <p>{card.rationale}</p>
+              {card.proposedOutputSummary ? <small>{card.proposedOutputSummary}</small> : null}
+              {card.status === 'proposed' ? (
+                <footer>
+                  <button type="button" onClick={() => execute('proposal.reject', { cardId: card.id }, '变更卡已拒绝；正式节点未改变。')}>拒绝</button>
+                  <button type="button" className="is-accept" onClick={() => execute('proposal.accept', { cardId: card.id }, '变更卡已接受；节点进入审批，下游已失效。')}>接受变更</button>
+                </footer>
+              ) : null}
+            </article>
+          )) : <p className="is-empty">还没有提案。智能体只能先创建卡片，不能静默覆盖节点。</p>}
+        </section>
+
+        <section className="aq-production-adapter" aria-label="BYOK 文本智能体">
+          <header>
+            <span><KeyRound size={14} /> BYOK 文本智能体</span>
+            <b className={adapterStatus.text.configured ? 'is-ready' : ''}>{adapterBusy === 'load' ? '读取中' : adapterStatus.text.configured ? '本次运行已启用' : '未配置'}</b>
+          </header>
+          {adapterStatus.text.configured ? (
+            <div className="aq-production-adapter-summary">
+              <strong>{adapterStatus.text.providerLabel} · {adapterStatus.text.model}</strong>
+              <small>{adapterStatus.text.endpointLabel} · 内存临时密钥</small>
+            </div>
+          ) : null}
+          <div className="aq-production-adapter-form">
+            <label><span>名称</span><input value={adapterForm.providerLabel} maxLength={80} onChange={(event) => setAdapterForm((current) => ({ ...current, providerLabel: event.target.value }))} /></label>
+            <label><span>HTTPS 接口基址</span><input value={adapterForm.endpoint} placeholder="https://provider.example/v1" spellCheck={false} onChange={(event) => setAdapterForm((current) => ({ ...current, endpoint: event.target.value }))} /></label>
+            <label><span>模型</span><input value={adapterForm.model} placeholder="model-id" spellCheck={false} onChange={(event) => setAdapterForm((current) => ({ ...current, model: event.target.value }))} /></label>
+            <label><span>API Key</span><input type="password" value={adapterForm.apiKey} autoComplete="off" placeholder="只驻留本次运行内存" onChange={(event) => setAdapterForm((current) => ({ ...current, apiKey: event.target.value }))} /></label>
+            <label><span>JSON 模式</span><select value={adapterForm.jsonMode} onChange={(event) => setAdapterForm((current) => ({ ...current, jsonMode: event.target.value as 'json-object' | 'prompt-only' }))}><option value="json-object">JSON object</option><option value="prompt-only">仅提示约束</option></select></label>
+          </div>
+          <p role="status">{adapterNotice}</p>
+          <footer>
+            {adapterStatus.text.configured ? <button type="button" onClick={() => void clearAdapter()} disabled={adapterBusy !== null}>{adapterBusy === 'clear' ? <Loader2 size={13} className="is-spinning" /> : null}清除会话密钥</button> : null}
+            <button type="button" className="is-save" onClick={() => void configureAdapter()} disabled={adapterBusy !== null || !adapterForm.endpoint.trim() || !adapterForm.model.trim() || !adapterForm.apiKey.trim()}>{adapterBusy === 'save' ? <Loader2 size={13} className="is-spinning" /> : <KeyRound size={13} />}{adapterStatus.text.configured ? '替换配置' : '仅本次运行启用'}</button>
+          </footer>
+        </section>
+
         <div className="aq-production-node-actions">
+          {!['waiting', 'failed'].includes(selectedNode.status) ? <button type="button" className="is-agent" onClick={requestLocalProposal}><Sparkles size={14} /> 请求本地建议</button> : null}
+          {adapterStatus.text.configured && !['waiting', 'failed'].includes(selectedNode.status) ? <button type="button" className="is-byok" onClick={() => void requestByokProposal()} disabled={adapterBusy !== null}>{adapterBusy === 'propose' ? <Loader2 size={14} className="is-spinning" /> : <KeyRound size={14} />} 请求 BYOK 建议</button> : null}
           {selectedNode.status === 'ready' || selectedNode.status === 'revision' ? <button type="button" onClick={() => execute('node.start', { nodeId: selectedNode.id }, `${selectedNode.title}已开始。`)}><Play size={14} /> 开始节点</button> : null}
           {selectedNode.status === 'running' ? <button type="button" onClick={() => execute('node.pause', { nodeId: selectedNode.id }, `${selectedNode.title}已暂停。`)}><Pause size={14} /> 暂停节点</button> : null}
           {selectedNode.status === 'paused' ? <button type="button" onClick={() => execute('node.resume', { nodeId: selectedNode.id }, `${selectedNode.title}已恢复。`)}><Play size={14} /> 恢复节点</button> : null}

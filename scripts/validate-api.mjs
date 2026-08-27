@@ -154,6 +154,28 @@ try {
   }, 409)
   assert.equal(missingWorkflowLicense.error.code, 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED')
 
+  const emptyAgentAdapter = await requestJson(bridge.baseUrl, '/api/agent-adapters')
+  assert.deepEqual(emptyAgentAdapter, { text: { configured: false, persistence: 'memory-only' } })
+  const unsafeAgentAdapter = await requestJson(bridge.baseUrl, '/api/agent-adapters/text', {
+    method: 'PUT',
+    body: JSON.stringify({
+      providerLabel: '不安全接口', endpoint: 'http://192.168.1.20/v1', model: 'model', apiKey: 'secret-12345678',
+    }),
+  }, 400)
+  assert.equal(unsafeAgentAdapter.error.code, 'AGENT_ADAPTER_ENDPOINT_UNSAFE')
+  const configuredAgentAdapter = await requestJson(bridge.baseUrl, '/api/agent-adapters/text', {
+    method: 'PUT',
+    body: JSON.stringify({
+      providerLabel: '本机会话测试', endpoint: 'http://127.0.0.1:65534/v1', model: 'fixture-model', apiKey: 'secret-12345678',
+      jsonMode: 'prompt-only', timeoutMs: 5_000,
+    }),
+  })
+  assert.equal(configuredAgentAdapter.text.configured, true)
+  assert.equal(configuredAgentAdapter.text.persistence, 'memory-only')
+  assert.equal(JSON.stringify(configuredAgentAdapter).includes('secret-12345678'), false)
+  const clearedAgentAdapter = await requestJson(bridge.baseUrl, '/api/agent-adapters/text', { method: 'DELETE' })
+  assert.deepEqual(clearedAgentAdapter, { text: { configured: false, persistence: 'memory-only' } })
+
   const promptPlan = await requestJson(bridge.baseUrl, '/api/video/prompt/compile', {
     method: 'POST',
     body: JSON.stringify({

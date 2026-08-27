@@ -7,7 +7,9 @@ import {
   assertVideoProductionProject,
   canBridgeProductionToStory,
   createApprovedStorySource,
+  createLocalAgentProposal,
   createVideoProductionCommand,
+  createVideoProductionProposalCommand,
   createVideoProductionProject,
   deserializeVideoProductionProject,
   productionProgress,
@@ -42,9 +44,12 @@ test('creates an honest ten-minute wuxia production graph with deterministic est
     sceneCount: 12,
     shotCount: 120,
     batchCount: 24,
-    generationMinutesLow: 2_400,
-    generationMinutesHigh: 4_800,
+    generationMinutesLow: 720,
+    generationMinutesHigh: 1_920,
   })
+  assert.equal(project.settings.generationMode, 'fast')
+  assert.equal(project.settings.characterMode, 'professional')
+  assert.deepEqual(project.characterProfiles[0].views.map(({ view }) => view), ['front', 'side', 'back'])
   assert.equal(project.nodes[0].status, 'approved')
   assert.equal(project.nodes[1].status, 'review')
   assert(project.nodes.slice(2).every((node) => node.status === 'waiting'))
@@ -145,4 +150,49 @@ test('rejects unknown fields, illegal transitions and stale commands while prese
     (error) => error instanceof VideoProductionError && error.code === 'REVISION_CONFLICT',
   )
   assert.deepEqual(deserializeVideoProductionProject(serializeVideoProductionProject(project)), project)
+})
+
+test('agent proposals remain reviewable change cards and become stale after a manual edit', () => {
+  let project = createVideoProductionProject({ now: 8_000, generationMode: 'quality', characterMode: 'quick' })
+  const proposal = createLocalAgentProposal(project, 'screenwriter')
+  project = applyVideoProductionCommand(
+    project,
+    createVideoProductionProposalCommand(project, 'screenwriter', proposal, { id: 'proposal-create', actor: 'orchestrator' }),
+    { now: 8_001 },
+  )
+  assert.equal(project.changeCards[0].status, 'proposed')
+  assert.equal(project.nodes.find(({ id }) => id === 'screenwriter').revision, 1)
+  project = apply(project, 'proposal.accept', { cardId: project.changeCards[0].id })
+  assert.equal(project.changeCards[0].status, 'accepted')
+  assert.equal(project.nodes.find(({ id }) => id === 'screenwriter').revision, 2)
+  assert.equal(project.nodes.find(({ id }) => id === 'screenwriter').status, 'review')
+
+  project = applyVideoProductionCommand(
+    project,
+    createVideoProductionProposalCommand(project, 'screenwriter', createLocalAgentProposal(project, 'screenwriter'), { id: 'proposal-create-2' }),
+    { now: project.updatedAt + 1 },
+  )
+  const pending = project.changeCards.find(({ status }) => status === 'proposed')
+  project = apply(project, 'node.edit', { nodeId: 'screenwriter', outputSummary: '用户手工改写的新版本。' })
+  assert.equal(project.changeCards.find(({ id }) => id === pending.id).status, 'superseded')
+  assert.throws(
+    () => apply(project, 'proposal.accept', { cardId: pending.id }),
+    (error) => error instanceof VideoProductionError && error.code === 'INVALID_CHANGE_CARD_STATUS',
+  )
+})
+
+test('migrates schema v1 production exports without losing node approvals', () => {
+  const current = createVideoProductionProject({ now: 9_000, generationMode: 'quality' })
+  const legacy = structuredClone(current)
+  legacy.schemaVersion = 1
+  delete legacy.characterProfiles
+  delete legacy.changeCards
+  delete legacy.settings.generationMode
+  delete legacy.settings.characterMode
+  delete legacy.settings.recommendation
+  const restored = deserializeVideoProductionProject(JSON.stringify(legacy))
+  assert.equal(restored.schemaVersion, 2)
+  assert.equal(restored.settings.generationMode, 'quality')
+  assert.equal(restored.nodes[1].status, current.nodes[1].status)
+  assert.equal(restored.characterProfiles.length, 1)
 })

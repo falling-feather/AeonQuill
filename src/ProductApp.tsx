@@ -902,7 +902,7 @@ export default function ProductApp() {
         try { localStorage.setItem(pixelStorageKey(document.id), serialized) } catch { /* SQLite remains canonical */ }
       } else if (restored.document?.modeId === 'smart-video') {
         const body = deserializeSmartVideoDocument(restored.document.value)
-        const result = { project: body.project, plan: body.plan }
+        const result = { project: body.project, plan: body.plan, production: body.production }
         const session = smartVideoSessionFromResult(result)
         setVideoSession({ status: 'ready', session, result })
         try { sessionStorage.setItem(videoStorageKey(session.projectId), serializeSmartVideoSession(session)) } catch { /* SQLite remains canonical */ }
@@ -1150,7 +1150,7 @@ export default function ProductApp() {
         }
         if (stored) {
           const body = deserializeSmartVideoDocument(stored.value)
-          const result = { project: body.project, plan: body.plan }
+          const result = { project: body.project, plan: body.plan, production: body.production }
           const session = smartVideoSessionFromResult(result)
           setVideoSession({ status: 'ready', session, result })
           try { sessionStorage.setItem(videoStorageKey(activeModeDocumentId), serializeSmartVideoSession(session)) } catch { /* SQLite remains canonical */ }

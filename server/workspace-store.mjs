@@ -11,9 +11,13 @@ import {
   serializeProjectCatalog,
 } from '../src/lib/project/projectCatalog.mjs'
 import { assertGenerationPlan, assertStoryProject } from '../src/lib/story/storyProject.mjs'
+import {
+  assertVideoProductionProject,
+  createVideoProductionProjectForStory,
+} from '../src/lib/story/productionPipeline.mjs'
 
 export const WORKSPACE_STORE_SCHEMA_VERSION = 1
-export const SMART_VIDEO_DOCUMENT_SCHEMA_VERSION = 1
+export const SMART_VIDEO_DOCUMENT_SCHEMA_VERSION = 2
 
 const MODE_IDS = new Set(['balanced', 'pixel', 'smart-video'])
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
@@ -86,15 +90,21 @@ function assertExactKeys(value, keys, label) {
 
 function normalizeSmartVideoDocument(value, documentId) {
   const parsed = parseJsonObject(value, 'Smart video document')
-  assertExactKeys(parsed, ['schemaVersion', 'project', 'plan'], 'Smart video document')
-  if (parsed.schemaVersion !== SMART_VIDEO_DOCUMENT_SCHEMA_VERSION) {
+  const isLegacy = parsed.schemaVersion === 1
+  if (isLegacy) assertExactKeys(parsed, ['schemaVersion', 'project', 'plan'], 'Smart video document')
+  else assertExactKeys(parsed, ['schemaVersion', 'project', 'plan', 'production'], 'Smart video document')
+  if (!isLegacy && parsed.schemaVersion !== SMART_VIDEO_DOCUMENT_SCHEMA_VERSION) {
     fail('UNSUPPORTED_MODE_DOCUMENT_SCHEMA', `Unsupported smart video schema: ${String(parsed.schemaVersion)}`, 409)
   }
   let project
   let plan
+  let production
   try {
     project = assertStoryProject(parsed.project)
     plan = assertGenerationPlan(parsed.plan, project)
+    production = isLegacy
+      ? createVideoProductionProjectForStory(project)
+      : assertVideoProductionProject(parsed.production)
   } catch (error) {
     fail(error?.code || 'INVALID_MODE_DOCUMENT', error?.message || 'Smart video document is invalid')
   }
@@ -105,6 +115,7 @@ function normalizeSmartVideoDocument(value, documentId) {
     schemaVersion: SMART_VIDEO_DOCUMENT_SCHEMA_VERSION,
     project,
     plan,
+    production,
   })
 }
 

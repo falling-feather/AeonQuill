@@ -62,7 +62,7 @@
 
 .aq-production-heading dl {
   display: grid;
-  grid-template-columns: repeat(4, minmax(74px, 1fr)) minmax(160px, 1.6fr);
+  grid-template-columns: repeat(4, minmax(68px, 1fr)) minmax(106px, 1.2fr) minmax(150px, 1.6fr);
   margin: 0;
   border: 1px solid #e2e4e8;
   border-radius: 10px;
@@ -156,6 +156,34 @@
 
 .aq-production-brief > div label:nth-child(2) input {
   width: 82px;
+}
+
+.aq-production-brief > div label:nth-child(4) select,
+.aq-production-brief > div label:nth-child(5) select {
+  width: 142px;
+}
+
+.aq-production-recommendation {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 12px;
+  padding-top: 9px;
+  border-top: 1px solid #ececf1;
+  color: #707580;
+  font-size: 9px;
+}
+
+.aq-production-recommendation strong {
+  color: #5144cf;
+}
+
+.aq-production-recommendation small {
+  overflow: hidden;
+  color: #858995;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .aq-production-brief button {
@@ -518,6 +546,224 @@
   margin-top: 16px;
 }
 
+.aq-production-character-sessions,
+.aq-production-change-cards {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.aq-production-character-sessions > span,
+.aq-production-change-cards > div > span {
+  color: #555a65;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.aq-production-character-sessions > article,
+.aq-production-change-cards > article {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #e2e3e8;
+  border-radius: 8px;
+  background: #fafafd;
+}
+
+.aq-production-character-sessions header,
+.aq-production-change-cards header,
+.aq-production-change-cards > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-production-character-sessions header small,
+.aq-production-change-cards header span,
+.aq-production-change-cards > div small {
+  color: #8b8f99;
+  font-size: 8px;
+}
+
+.aq-production-character-sessions p,
+.aq-production-change-cards p,
+.aq-production-change-cards article > small,
+.aq-production-change-cards > .is-empty {
+  margin: 0;
+  color: #686d78;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.aq-production-character-sessions article > div,
+.aq-production-character-sessions article > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aq-production-character-sessions article > div span,
+.aq-production-character-sessions article > footer span {
+  display: inline-grid;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: #5848dc;
+  background: #efedff;
+  font-size: 8px;
+}
+
+.aq-production-character-sessions article > footer span {
+  color: #43705d;
+  background: #edf7f2;
+}
+
+.aq-production-character-sessions article span small {
+  color: inherit;
+  opacity: .7;
+  font-size: 7px;
+}
+
+.aq-production-change-cards > article.is-accepted { border-color: #bee0cf; background: #f2faf6; }
+.aq-production-change-cards > article.is-rejected,
+.aq-production-change-cards > article.is-superseded { opacity: .68; }
+
+.aq-production-change-cards article > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.aq-production-change-cards article button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #d8d9df;
+  border-radius: 6px;
+  color: #666b75;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-production-change-cards article button.is-accept,
+.aq-production-node-actions .is-agent {
+  color: #fff;
+  border-color: #6553f5;
+  background: #6553f5;
+}
+
+.aq-production-adapter {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 10px;
+  border: 1px solid #dfe1e7;
+  border-radius: 9px;
+  background: #f8f8fb;
+}
+
+.aq-production-adapter > header,
+.aq-production-adapter > footer,
+.aq-production-adapter-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-production-adapter > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #555a65;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.aq-production-adapter > header b {
+  color: #8a8f99;
+  font-size: 8px;
+}
+
+.aq-production-adapter > header b.is-ready { color: #237554; }
+
+.aq-production-adapter-summary {
+  padding: 7px 8px;
+  border-radius: 7px;
+  color: #356b55;
+  background: #edf7f2;
+}
+
+.aq-production-adapter-summary strong { font-size: 9px; }
+.aq-production-adapter-summary small { color: #658172; font-size: 8px; }
+
+.aq-production-adapter-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.aq-production-adapter-form label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: #747984;
+  font-size: 8px;
+}
+
+.aq-production-adapter-form label:nth-child(2),
+.aq-production-adapter-form label:nth-child(4) { grid-column: 1 / -1; }
+
+.aq-production-adapter-form input,
+.aq-production-adapter-form select {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  padding: 0 8px;
+  border: 1px solid #dcdee4;
+  border-radius: 6px;
+  color: #343741;
+  background: #fff;
+  font-size: 9px;
+}
+
+.aq-production-adapter > p {
+  margin: 0;
+  color: #777c87;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.aq-production-adapter > footer { justify-content: flex-end; }
+
+.aq-production-adapter > footer button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid #d8d9df;
+  border-radius: 6px;
+  color: #666b75;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-production-adapter > footer button.is-save,
+.aq-production-node-actions .is-byok {
+  color: #fff;
+  border-color: #2f7660;
+  background: #2f7660;
+}
+
+.aq-production-adapter button:disabled,
+.aq-production-node-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 .aq-production-dependencies > span,
 .aq-production-history > span,
 .aq-production-editor-field > span {
@@ -736,6 +982,14 @@
 
   .aq-production-brief > div {
     flex-wrap: wrap;
+  }
+
+  .aq-production-recommendation {
+    grid-template-columns: 1fr;
+  }
+
+  .aq-production-recommendation small {
+    white-space: normal;
   }
 
   .aq-production-control-bar {
