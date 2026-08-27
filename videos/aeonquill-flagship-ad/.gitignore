@@ -2,6 +2,8 @@
 .hyperframes/frame-packets/
 .hyperframes/snapshots-pass1/frame-*.png
 .hyperframes/snapshots-font-subset/frame-*.png
+.thumbnails/
+.waveform-cache/
 capture/
 assets/voice/*-raw.wav
 assets/aeon-ink-flow.webp

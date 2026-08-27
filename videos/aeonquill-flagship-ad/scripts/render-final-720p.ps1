@@ -34,6 +34,8 @@ $env:HYPERFRAMES_NO_TELEMETRY = "1"
 
 $ffmpegCommand = Get-Command ffmpeg -ErrorAction Stop
 $ffmpeg = $ffmpegCommand.Source
+$npxCommand = Get-Command npx.cmd -ErrorAction Stop
+$npx = $npxCommand.Source
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $masterPath = Join-Path $outputRoot "AEONQUILL-flagship-ad-$stamp-master-1080p.mp4"
@@ -62,6 +64,29 @@ function Invoke-CheckedCommand {
   }
 }
 
+function Invoke-CapturedCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$Executable,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$FailureMessage
+  )
+
+  $capturedExitCode = $null
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $captured = & $Executable @Arguments 2>&1 | Out-String
+    $capturedExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($null -eq $capturedExitCode -or $capturedExitCode -ne 0) {
+    throw "$FailureMessage (exit=$capturedExitCode)"
+  }
+  return $captured
+}
+
 function Get-Sha256Hex {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -79,12 +104,12 @@ function Get-Sha256Hex {
 
 Push-Location $projectRoot
 try {
-  Invoke-CheckedCommand -Executable "npx" -Arguments @(
+  Invoke-CheckedCommand -Executable $npx -Arguments @(
     "--yes", "hyperframes@0.8.16", "check",
     "--at-transitions", "--samples", "15"
   ) -FailureMessage "HyperFrames final check failed"
 
-  Invoke-CheckedCommand -Executable "npx" -Arguments @(
+  Invoke-CheckedCommand -Executable $npx -Arguments @(
     "--yes", "hyperframes@0.8.16", "render",
     "--output", $masterPath,
     "--fps", "30",
@@ -100,6 +125,27 @@ finally {
   Pop-Location
 }
 
+$loudnessLog = Invoke-CapturedCommand -Executable $ffmpeg -Arguments @(
+  "-hide_banner", "-nostats",
+  "-i", $masterPath,
+  "-vn",
+  "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json",
+  "-f", "null", "-"
+) -FailureMessage "Audio loudness analysis failed"
+$loudnessMatch = [regex]::Match($loudnessLog, '(?s)\{\s*"input_i".*?\}')
+if (-not $loudnessMatch.Success) {
+  throw "Unable to parse the first-pass loudness measurements."
+}
+$loudness = $loudnessMatch.Value | ConvertFrom-Json
+$normalizationFilter = (
+  "loudnorm=I=-14:TP=-1.5:LRA=11:" +
+  "measured_I=$($loudness.input_i):" +
+  "measured_LRA=$($loudness.input_lra):" +
+  "measured_TP=$($loudness.input_tp):" +
+  "measured_thresh=$($loudness.input_thresh):" +
+  "offset=$($loudness.target_offset):linear=true:print_format=summary"
+)
+
 Invoke-CheckedCommand -Executable $ffmpeg -Arguments @(
   "-hide_banner", "-y",
   "-i", $masterPath,
@@ -110,6 +156,7 @@ Invoke-CheckedCommand -Executable $ffmpeg -Arguments @(
   "-crf", "16",
   "-profile:v", "high",
   "-level:v", "4.1",
+  "-af", $normalizationFilter,
   "-c:a", "aac",
   "-b:a", "192k",
   "-ar", "48000",
@@ -126,7 +173,10 @@ if ($null -eq $qaResult -or -not $qaResult.Ok) {
 
 $masterItem = Get-Item -LiteralPath $masterPath
 $masterHash = Get-Sha256Hex -Path $masterPath
-$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$report = [IO.File]::ReadAllText(
+  $reportPath,
+  [Text.UTF8Encoding]::new($false)
+) | ConvertFrom-Json
 $report | Add-Member -NotePropertyName render -NotePropertyValue ([ordered]@{
     hyperframesVersion = "0.8.16"
     fps = 30
@@ -134,6 +184,17 @@ $report | Add-Member -NotePropertyName render -NotePropertyValue ([ordered]@{
     masterCrf = 12
     deliveryCrf = 16
     deliveryPreset = "slow"
+    audioMastering = [ordered]@{
+      targetIntegratedLufs = -14
+      targetTruePeakDb = -1.5
+      targetLoudnessRange = 11
+      measuredInputIntegratedLufs = $loudness.input_i
+      measuredInputTruePeakDb = $loudness.input_tp
+      measuredInputLoudnessRange = $loudness.input_lra
+      measuredInputThreshold = $loudness.input_thresh
+      measuredTargetOffset = $loudness.target_offset
+      method = "ebu-r128-two-pass"
+    }
     workers = $Workers
   })
 $report | Add-Member -NotePropertyName master -NotePropertyValue ([ordered]@{

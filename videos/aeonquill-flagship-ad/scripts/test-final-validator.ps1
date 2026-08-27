@@ -42,6 +42,29 @@ $passingReportPath = Join-Path $caseRoot "passing.qa.json"
 $failingReportPath = Join-Path $caseRoot "unexpected-failure-report.qa.json"
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
 $validatorPath = Join-Path $PSScriptRoot "validate-final-video.ps1"
+$renderPath = Join-Path $PSScriptRoot "render-final-720p.ps1"
+$renderSource = Get-Content -LiteralPath $renderPath -Raw
+if ($renderSource -notmatch 'Get-Command npx\.cmd') {
+  throw "The approved render path must resolve npx.cmd explicitly under Windows PowerShell strict mode."
+}
+if ($renderSource -match '-Executable\s+["'']npx["'']') {
+  throw "The approved render path must not invoke the npx.ps1 shim from a strict-mode scope."
+}
+if ($renderSource -notmatch 'loudnorm=I=-14:TP=-1\.5:LRA=11:print_format=json') {
+  throw "The approved render path must analyze EBU R128 loudness before delivery encoding."
+}
+if (
+  $renderSource -notmatch 'measured_I=' -or
+  $renderSource -notmatch 'measured_LRA=' -or
+  $renderSource -notmatch 'measured_TP=' -or
+  $renderSource -notmatch 'measured_thresh=' -or
+  $renderSource -notmatch 'offset='
+) {
+  throw "The approved render path must apply measured two-pass loudness normalization."
+}
+if ($renderSource -notmatch '\[IO\.File\]::ReadAllText') {
+  throw "The approved render path must preserve non-ASCII QA paths with explicit UTF-8 reads."
+}
 
 Invoke-CheckedCommand -Executable $ffmpeg -Arguments @(
   "-hide_banner", "-loglevel", "error", "-y",
