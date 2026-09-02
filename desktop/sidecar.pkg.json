@@ -5,6 +5,7 @@
     "../src/lib/canvasCore.mjs"
   ],
   "assets": [
+    "../.runtime/release/embedded-build-identity.json",
     "../dist/**/*",
     "../server/rembg-runner.py",
     "../server/workflows/*.json"

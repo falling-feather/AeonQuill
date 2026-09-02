@@ -20,18 +20,20 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 test('desktop release identity and version mirrors resolve from package.json', async () => {
   const metadata = await loadReleaseMetadata(projectRoot)
   const paths = resolveReleasePaths(metadata)
-  const [tauriConfig, cargoSource, mainSource, tauriSource, electronSource] = await Promise.all([
+  const [tauriConfig, cargoSource, mainSource, tauriSource, electronSource, sidecarConfig, sidecarBuildSource] = await Promise.all([
     readFile(join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'tauri.conf.json'), 'utf8').then(JSON.parse),
     readFile(join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'Cargo.toml'), 'utf8'),
     readFile(join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'src', 'main.rs'), 'utf8'),
     readFile(join(projectRoot, 'desktop', 'tauri', 'src-tauri', 'src', 'lib.rs'), 'utf8'),
     readFile(join(projectRoot, 'desktop', 'electron', 'main.mjs'), 'utf8'),
+    readFile(join(projectRoot, 'desktop', 'sidecar.pkg.json'), 'utf8').then(JSON.parse),
+    readFile(join(projectRoot, 'scripts', 'build-node-sidecar.mjs'), 'utf8'),
   ])
 
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
   assert.equal(metadata.version, '0.7.1')
-  assert.equal(metadata.functionalTrack, 'V0.7.28')
+  assert.equal(metadata.functionalTrack, 'V0.7.29')
   assert.equal(metadata.buildIdentityVersion, 'aeonquill-build-identity-v1')
   assert.equal(metadata.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
@@ -49,8 +51,12 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(cargoSource, /^tauri-plugin-single-instance = "2"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
-  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.28"/)
+  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.29"/)
   assert.match(tauriSource, /option_env!\("AEONQUILL_BUILD_COMMIT"\)/)
+  assert.ok(sidecarConfig.assets.includes('../.runtime/release/embedded-build-identity.json'))
+  assert.match(sidecarBuildSource, /status', '--porcelain=v1', '--untracked-files=all'/u)
+  assert.match(sidecarBuildSource, /self-contained sidecar must be packaged from a clean Git worktree/u)
+  assert.match(sidecarBuildSource, /AEONQUILL_BUILD_COMMIT does not match clean HEAD/u)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
   assert.match(tauriSource, /close_window\.close\(\)/)
   assert.match(tauriSource, /tauri::RunEvent::WindowEvent/)
@@ -230,6 +236,15 @@ test('lightweight release fails closed unless the packaged sidecar and hidden Ta
     stageAt > singleInstanceAt,
     'Download staging must happen only after sidecar, lifecycle, and single-instance gates pass',
   )
+})
+
+test('packaged sidecar validation imports its identity reader and waits before cleanup', async () => {
+  const source = await readFile(join(projectRoot, 'scripts', 'validate-node-sidecar.mjs'), 'utf8')
+  assert.match(source, /import \{[^}]*readFile[^}]*\} from 'node:fs\/promises'/s)
+  assert.match(source, /async function terminateChild\(child\)/)
+  assert.match(source, /await terminateChild\(child\)/)
+  assert.match(source, /maxRetries: 10/)
+  assert.match(source, /retryDelay: 100/)
 })
 
 test('signed desktop build reuses only a trusted Microsoft WebView2 offline installer', async () => {

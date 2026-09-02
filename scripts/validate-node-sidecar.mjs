@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -14,6 +14,7 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const metadata = await loadReleaseMetadata(projectRoot)
 const sidecarPath = resolveReleasePaths(metadata).sourceSidecar
 const finalReportPath = join(projectRoot, '.runtime', 'qa', 'node-sidecar-final.json')
+const embeddedIdentityPath = join(projectRoot, '.runtime', 'release', 'embedded-build-identity.json')
 
 async function availablePort() {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -29,6 +30,8 @@ async function availablePort() {
 }
 
 function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode)
+  if (child.signalCode !== null) return Promise.resolve(child.signalCode)
   return new Promise((resolvePromise) => {
     const timer = setTimeout(() => resolvePromise('timeout'), timeoutMs)
     child.once('exit', (code) => {
@@ -36,6 +39,12 @@ function waitForExit(child, timeoutMs) {
       resolvePromise(code)
     })
   })
+}
+
+async function terminateChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  child.kill()
+  await waitForExit(child, 5_000)
 }
 
 async function sha256(pathname) {
@@ -95,8 +104,12 @@ try {
     baseUrl,
     isProcessAlive: () => !earlyExit.value,
   })
+  const embeddedIdentity = JSON.parse(await readFile(embeddedIdentityPath, 'utf8'))
   const readyMs = Date.now() - startedAt
   assert.equal(health.ok, true)
+  assert.equal(health.identity.sourceCommit, embeddedIdentity.sourceCommit)
+  assert.equal(health.identity.functionalTrack, embeddedIdentity.functionalTrack)
+  assert.equal(health.identity.productVersion, embeddedIdentity.productVersion)
   const htmlResponse = await fetch(baseUrl, { redirect: 'error' })
   assert.equal(htmlResponse.status, 200)
   assert.match(htmlResponse.headers.get('content-security-policy') || '', /default-src 'self'/)
@@ -117,6 +130,7 @@ try {
       filename: sidecarPath.split(/[\\/]/).pop(),
       bytes: sidecarStats.size,
       sha256: await sha256(sidecarPath),
+      embeddedSourceCommit: embeddedIdentity.sourceCommit,
       systemNodeRequired: false,
       launchPathScope: 'Windows system directories only',
     },
@@ -136,13 +150,18 @@ try {
   console.log(`✓ Artifact ${(sidecarStats.size / 1024 / 1024).toFixed(1)} MiB, SHA-256 ${report.artifact.sha256.slice(0, 12)}…`)
   console.log(`✓ Report: ${finalReportPath}`)
 } catch (error) {
-  if (child?.exitCode === null) child.kill()
+  await terminateChild(child)
   throw new Error([
     error.message,
     stdout.join('').trim(),
     stderr.join('').trim(),
   ].filter(Boolean).join('\n'))
 } finally {
-  if (child?.exitCode === null) child.kill()
-  await rm(runtimeDirectory, { recursive: true, force: true })
+  await terminateChild(child)
+  await rm(runtimeDirectory, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  })
 }
