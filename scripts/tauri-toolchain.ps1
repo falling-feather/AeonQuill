@@ -22,7 +22,20 @@ $aeonquillCargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
 $aeonquillManifest = Join-Path $aeonquillProjectRoot 'desktop\tauri\src-tauri\Cargo.toml'
 $aeonquillTauriCli = Join-Path $aeonquillProjectRoot 'node_modules\@tauri-apps\cli\tauri.js'
 $aeonquillOfflineTauriCli = Join-Path $aeonquillProjectRoot '.runtime\toolchains\tauri-offline-patch\target\release\cargo-tauri.exe'
-$aeonquillOfflineTauriCliSha256 = '05CD576F648F80F3F1933B8733F40447C393CA00B677D52DC51165276789E478'
+$aeonquillOfflineTauriCliSha256 = '379A53C258AE20595DAAFA0C68EEAF5E8FE6DE93C054D4A4857BC84BCE74475E'
+
+function Get-AeonquillSha256Hex {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $stream = [IO.File]::OpenRead($Path)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '')
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
+}
 
 if (-not (Test-Path -LiteralPath $aeonquillCargo -PathType Leaf)) {
   throw 'Project-local Rust toolchain is missing. Install it under .runtime/toolchains/rust first.'
@@ -36,7 +49,7 @@ if ($aeonquillUseOfflineTauriCli) {
   if (-not (Test-Path -LiteralPath $aeonquillOfflineTauriCli -PathType Leaf)) {
     throw 'The verified offline Tauri CLI is required when AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER is set.'
   }
-  $aeonquillOfflineHash = (Get-FileHash -LiteralPath $aeonquillOfflineTauriCli -Algorithm SHA256).Hash
+  $aeonquillOfflineHash = Get-AeonquillSha256Hex -Path $aeonquillOfflineTauriCli
   if ($aeonquillOfflineHash -ne $aeonquillOfflineTauriCliSha256) {
     throw "The offline Tauri CLI hash does not match the reviewed build: $aeonquillOfflineHash"
   }

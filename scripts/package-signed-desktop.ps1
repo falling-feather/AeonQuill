@@ -40,6 +40,19 @@ function Find-SignTool {
   return $matches[0].FullName
 }
 
+function Get-Sha256Hex {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $stream = [IO.File]::OpenRead($Path)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '')
+  } finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+  }
+}
+
 function Get-VerifiedWebView2OfflineInstaller {
   param(
     [string]$SearchRoot,
@@ -56,6 +69,7 @@ function Get-VerifiedWebView2OfflineInstaller {
     )
   }
 
+  $signatureTool = Find-SignTool
   $verified = @()
   foreach ($candidatePath in $candidatePaths) {
     if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
@@ -66,16 +80,24 @@ function Get-VerifiedWebView2OfflineInstaller {
     }
 
     $item = Get-Item -LiteralPath $candidatePath
-    $signature = Get-AuthenticodeSignature -LiteralPath $candidatePath
-    $subject = if ($null -eq $signature.SignerCertificate) { '' } else { [string]$signature.SignerCertificate.Subject }
+    $signatureOutput = @(& $signatureTool verify /pa /q $candidatePath 2>&1)
+    $signatureValid = $LASTEXITCODE -eq 0
+    try {
+      $rawCertificate = [Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($candidatePath)
+      $signerCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($rawCertificate)
+      $subject = [string]$signerCertificate.Subject
+    } catch {
+      $subject = ''
+    }
     $isTrustedMicrosoft = (
       $item.Length -gt 50MB -and
-      $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+      $signatureValid -and
       $subject -match '(^|,\s*)CN=Microsoft Corporation(,|$)'
     )
     if (-not $isTrustedMicrosoft) {
       if (-not [string]::IsNullOrWhiteSpace($ExplicitCandidate)) {
-        throw "指定的 WebView2 离线安装器未通过微软 Authenticode 与体量校验：$candidatePath"
+        $signatureSummary = ($signatureOutput | ForEach-Object { [string]$_ }) -join ' '
+        throw "指定的 WebView2 离线安装器未通过微软 Authenticode 与体量校验：$candidatePath；$signatureSummary"
       }
       continue
     }
@@ -90,7 +112,7 @@ function Get-VerifiedWebView2OfflineInstaller {
       Version = $fileVersion
       Bytes = $item.Length
       LastWriteTime = $item.LastWriteTimeUtc
-      Sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+      Sha256 = Get-Sha256Hex -Path $item.FullName
     }
   }
 
@@ -221,7 +243,7 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.25'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.26'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
 
