@@ -16,6 +16,7 @@ $builtApplication = Join-Path $targetRelease 'aeonquill-desktop.exe'
 $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
 $installer = Join-Path $targetRelease ("bundle\nsis\AEONQUILL_{0}_x64-setup.exe" -f $productVersion)
 $buildTempRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-BUILD-TEMP'
+$stagedWebView2Installer = Join-Path $buildTempRoot 'AEONQUILL-WebView2-Offline-x64.exe'
 $certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
 $previousTemp = $env:TEMP
@@ -241,26 +242,32 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.27'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.28'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
+
+  New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
+  $env:TEMP = $buildTempRoot
+  $env:TMP = $buildTempRoot
 
   $webView2SearchRoot = Join-Path (Split-Path -Parent $targetRelease) '.tauri\x64'
   $webView2Installer = Get-VerifiedWebView2OfflineInstaller `
     -SearchRoot $webView2SearchRoot `
     -ExplicitCandidate $previousWebView2OfflineInstaller
   if ($null -ne $webView2Installer) {
-    $env:AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER = $webView2Installer.Path
+    [IO.File]::Copy($webView2Installer.Path, $stagedWebView2Installer, $true)
+    $stagedWebView2Item = Get-Item -LiteralPath $stagedWebView2Installer
+    $stagedWebView2Sha256 = Get-Sha256Hex -Path $stagedWebView2Installer
+    if ($stagedWebView2Item.Length -ne $webView2Installer.Bytes -or $stagedWebView2Sha256 -ne $webView2Installer.Sha256) {
+      throw 'WebView2 离线安装器写入纯 ASCII 构建路径后未保持逐字节一致。'
+    }
+    $env:AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER = $stagedWebView2Installer
     Write-Host ("使用已验证的微软 WebView2 离线安装器：{0}；{1} bytes；SHA-256 {2}" -f `
       $webView2Installer.Version, $webView2Installer.Bytes, $webView2Installer.Sha256)
   } else {
     Remove-Item Env:\AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER -ErrorAction SilentlyContinue
     Write-Warning '未发现已验证的 D 盘 WebView2 离线安装器；Tauri 将使用官方网络发现流程。'
   }
-
-  New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
-  $env:TEMP = $buildTempRoot
-  $env:TMP = $buildTempRoot
 
   Write-Host '正在构建自包含 Node sidecar 与前端…'
   & (Get-Command npm.cmd).Source run build:desktop:sidecar

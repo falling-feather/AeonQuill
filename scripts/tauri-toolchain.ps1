@@ -22,7 +22,7 @@ $aeonquillCargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
 $aeonquillManifest = Join-Path $aeonquillProjectRoot 'desktop\tauri\src-tauri\Cargo.toml'
 $aeonquillTauriCli = Join-Path $aeonquillProjectRoot 'node_modules\@tauri-apps\cli\tauri.js'
 $aeonquillOfflineTauriCli = Join-Path $aeonquillProjectRoot '.runtime\toolchains\tauri-offline-patch\target\release\cargo-tauri.exe'
-$aeonquillOfflineTauriCliSha256 = '379A53C258AE20595DAAFA0C68EEAF5E8FE6DE93C054D4A4857BC84BCE74475E'
+$aeonquillOfflineTauriCliSha256 = '3ED4C56DE9F5FC1F98D2C335A88D0E871AB5389EE27FC047EC290E4BC2B60009'
 
 function Get-AeonquillSha256Hex {
   param([Parameter(Mandatory = $true)][string]$Path)
