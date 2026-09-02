@@ -732,7 +732,7 @@ export class WorkflowCenterService {
   // @yao-pkg/pkg 6.22 misclassifies await inside private class methods as
   // top-level await. Keep async packaging-boundary methods conventionally
   // internal so the ESM-to-CJS transform includes this module in the snapshot.
-  async _runtimeRegistry() {
+  async runtimeRegistry() {
     const configuration = this.getRuntimeConfig() || {}
     return discoverRuntimeRegistry({
       comfyRoot: configuration.comfyRoot || this.getComfyRoot(),
@@ -808,7 +808,7 @@ export class WorkflowCenterService {
   }
 
   async catalog({ runtime = {}, objectInfo = null, hardware = null } = {}) {
-    const registry = await this._runtimeRegistry()
+    const registry = await this.runtimeRegistry()
     const comfyRoot = registry.comfyRoot
     const registeredNodes = normalizeRegisteredNodes(objectInfo)
     const vramTotal = Number(runtime.vramTotal || hardware?.vramTotal || 0)
@@ -911,7 +911,7 @@ export class WorkflowCenterService {
     const accepted = new Set(Array.isArray(request.acceptedLicenseIds) ? request.acceptedLicenseIds : [])
     const missingLicenses = requiredLicenses.filter((id) => !accepted.has(id) && !this.state.acceptedLicenses[id])
     if (missingLicenses.length) throw workflowError('必须先确认模型许可证与适用范围', 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED', 409, { licenseIds: missingLicenses })
-    const registry = await this._runtimeRegistry()
+    const registry = await this.runtimeRegistry()
     if (!registry.configured) throw workflowError('请先在本机设置中配置 ComfyUI 根目录', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
     const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this._inspectArtifact(artifact, registry)))
     const artifacts = pack.artifacts.map((artifact, index) => publicArtifact(artifact, artifactStates[index]))
@@ -1049,7 +1049,7 @@ export class WorkflowCenterService {
     try {
       await this._updateJob(jobId, { status: 'running', phase: 'preflight', progress: 0 })
       let completedBytes = 0
-      const registry = await this._runtimeRegistry()
+      const registry = await this.runtimeRegistry()
       if (!registry.configured) throw workflowError('ComfyUI 运行时配置已失效', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
       const automaticArtifacts = pack.artifacts.filter(({ downloadUrl }) => downloadUrl)
       for (const artifact of automaticArtifacts) {
@@ -1108,7 +1108,7 @@ export class WorkflowCenterService {
 
   async enablePack(packId, { runtime = {}, objectInfo = null } = {}) {
     const pack = this.#pack(packId)
-    const registry = await this._runtimeRegistry()
+    const registry = await this.runtimeRegistry()
     if (!registry.configured) throw workflowError('请先配置 ComfyUI 运行时', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
     const requiredLicenses = requiredLicenseIds(pack)
     if (requiredLicenses.some((id) => !this.state.acceptedLicenses[id])) throw workflowError('许可证尚未确认', 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED', 409)

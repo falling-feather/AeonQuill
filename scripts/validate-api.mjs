@@ -25,6 +25,9 @@ function assertPublicJob(job) {
   for (const privateKey of ['inputPath', 'lastFramePath', 'outputPath', 'temporaryOutputPath', 'abortController']) {
     assert.ok(!(privateKey in job), `public job must not expose ${privateKey}`)
   }
+  assert.equal(job.executionIdentity?.productVersion, '0.7.1')
+  assert.equal(job.executionIdentity?.functionalTrack, 'V0.7.24')
+  assert.match(job.executionIdentity?.identityHash || '', /^[a-f0-9]{64}$/u)
 }
 
 function requestWithHostHeader(baseUrl, pathname, hostHeader) {
@@ -75,6 +78,10 @@ try {
   const health = await initialHealthResponse.json()
   assert.equal(health.ok, true)
   assert.equal(health.service, 'miaohui-local-bridge')
+  assert.equal(health.identity.productVersion, '0.7.1')
+  assert.equal(health.identity.functionalTrack, 'V0.7.24')
+  assert.equal(health.identity.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
+  assert.match(health.identity.sourceCommit || '', /^[a-f0-9]{40}$/u)
 
   const noSession = await fetch(`${bridge.baseUrl}/api/jobs`)
   assert.equal(noSession.status, 401)
@@ -231,6 +238,8 @@ try {
   const diagnostics = await requestJson(bridge.baseUrl, '/api/runtime/diagnostics?refresh=1')
   assert.equal(diagnostics.product.name, '光阴砚 AEONQUILL')
   assert.equal(diagnostics.product.service, 'aeonquill-local-runtime')
+  assert.deepEqual(diagnostics.identity, health.identity)
+  assert.equal(diagnostics.registryMigration.movesModelFiles, false)
   assert.equal(diagnostics.storage.dataWritable, true)
   assert.equal(diagnostics.storage.configWritable, true)
   assert.equal(diagnostics.storage.outputDirectoryWritable, true)
@@ -242,6 +251,21 @@ try {
   assert.doesNotMatch(diagnosticText, /[A-Z]:\\\\/u)
   assert.doesNotMatch(diagnosticText, /\\\\Users\\\\/iu)
   assert.doesNotMatch(diagnosticText, /\/home\/|inputPath|outputPath|"pid"/iu)
+
+  const migrationPreview = await requestJson(bridge.baseUrl, '/api/runtime/registry-migration')
+  assert.equal(migrationPreview.status, 'not-needed')
+  assert.equal(migrationPreview.movesModelFiles, false)
+  assert.equal(JSON.stringify(migrationPreview).includes(bridge.root), false)
+  const invalidMigration = await requestJson(bridge.baseUrl, '/api/runtime/registry-migration/apply', {
+    method: 'POST',
+    body: JSON.stringify({ planId: null, beforeHash: null }),
+  }, 400)
+  assert.equal(invalidMigration.error.code, 'RUNTIME_MIGRATION_REQUEST_INVALID')
+  const unknownRemovalRoot = await requestJson(bridge.baseUrl, '/api/runtime/registry-removal-check', {
+    method: 'POST',
+    body: JSON.stringify({ rootId: 'missing-root' }),
+  }, 404)
+  assert.equal(unknownRemovalRoot.error.code, 'RUNTIME_REMOVAL_ROOT_UNKNOWN')
 
   const configuredPolicy = await requestJson(bridge.baseUrl, '/api/runtime/config', {
     method: 'POST',

@@ -1166,6 +1166,110 @@
   font-size: 17px;
 }
 
+.aq-runtime-settings__identity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.aq-runtime-settings__identity > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid #e5e9ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.aq-runtime-settings__identity svg {
+  grid-row: 1 / span 2;
+  color: #286fc5;
+}
+
+.aq-runtime-settings__identity small,
+.aq-runtime-settings__identity strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-runtime-settings__identity small {
+  color: var(--aq-dialog-muted);
+  font-size: 9px;
+}
+
+.aq-runtime-settings__identity strong {
+  grid-column: 2;
+  color: var(--aq-dialog-ink);
+  font-size: 11px;
+}
+
+.aq-runtime-settings__migration {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 9px;
+  padding: 10px 11px;
+  color: #286fc5;
+  border-radius: 8px;
+  background: #f1f7ff;
+}
+
+.aq-runtime-settings__migration.is-blocked {
+  color: #a63d35;
+  background: #fff3f1;
+}
+
+.aq-runtime-settings__migration.is-not-needed {
+  color: #17805f;
+  background: #effaf6;
+}
+
+.aq-runtime-settings__migration > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aq-runtime-settings__migration strong {
+  color: var(--aq-dialog-ink);
+  font-size: 11px;
+}
+
+.aq-runtime-settings__migration small {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.aq-runtime-settings__migration button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.aq-runtime-settings__migration button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .aq-runtime-settings__issues ul {
   display: grid;
   gap: 8px;
@@ -1779,6 +1883,20 @@
   .aq-runtime-settings__issues,
   .aq-runtime-settings__form {
     padding: 15px 13px;
+  }
+
+  .aq-runtime-settings__identity {
+    grid-template-columns: 1fr;
+  }
+
+  .aq-runtime-settings__migration {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aq-runtime-settings__migration button {
+    width: 100%;
+    min-height: 40px;
   }
 
   .aq-runtime-settings__discovery,

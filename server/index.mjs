@@ -74,6 +74,8 @@ import {
   VIDEO_FINALIZER_VERSION,
 } from './video-finalizer.mjs'
 import { WorkflowCenterService } from './workflow-center.mjs'
+import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
+import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
@@ -86,6 +88,7 @@ const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
 const assetDirectory = join(dataDirectory, 'assets')
 const localRuntimeConfig = await loadLocalRuntimeConfig()
+const buildIdentity = await resolveBuildIdentity({ projectRoot, runtimeConfig: localRuntimeConfig })
 const port = Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || localRuntimeConfig.bridgePort || 8787)
 const host = process.env.AEONQUILL_HOST || process.env.MIAOHUI_HOST || '127.0.0.1'
 const security = new LocalBridgeSecurity({ host, port, allowedOrigins: localRuntimeConfig.allowedOrigins })
@@ -102,7 +105,9 @@ const imageProcessor = new ImageProcessor({
   realEsrganPath: localRuntimeConfig.imageTools?.realEsrganPath,
   realEsrganModelsPath: localRuntimeConfig.imageTools?.realEsrganModelsPath,
 })
-const store = new JobStore(join(dataDirectory, 'jobs.json'))
+const store = new JobStore(join(dataDirectory, 'jobs.json'), {
+  getExecutionIdentity: () => executionIdentity(buildIdentity),
+})
 const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
 const workspaceStore = new WorkspaceStore(join(dataDirectory, 'workspaces'))
 const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'))
@@ -110,6 +115,19 @@ const workflowCenter = new WorkflowCenterService({
   rootDirectory: join(dataDirectory, 'workflow-center'),
   getComfyRoot: () => localRuntimeConfig.comfyRoot,
   getRuntimeConfig: () => localRuntimeConfig,
+})
+const runtimeRegistryMigration = new RuntimeRegistryMigrationService({
+  rootDirectory: join(dataDirectory, 'runtime-registry-migrations'),
+  getRegistry: () => workflowCenter.runtimeRegistry(),
+  assertMutationAllowed: async () => {
+    const state = runtimeManager.status().state
+    if (!['stopped', 'error'].includes(state) || !(await runtimeIsIdle())) {
+      throw Object.assign(new Error('ComfyUI 或本机任务仍在运行，当前不能改写共享模型配置'), {
+        code: 'RUNTIME_MIGRATION_BUSY',
+        status: 409,
+      })
+    }
+  },
 })
 const agentAdapters = new AgentAdapterService()
 const generationAdapters = new GenerationAdapterService()
@@ -144,6 +162,7 @@ await Promise.all([
   workspaceStore.open(),
   clientStateStore.open(),
   workflowCenter.open(),
+  runtimeRegistryMigration.open(),
   assetPreviewService.open(),
 ])
 
@@ -582,9 +601,10 @@ async function inspectWorkflowCenterContext({ force = false, startRuntime = fals
 }
 
 async function inspectRuntimeDiagnostics(force = false, persistedConfig) {
-  const [runtime, imageManifest] = await Promise.all([
+  const [runtime, imageManifest, registryMigration] = await Promise.all([
     inspectRuntime(force),
     imageProcessor.probe(force),
+    runtimeRegistryMigration.preview(),
   ])
   const semanticManifest = await inspectSemanticWorkflows(force)
   const lifecycle = runtimeManager.status()
@@ -609,6 +629,8 @@ async function inspectRuntimeDiagnostics(force = false, persistedConfig) {
     imageManifest,
     semanticManifest,
     configError,
+    identity: buildIdentity,
+    registryMigration,
   })
 }
 
@@ -2770,7 +2792,12 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/health') {
       security.assertTrustedBrowserSource(request)
       security.issueSession(response)
-      return sendJson(response, 200, { ok: true, service: 'miaohui-local-bridge', version: WORKFLOW_VERSION })
+      return sendJson(response, 200, {
+        ok: true,
+        service: 'miaohui-local-bridge',
+        version: WORKFLOW_VERSION,
+        identity: buildIdentity,
+      })
     }
     if (pathname.startsWith('/api/')) {
       security.assertTrustedBrowserSource(request)
@@ -2781,6 +2808,25 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && pathname === '/api/runtime/diagnostics') {
       return sendJson(response, 200, await inspectRuntimeDiagnostics(url.searchParams.get('refresh') === '1'))
+    }
+    if (request.method === 'GET' && pathname === '/api/runtime/registry-migration') {
+      return sendJson(response, 200, await runtimeRegistryMigration.preview())
+    }
+    if (request.method === 'POST' && pathname === '/api/runtime/registry-migration/apply') {
+      const body = await readJsonBody(request, 8 * 1024)
+      const result = await runtimeRegistryMigration.apply(body)
+      runtimeCache = null
+      return sendJson(response, 200, result)
+    }
+    if (request.method === 'POST' && pathname === '/api/runtime/registry-migration/rollback') {
+      const body = await readJsonBody(request, 4 * 1024)
+      const result = await runtimeRegistryMigration.rollback(body)
+      runtimeCache = null
+      return sendJson(response, 200, result)
+    }
+    if (request.method === 'POST' && pathname === '/api/runtime/registry-removal-check') {
+      const body = await readJsonBody(request, 4 * 1024)
+      return sendJson(response, 200, await runtimeRegistryMigration.checkRemoval(body))
     }
     if (request.method === 'POST' && pathname === '/api/runtime/config') {
       const body = await readJsonBody(request, 16 * 1024)

@@ -1,6 +1,7 @@
 {
   "scripts": [
     "../server/**/*.mjs",
+    "release/product-identity.mjs",
     "../src/lib/canvasCore.mjs"
   ],
   "assets": [

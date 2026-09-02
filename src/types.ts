@@ -333,6 +333,14 @@ export type ProcessingJob = {
   updatedAt?: number
   completedAt?: number
   workflowVersion?: string
+  executionIdentity?: {
+    identityHash: string
+    productVersion: string
+    functionalTrack: string
+    sourceCommit: string | null
+    runtimePackageId: string | null
+    runtimeRegistryVersion: string
+  } | null
   retryOf?: string
   scheduling?: ProcessingJobScheduling
   costEvents?: ProcessingJobCostEvent[]
@@ -541,6 +549,56 @@ export type RuntimeDiagnosticIssue = {
   action: string
 }
 
+export type BuildIdentity = {
+  version: string
+  productVersion: string
+  functionalTrack: string
+  sourceCommit: string | null
+  sourceCommitShort: string | null
+  sourceState: 'commit' | 'unversioned-development'
+  runtimePackageId: string | null
+  runtimeRegistryVersion: string
+  identityHash: string
+}
+
+export type RuntimeRegistryMigrationPreview = {
+  version: string
+  status: 'ready' | 'not-needed' | 'blocked'
+  plans: Array<{
+    id: string | null
+    status: 'ready' | 'not-needed' | 'blocked'
+    beforeHash: string
+    afterHash: string | null
+    configLabel: string
+    changeCount: number
+    groups: Array<{ group: string; relativeDepth: number }>
+    reason: string | null
+  }>
+  readyCount: number
+  changeCount: number
+  movesModelFiles: false
+  removalGate: {
+    sharedRoots: Array<{
+      rootId: string
+      rootLabel: string
+      referenceCount: number
+      blocked: boolean
+    }>
+    blockedRoots: number
+  }
+  latest: null | {
+    id: string
+    planId: string
+    status: 'applied' | 'rolled-back'
+    beforeHash: string
+    afterHash: string
+    appliedAt: number
+    rolledBackAt: number | null
+    changeCount: number
+    rollbackAvailable: boolean
+  }
+}
+
 export type RuntimeDiagnostics = {
   schemaVersion: 1
   checkedAt: number
@@ -551,6 +609,8 @@ export type RuntimeDiagnostics = {
     architecture: string
     node: string
   }
+  identity: BuildIdentity | null
+  registryMigration: RuntimeRegistryMigrationPreview | null
   storage: {
     scope: 'development' | 'user-data' | 'legacy-user-data' | 'custom'
     runtimeWritable: boolean

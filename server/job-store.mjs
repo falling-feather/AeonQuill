@@ -5,8 +5,9 @@ import { redactSensitiveText, sanitizePublicPayload } from './security.mjs'
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
 
 export class JobStore {
-  constructor(filePath) {
+  constructor(filePath, { getExecutionIdentity } = {}) {
     this.filePath = filePath
+    this.getExecutionIdentity = typeof getExecutionIdentity === 'function' ? getExecutionIdentity : () => null
     this.jobs = new Map()
     this.listeners = new Set()
     this.writeChain = Promise.resolve()
@@ -60,12 +61,14 @@ export class JobStore {
   }
 
   async add(job) {
+    if (job && job.executionIdentity === undefined) job.executionIdentity = this.getExecutionIdentity()
     this.jobs.set(job.id, job)
     await this.changed(job)
     return job
   }
 
   async addIdempotent(job) {
+    if (job && job.executionIdentity === undefined) job.executionIdentity = this.getExecutionIdentity()
     const idempotencyKey = job?.scheduling?.idempotencyKey
     const existing = this.findByIdempotencyKey(idempotencyKey)
     if (existing) {

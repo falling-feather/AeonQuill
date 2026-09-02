@@ -4,6 +4,7 @@ import type {
   RuntimeConfigurationRequest,
   RuntimeConfigurationResult,
   RuntimeDiagnostics,
+  RuntimeRegistryMigrationPreview,
   RuntimeStatus,
   VideoChainJobRequest,
   VideoJobRequest,
@@ -96,6 +97,22 @@ export function saveClientState(kind: ClientStateKind, value: string) {
 
 export async function fetchRuntimeDiagnostics(refresh = false) {
   return api<RuntimeDiagnostics>(`/api/runtime/diagnostics${refresh ? '?refresh=1' : ''}`)
+}
+
+export async function applyRuntimeRegistryMigration(planId: string, beforeHash: string) {
+  return api<{ preview: RuntimeRegistryMigrationPreview }>('/api/runtime/registry-migration/apply', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ planId, beforeHash }),
+  })
+}
+
+export async function rollbackRuntimeRegistryMigration(recordId: string) {
+  return api<{ preview: RuntimeRegistryMigrationPreview }>('/api/runtime/registry-migration/rollback', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ recordId }),
+  })
 }
 
 export async function configureRuntime(request: RuntimeConfigurationRequest) {

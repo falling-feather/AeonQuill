@@ -127,7 +127,7 @@ const selfSigned = signedComponents.every((signature) => (
 ))
 
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   product: {
     name: metadata.productName,
     displayName: metadata.displayName,
@@ -147,6 +147,14 @@ const manifest = {
   source: {
     gitCommit,
     workingTreeDirty: Boolean(gitStatus),
+  },
+  identity: {
+    version: metadata.buildIdentityVersion,
+    productVersion: metadata.version,
+    functionalTrack: metadata.functionalTrack,
+    sourceCommit: gitCommit,
+    runtimePackageId: null,
+    runtimeRegistryVersion: metadata.runtimeRegistryVersion,
   },
   build: {
     generatedAt: new Date().toISOString(),

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aeonquill.local/schemas/release-manifest-v1.json",
+  "$id": "https://aeonquill.local/schemas/release-manifest-v2.json",
   "title": "AEONQUILL Windows stage release manifest",
   "type": "object",
   "additionalProperties": false,
@@ -9,6 +9,7 @@
     "product",
     "target",
     "source",
+    "identity",
     "build",
     "artifacts",
     "components",
@@ -58,7 +59,7 @@
     }
   },
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "product": {
       "type": "object",
       "additionalProperties": false,
@@ -92,6 +93,19 @@
       "properties": {
         "gitCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
         "workingTreeDirty": { "type": "boolean" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "productVersion", "functionalTrack", "sourceCommit", "runtimePackageId", "runtimeRegistryVersion"],
+      "properties": {
+        "version": { "const": "aeonquill-build-identity-v1" },
+        "productVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+        "functionalTrack": { "type": "string", "pattern": "^V[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "runtimePackageId": { "type": ["string", "null"], "pattern": "^aeonquill-[a-z0-9][a-z0-9._-]{2,127}$" },
+        "runtimeRegistryVersion": { "const": "aeonquill-runtime-registry-v1" }
       }
     },
     "build": {

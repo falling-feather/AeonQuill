@@ -52,6 +52,7 @@ export function validateReleaseManifestShape(manifest, metadata) {
     'product',
     'target',
     'source',
+    'identity',
     'build',
     'artifacts',
     'components',
@@ -60,7 +61,7 @@ export function validateReleaseManifestShape(manifest, metadata) {
     'excluded',
     'files',
   ], 'manifest')
-  assert.equal(manifest.schemaVersion, 1)
+  assert.equal(manifest.schemaVersion, 2)
   assert.ok(
     ['unsigned-test-package', 'self-signed-test-package'].includes(manifest.product.distributionStatus),
     'manifest.product.distributionStatus is unsupported',
@@ -84,6 +85,24 @@ export function validateReleaseManifestShape(manifest, metadata) {
   assertExactKeys(manifest.source, ['gitCommit', 'workingTreeDirty'], 'manifest.source')
   assert.match(manifest.source.gitCommit, COMMIT_PATTERN)
   assert.equal(typeof manifest.source.workingTreeDirty, 'boolean')
+  assertExactKeys(manifest.identity, [
+    'version',
+    'productVersion',
+    'functionalTrack',
+    'sourceCommit',
+    'runtimePackageId',
+    'runtimeRegistryVersion',
+  ], 'manifest.identity')
+  assert.equal(manifest.identity.version, metadata.buildIdentityVersion)
+  assert.equal(manifest.identity.productVersion, metadata.version)
+  assert.equal(manifest.identity.functionalTrack, metadata.functionalTrack)
+  assert.equal(manifest.identity.sourceCommit, manifest.source.gitCommit)
+  assert.ok(
+    manifest.identity.runtimePackageId === null
+      || /^aeonquill-[a-z0-9][a-z0-9._-]{2,127}$/u.test(manifest.identity.runtimePackageId),
+    'manifest.identity.runtimePackageId is invalid',
+  )
+  assert.equal(manifest.identity.runtimeRegistryVersion, metadata.runtimeRegistryVersion)
   assertExactKeys(manifest.build, [
     'generatedAt',
     'nodeVersion',

@@ -31,6 +31,9 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
   assert.equal(metadata.version, '0.7.1')
+  assert.equal(metadata.functionalTrack, 'V0.7.24')
+  assert.equal(metadata.buildIdentityVersion, 'aeonquill-build-identity-v1')
+  assert.equal(metadata.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
   assert.equal(metadata.identifierMigrationStatus, 'legacy-preserved-for-data-continuity')
   assert.equal(tauriConfig.version, '../../../package.json')
@@ -46,6 +49,8 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(cargoSource, /^tauri-plugin-single-instance = "2"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
+  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.24"/)
+  assert.match(tauriSource, /option_env!\("AEONQUILL_BUILD_COMMIT"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
   assert.match(tauriSource, /close_window\.close\(\)/)
   assert.match(tauriSource, /tauri::RunEvent::WindowEvent/)
@@ -61,6 +66,13 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(tauriSource, /window\.set_focus\(\)/)
   assert.match(tauriSource, /default_data_directory\.join\("EBWebView"\)/)
   assert.match(tauriSource, /\.data_directory\(webview_data_directory\)/)
+  for (const key of [
+    'AEONQUILL_PRODUCT_VERSION',
+    'AEONQUILL_FUNCTIONAL_TRACK',
+    'AEONQUILL_BUILD_IDENTITY_VERSION',
+    'AEONQUILL_RUNTIME_REGISTRY_VERSION',
+    'AEONQUILL_BUILD_COMMIT',
+  ]) assert.match(tauriSource, new RegExp(key))
   for (const key of [
     'AEONQUILL_RUNTIME_DIR',
     'AEONQUILL_DATA_DIR',
@@ -259,7 +271,7 @@ test('release manifest contract is strict, path-safe and stage-only', async () =
   const metadata = await loadReleaseMetadata(projectRoot)
   const hash = 'a'.repeat(64)
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: {
       name: metadata.productName,
       displayName: metadata.displayName,
@@ -272,6 +284,14 @@ test('release manifest contract is strict, path-safe and stage-only', async () =
     },
     target: { platform: 'windows', arch: 'x64', format: 'nsis', installScope: 'currentUser' },
     source: { gitCommit: 'b'.repeat(40), workingTreeDirty: false },
+    identity: {
+      version: metadata.buildIdentityVersion,
+      productVersion: metadata.version,
+      functionalTrack: metadata.functionalTrack,
+      sourceCommit: 'b'.repeat(40),
+      runtimePackageId: null,
+      runtimeRegistryVersion: metadata.runtimeRegistryVersion,
+    },
     build: {
       generatedAt: '2026-08-15T00:00:00.000Z',
       nodeVersion: 'v22.18.0',

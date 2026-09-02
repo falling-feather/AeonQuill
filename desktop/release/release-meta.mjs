@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
+import {
+  BUILD_IDENTITY_VERSION,
+  FUNCTIONAL_TRACK,
+  PRODUCT_SEMVER,
+  RUNTIME_REGISTRY_VERSION,
+} from './product-identity.mjs'
 
 export const RELEASE_CHANNEL = 'stage'
 export const TARGET_PLATFORM = 'windows'
@@ -37,6 +43,7 @@ export async function loadReleaseMetadata(projectRoot) {
   const versionSourcePath = resolve(dirname(tauriConfigPath), tauriConfig.version)
   assert.equal(versionSourcePath, packagePath, 'Tauri must read its version from the root package.json')
   assert.match(packageJson.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
+  assert.equal(packageJson.version, PRODUCT_SEMVER, 'Product identity must mirror package.json')
   assert.equal(tauriConfig.productName, 'AEONQUILL')
   // Keep the invisible legacy identifier until a dedicated, tested data migration exists.
   assert.equal(tauriConfig.identifier, 'com.miaohui.desktop')
@@ -66,6 +73,9 @@ export async function loadReleaseMetadata(projectRoot) {
     productName,
     displayName: DISPLAY_NAME,
     version,
+    functionalTrack: FUNCTIONAL_TRACK,
+    buildIdentityVersion: BUILD_IDENTITY_VERSION,
+    runtimeRegistryVersion: RUNTIME_REGISTRY_VERSION,
     identifier: tauriConfig.identifier,
     identifierMigrationStatus: 'legacy-preserved-for-data-continuity',
     channel: RELEASE_CHANNEL,

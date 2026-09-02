@@ -22,6 +22,11 @@ $certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
 $previousTemp = $env:TEMP
 $previousTmp = $env:TMP
+$previousBuildCommit = $env:AEONQUILL_BUILD_COMMIT
+$previousProductVersion = $env:AEONQUILL_PRODUCT_VERSION
+$previousFunctionalTrack = $env:AEONQUILL_FUNCTIONAL_TRACK
+$previousBuildIdentityVersion = $env:AEONQUILL_BUILD_IDENTITY_VERSION
+$previousRuntimeRegistryVersion = $env:AEONQUILL_RUNTIME_REGISTRY_VERSION
 
 function Find-SignTool {
   $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
@@ -149,6 +154,15 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($gitStatus)) {
     throw '签名发布必须从干净 Git 工作树构建；请先提交本任务源码与文档。'
   }
+  $sourceCommit = ((& git.exe -C $projectRoot rev-parse HEAD) -join '').Trim().ToLowerInvariant()
+  if ($sourceCommit -notmatch '^[a-f0-9]{40}$') {
+    throw "无法解析签名发布源提交：$sourceCommit"
+  }
+  $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
+  $env:AEONQUILL_PRODUCT_VERSION = $productVersion
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.24'
+  $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
+  $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
 
   New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
   $env:TEMP = $buildTempRoot
@@ -222,6 +236,19 @@ try {
     Remove-Item Env:\TMP -ErrorAction SilentlyContinue
   } else {
     $env:TMP = $previousTmp
+  }
+  foreach ($entry in @(
+    @{ Name = 'AEONQUILL_BUILD_COMMIT'; Value = $previousBuildCommit },
+    @{ Name = 'AEONQUILL_PRODUCT_VERSION'; Value = $previousProductVersion },
+    @{ Name = 'AEONQUILL_FUNCTIONAL_TRACK'; Value = $previousFunctionalTrack },
+    @{ Name = 'AEONQUILL_BUILD_IDENTITY_VERSION'; Value = $previousBuildIdentityVersion },
+    @{ Name = 'AEONQUILL_RUNTIME_REGISTRY_VERSION'; Value = $previousRuntimeRegistryVersion }
+  )) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+      Remove-Item ("Env:\{0}" -f $entry.Name) -ErrorAction SilentlyContinue
+    } else {
+      Set-Item ("Env:\{0}" -f $entry.Name) ([string]$entry.Value)
+    }
   }
   Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
   if ((Test-Path -LiteralPath $signingRoot) -and @((Get-ChildItem -LiteralPath $signingRoot -Force)).Count -eq 0) {

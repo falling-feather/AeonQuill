@@ -24,6 +24,10 @@ const BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(20);
 const BRIDGE_STOP_TIMEOUT: Duration = Duration::from_secs(8);
 const QA_TITLE_PREFIX: &str = "__AEONQUILL_QA__";
 const PORTABLE_LAYOUT_FILENAME: &str = "aeonquill-layout.json";
+const FUNCTIONAL_TRACK: &str = "V0.7.24";
+const BUILD_IDENTITY_VERSION: &str = "aeonquill-build-identity-v1";
+const RUNTIME_REGISTRY_VERSION: &str = "aeonquill-runtime-registry-v1";
+const BUILD_COMMIT: Option<&str> = option_env!("AEONQUILL_BUILD_COMMIT");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -489,6 +493,22 @@ fn configured_child_environment(
     );
     environment.insert("AEONQUILL_CONFIG".into(), config_path.as_os_str().into());
     environment.insert("AEONQUILL_PARENT_CONTROL".into(), "stdio".into());
+    environment.insert(
+        "AEONQUILL_PRODUCT_VERSION".into(),
+        env!("CARGO_PKG_VERSION").into(),
+    );
+    environment.insert("AEONQUILL_FUNCTIONAL_TRACK".into(), FUNCTIONAL_TRACK.into());
+    environment.insert(
+        "AEONQUILL_BUILD_IDENTITY_VERSION".into(),
+        BUILD_IDENTITY_VERSION.into(),
+    );
+    environment.insert(
+        "AEONQUILL_RUNTIME_REGISTRY_VERSION".into(),
+        RUNTIME_REGISTRY_VERSION.into(),
+    );
+    if let Some(commit) = BUILD_COMMIT {
+        environment.insert("AEONQUILL_BUILD_COMMIT".into(), commit.into());
+    }
 
     // Mirror the original bridge contract until server-side migration is complete.
     environment.insert("MIAOHUI_PORT".into(), port.to_string().into());

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   AlertTriangle,
+  BadgeInfo,
   CheckCircle2,
   Cpu,
   FolderCog,
@@ -9,10 +10,12 @@ import {
   Image as ImageIcon,
   LoaderCircle,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   ServerCog,
   ShieldCheck,
+  Wrench,
   X,
 } from 'lucide-react'
 import type {
@@ -31,6 +34,8 @@ interface RuntimeSettingsDialogProps {
   onClose: () => void
   onRefresh: () => void
   onConfigure: (request: RuntimeConfigurationRequest) => void
+  onApplyRegistryMigration: (planId: string, beforeHash: string) => void
+  onRollbackRegistryMigration: (recordId: string) => void
 }
 
 function capabilityStatus(status: string) {
@@ -50,6 +55,8 @@ export function RuntimeSettingsDialog({
   onClose,
   onRefresh,
   onConfigure,
+  onApplyRegistryMigration,
+  onRollbackRegistryMigration,
 }: RuntimeSettingsDialogProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -117,6 +124,18 @@ export function RuntimeSettingsDialog({
   const semantic = diagnostics?.capabilities.semantic
   const comfyHealth = capabilityStatus(comfy?.status ?? 'needs-configuration')
   const disabled = loading || saving
+  const identity = diagnostics?.identity
+  const migration = diagnostics?.registryMigration
+  const readyMigration = migration?.plans.find((plan) => plan.status === 'ready' && plan.id)
+  const migrationTitle = migration?.status === 'ready'
+    ? `发现 ${migration.changeCount} 处可迁移共享引用`
+    : migration?.status === 'blocked'
+      ? '共享引用需要人工检查'
+      : migration?.latest?.status === 'applied'
+        ? '共享引用已切换为可搬迁配置'
+        : migration?.plans.length
+          ? '共享模型引用原本已是可搬迁配置'
+          : '当前没有需要迁移的共享引用'
 
   const submitManual = (event: FormEvent) => {
     event.preventDefault()
@@ -248,6 +267,46 @@ export function RuntimeSettingsDialog({
               </div>
               <ShieldCheck size={19} aria-hidden="true" />
             </div>
+            {identity ? (
+              <div className="aq-runtime-settings__identity" aria-label="应用构建身份">
+                <span><BadgeInfo size={15} aria-hidden="true" /><small>产品版本</small><strong>{identity.productVersion}</strong></span>
+                <span><small>功能轨</small><strong>{identity.functionalTrack}</strong></span>
+                <span><small>构建提交</small><strong>{identity.sourceCommitShort ?? '开发态未固定'}</strong></span>
+                <span><small>运行时包</small><strong title={identity.runtimePackageId ?? undefined}>{identity.runtimePackageId ?? '未绑定'}</strong></span>
+                <span><small>注册表</small><strong>{identity.runtimeRegistryVersion.replace('aeonquill-', '')}</strong></span>
+              </div>
+            ) : null}
+            {migration ? (
+              <div className={`aq-runtime-settings__migration is-${migration.status}`}>
+                <div>
+                  <strong>
+                    {migrationTitle}
+                  </strong>
+                  <small>
+                    不移动或复制模型文件；{migration.removalGate.blockedRoots} 个共享根受反向引用门保护。
+                  </small>
+                </div>
+                {readyMigration?.id ? (
+                  <button
+                    type="button"
+                    onClick={() => onApplyRegistryMigration(readyMigration.id!, readyMigration.beforeHash)}
+                    disabled={disabled}
+                  >
+                    <Wrench size={14} aria-hidden="true" />
+                    安全修复
+                  </button>
+                ) : migration.latest?.rollbackAvailable ? (
+                  <button
+                    type="button"
+                    onClick={() => onRollbackRegistryMigration(migration.latest!.id)}
+                    disabled={disabled}
+                  >
+                    <RotateCcw size={14} aria-hidden="true" />
+                    回滚上次修复
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {loading && !diagnostics ? (
               <div className="aq-runtime-settings__empty">
                 <LoaderCircle className="is-spinning" size={20} aria-hidden="true" />

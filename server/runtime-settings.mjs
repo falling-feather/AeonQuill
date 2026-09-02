@@ -388,6 +388,8 @@ export async function buildRuntimeDiagnostics({
   imageManifest,
   semanticManifest,
   configError,
+  identity,
+  registryMigration,
   checkedAt = Date.now(),
 } = {}) {
   const stored = persistedConfig ?? await readLocalConfigFile()
@@ -499,6 +501,8 @@ export async function buildRuntimeDiagnostics({
       architecture: process.arch,
       node: process.versions.node,
     },
+    identity: identity || null,
+    registryMigration: registryMigration || null,
     storage: {
       scope: runtimeScope(),
       runtimeWritable,

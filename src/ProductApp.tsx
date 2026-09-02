@@ -42,10 +42,12 @@ import {
 } from './lib/projectApi'
 import type { LibraryAsset, LibraryAssetInsertion } from './lib/libraryApi'
 import {
+  applyRuntimeRegistryMigration,
   configureRuntime,
   fetchClientState,
   fetchRuntimeDiagnostics,
   fetchRuntimeStatus,
+  rollbackRuntimeRegistryMigration,
   saveClientState,
   startRuntime,
   stopRuntime,
@@ -1315,6 +1317,38 @@ export default function ProductApp() {
     }
   }, [refreshRuntime, settingsSaving])
 
+  const handleApplyRegistryMigration = useCallback(async (planId: string, beforeHash: string) => {
+    if (settingsSaving) return
+    setSettingsSaving(true)
+    setSettingsError(undefined)
+    setSettingsMessage(undefined)
+    try {
+      await applyRuntimeRegistryMigration(planId, beforeHash)
+      setSettingsMessage('共享模型引用已安全改写为可迁移相对路径；模型文件没有移动或复制。')
+      await refreshRuntime(true)
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '共享模型引用修复失败')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }, [refreshRuntime, settingsSaving])
+
+  const handleRollbackRegistryMigration = useCallback(async (recordId: string) => {
+    if (settingsSaving) return
+    setSettingsSaving(true)
+    setSettingsError(undefined)
+    setSettingsMessage(undefined)
+    try {
+      await rollbackRuntimeRegistryMigration(recordId)
+      setSettingsMessage('已恢复共享模型配置的迁移前版本。')
+      await refreshRuntime(true)
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : '共享模型引用回滚失败')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }, [refreshRuntime, settingsSaving])
+
   const handleRuntimeAction = useCallback(async (item: RuntimeSurfaceSummary) => {
     if (item.id !== 'comfyui' || refreshingRuntime) return
     if (item.actionLabel === '配置') {
@@ -2016,6 +2050,8 @@ export default function ProductApp() {
         onClose={() => setSettingsOpen(false)}
         onRefresh={() => void refreshRuntime()}
         onConfigure={(request) => void handleRuntimeConfigure(request)}
+        onApplyRegistryMigration={(planId, beforeHash) => void handleApplyRegistryMigration(planId, beforeHash)}
+        onRollbackRegistryMigration={(recordId) => void handleRollbackRegistryMigration(recordId)}
       />
       <ProjectRecoveryDialog
         open={Boolean(recoveryDialog)}
