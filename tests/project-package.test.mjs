@@ -145,7 +145,7 @@ test('complete AEONQUILL package round-trips three mode bodies, recoveries, reso
   const videoBody = destination.workspaceStore.getModeDocument('document-video')
   assert.equal(JSON.parse(balanced.value).elements[0].assetVersionId.startsWith('asset-version-'), true)
   assert.equal(JSON.parse(pixelBody.value).frames[0].cels['layer-1'][0], 'ink')
-  assert.equal(JSON.parse(videoBody.value).production.schemaVersion, 3)
+  assert.equal(JSON.parse(videoBody.value).production.schemaVersion, 4)
   assert.equal(destination.workspaceStore.listRecoveryPoints('project-wuxia-ad').length, 2)
   const library = destination.projectStore.listLibraryAssets({ scope: 'project', projectId: 'project-wuxia-ad' })
   assert.equal(library.length, 2)

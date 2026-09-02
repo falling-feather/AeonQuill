@@ -48,6 +48,7 @@ import {
   type AgentAdapterStatus,
 } from '../../lib/agentAdapterApi'
 import { GenerationAdaptersPanel } from './GenerationAdaptersPanel'
+import { SoundTimelinePanel } from './SoundTimelinePanel'
 import './production-studio.css'
 
 export type ApprovedProductionStorySource = {
@@ -138,6 +139,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
   const [outputDraft, setOutputDraft] = useState('')
   const [notice, setNotice] = useState('剧本大纲等待用户审批；未批准节点不会越级。')
   const [continuityTargetId, setContinuityTargetId] = useState<string | null>(null)
+  const [soundTargetId, setSoundTargetId] = useState<string | null>(null)
   const [continuityGroup, setContinuityGroup] = useState<ContinuitySlotView['group']>('人物视图')
   const [continuityPage, setContinuityPage] = useState(0)
   const [continuityShotId, setContinuityShotId] = useState(project.continuityGraph.shots[0]?.id ?? '')
@@ -286,27 +288,32 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
 
   useEffect(() => {
     if (!active || !libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
-    if (!continuityTargetId) {
-      setNotice('资源已就绪。请先选择人物、服饰、地点或镜头帧槽位，再完成绑定。')
+    if (!continuityTargetId && !soundTargetId) {
+      setNotice('资源已就绪。请先选择连续性图片槽位或声音时间线音频槽位，再完成绑定。')
       return
     }
     consumedLibraryAssetRef.current = libraryAsset.nonce
     const asset = libraryAsset.asset
     try {
-      if (asset.mediaKind !== 'image') throw new Error('连续性槽位只接受资源库中的图片资产')
-      if (!['image/png', 'image/jpeg', 'image/webp'].includes(asset.version.mimeType)) throw new Error('连续性槽位仅支持 PNG、JPEG 或 WebP')
-      const next = execute('continuity.asset.bind', {
-        targetId: continuityTargetId,
-        binding: {
-          libraryItemId: asset.id,
-          libraryVersionId: asset.version.id,
-          contentHash: asset.version.assetId,
-          mimeType: asset.version.mimeType,
-          scope: asset.relationship === 'project-owned' ? 'project' : 'global-reference',
-          boundAt: Math.max(Date.now(), project.updatedAt),
-        },
-      }, `已把“${asset.title}”绑定到连续性槽位；请检查后人工批准。`)
-      if (next) setContinuityTargetId(null)
+      const binding = {
+        libraryItemId: asset.id,
+        libraryVersionId: asset.version.id,
+        contentHash: asset.version.assetId,
+        mimeType: asset.version.mimeType,
+        scope: asset.relationship === 'project-owned' ? 'project' : 'global-reference',
+        boundAt: Math.max(Date.now(), project.updatedAt),
+      }
+      if (soundTargetId) {
+        if (asset.mediaKind !== 'audio') throw new Error('声音时间线槽位只接受资源库中的音频资产')
+        if (!['audio/mpeg', 'audio/wav'].includes(asset.version.mimeType)) throw new Error('声音时间线仅支持 MP3 或 WAV')
+        const next = execute('sound.asset.bind', { cueId: soundTargetId, binding }, `已把“${asset.title}”绑定到声音时间线；请试听后人工批准。`)
+        if (next) setSoundTargetId(null)
+      } else {
+        if (asset.mediaKind !== 'image') throw new Error('连续性槽位只接受资源库中的图片资产')
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(asset.version.mimeType)) throw new Error('连续性槽位仅支持 PNG、JPEG 或 WebP')
+        const next = execute('continuity.asset.bind', { targetId: continuityTargetId, binding }, `已把“${asset.title}”绑定到连续性槽位；请检查后人工批准。`)
+        if (next) setContinuityTargetId(null)
+      }
     } catch (error) {
       setNotice(messageOf(error))
     } finally {
@@ -314,11 +321,18 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
     }
     // 资源投递按 nonce 消费一次；项目变化由命令回填，不能导致重复绑定。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, libraryAsset?.nonce, continuityTargetId])
+  }, [active, libraryAsset?.nonce, continuityTargetId, soundTargetId])
 
   const chooseContinuityAsset = (targetId: string) => {
+    setSoundTargetId(null)
     setContinuityTargetId(targetId)
     setNotice('槽位已选中。请打开页面顶部“资源库”，选择一个图片版本并点击“插入当前模式”。')
+  }
+
+  const chooseSoundAsset = (cueId: string) => {
+    setContinuityTargetId(null)
+    setSoundTargetId(cueId)
+    setNotice('音频槽位已选中。请打开页面顶部“资源库”，选择 MP3/WAV 明确版本并点击“插入当前模式”。')
   }
 
   const submitContinuityReview = () => {
@@ -678,6 +692,15 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
               </>
             ) : null}
           </section>
+        ) : null}
+
+        {['editor', 'sound-director', 'quality-controller'].includes(selectedNode.id) ? (
+          <SoundTimelinePanel
+            project={project}
+            assetTargetId={soundTargetId}
+            onChooseAsset={chooseSoundAsset}
+            onCommand={(type, payload = {}, successMessage) => { execute(type, payload, successMessage) }}
+          />
         ) : null}
 
         <label className="aq-production-editor-field">

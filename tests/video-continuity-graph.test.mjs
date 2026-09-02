@@ -80,7 +80,7 @@ test('compiles story characters, professional views, locations, frames and shot 
     characterMode: 'professional',
     now: 1_100,
   })
-  assert.equal(production.schemaVersion, 3)
+  assert.equal(production.schemaVersion, 4)
   assert.equal(production.continuityGraph.storyProjectId, 'continuity-story')
   assert.equal(production.continuityGraph.characters.length, 2)
   assert.equal(production.continuityGraph.locations.length, 2)
@@ -216,15 +216,16 @@ test('preserves pre-story character assets when the approved storyboard is bridg
   assert.equal(bridgedView.asset.contentHash, binding(77).contentHash)
 })
 
-test('migrates v2 production projects into v3 without losing node state', () => {
+test('migrates v2 production projects through v4 without losing node state', () => {
   const current = createVideoProductionProjectForStory(story(), { now: 1_700 })
   const legacy = structuredClone(current)
   legacy.schemaVersion = 2
   delete legacy.continuityGraph
+  delete legacy.soundTimeline
   legacy.characterProfiles.forEach((profile) => { delete profile.storyCharacterId })
   legacy.nodes[1].status = 'approved'
   const migrated = migrateVideoProductionProject(legacy, { story: story(), now: 1_800 })
-  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.schemaVersion, 4)
   assert.equal(migrated.nodes[1].status, 'approved')
   assert.equal(migrated.continuityGraph.storyProjectId, 'continuity-story')
   assert(migrated.characterProfiles.every(({ storyCharacterId }) => storyCharacterId !== null))
@@ -235,6 +236,7 @@ test('migrates every pre-story v2 character profile instead of collapsing them i
   const legacy = structuredClone(current)
   legacy.schemaVersion = 2
   delete legacy.continuityGraph
+  delete legacy.soundTimeline
   delete legacy.characterProfiles[0].storyCharacterId
   const supporting = structuredClone(legacy.characterProfiles[0])
   supporting.id = 'character-supporting'
@@ -266,7 +268,7 @@ test('rejects ambiguous duplicate profile assets and graph character mappings', 
   )
 })
 
-test('migrating an existing v3 project against a newer story revision synchronizes continuity', () => {
+test('migrating an existing current project against a newer story revision synchronizes continuity and sound', () => {
   const originalStory = story()
   const production = createVideoProductionProjectForStory(originalStory, { now: 2_200 })
   const revisedStory = story(`${originalStory.source.text}\n\n场景 3：正午·山门\n镜头 1：苏晚独自走入山门。`)
@@ -276,6 +278,7 @@ test('migrating an existing v3 project against a newer story revision synchroniz
   const migrated = migrateVideoProductionProject(production, { story: revisedStory, now: 2_301 })
   assert.equal(migrated.continuityGraph.storyProjectId, revisedStory.id)
   assert.equal(migrated.continuityGraph.storyRevision, revisedStory.revision)
+  assert.equal(migrated.soundTimeline.storyRevision, revisedStory.revision)
   assert(migrated.continuityGraph.shots.length > production.continuityGraph.shots.length)
   assert(migrated.events.some(({ type }) => type === 'continuity.synchronized'))
 })

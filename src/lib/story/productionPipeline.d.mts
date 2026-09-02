@@ -1,7 +1,8 @@
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from './storyProject.mjs'
 import type { VideoContinuityGraph } from './continuityGraph.mjs'
+import type { SoundTimeline } from './soundTimeline.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION: 3
+export const VIDEO_PRODUCTION_SCHEMA_VERSION: 4
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION: 1
 export const VIDEO_PRODUCTION_LIMITS: Readonly<{
   maxBriefCharacters: number
@@ -37,7 +38,7 @@ export type VideoProductionNode = {
 
 export type VideoProductionProject = {
   kind: 'aeonquill.video-production'
-  schemaVersion: 3
+  schemaVersion: 4
   id: string
   title: string
   brief: string
@@ -75,6 +76,7 @@ export type VideoProductionProject = {
     updatedAt: number
   }>
   continuityGraph: VideoContinuityGraph
+  soundTimeline: SoundTimeline
   changeCards: Array<{
     id: string
     nodeId: string
@@ -103,6 +105,11 @@ export type VideoProductionCommandType =
   | 'proposal.create' | 'proposal.accept' | 'proposal.reject'
   | 'continuity.asset.bind' | 'continuity.asset.approve' | 'continuity.asset.unbind'
   | 'continuity.wardrobe.assign' | 'continuity.review.record'
+  | 'sound.voice.configure' | 'sound.voice.approve'
+  | 'sound.asset.bind' | 'sound.asset.approve' | 'sound.asset.unbind' | 'sound.cue.patch'
+  | 'sound.subtitle.patch' | 'sound.subtitle.approve' | 'sound.subtitles.approve-all'
+  | 'sound.subtitle-style.patch' | 'sound.subtitle-style.approve'
+  | 'sound.mix.patch' | 'sound.mix.approve'
 
 export type VideoProductionCommand = {
   schemaVersion: 1

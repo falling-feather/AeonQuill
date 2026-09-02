@@ -796,7 +796,15 @@ export function SmartVideoWorkbench({
   }
 
   const updateProductionProject = (production: VideoProductionProject) => {
-    const next = { ...result, production }
+    const alignedProduction = production.continuityGraph.storyProjectId === result.project.id
+      && production.continuityGraph.storyRevision === result.project.revision
+      && production.soundTimeline.storyProjectId === result.project.id
+      && production.soundTimeline.storyRevision === result.project.revision
+      ? production
+      : synchronizeVideoProductionProjectForStory(production, result.project, {
+          now: Math.max(Date.now(), production.updatedAt, result.project.updatedAt),
+        })
+    const next = { ...result, production: alignedProduction }
     setResult(next)
     onPlanReady?.(next)
   }

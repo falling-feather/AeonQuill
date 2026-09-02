@@ -97,7 +97,7 @@ test('pixel and smart-video documents remain isolated by project and document id
     const storedVideo = JSON.parse(store.getModeDocument('document-video').value)
     assert.equal(storedVideo.schemaVersion, SMART_VIDEO_DOCUMENT_SCHEMA_VERSION)
     assert.equal(storedVideo.plan.projectId, 'document-video')
-    assert.equal(storedVideo.production.schemaVersion, 3)
+    assert.equal(storedVideo.production.schemaVersion, 4)
     assert.throws(
       () => store.saveModeDocument({
         projectId: 'project-ad', documentId: 'document-pixel', modeId: 'pixel',

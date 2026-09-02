@@ -10,8 +10,27 @@ import {
   recordContinuityReview,
   unbindContinuityAsset,
 } from './continuityGraph.mjs'
+import {
+  approveAllSubtitles,
+  approveSoundAsset,
+  approveSoundMix,
+  approveSubtitleCue,
+  approveSubtitleStyle,
+  approveVoiceProfile,
+  assertSoundAssetBinding,
+  assertSoundTimeline,
+  bindSoundAsset,
+  configureVoiceProfile,
+  createSoundTimeline,
+  patchSoundCue,
+  patchSoundMix,
+  patchSubtitleCue,
+  patchSubtitleStyle,
+  soundTimelineReady,
+  unbindSoundAsset,
+} from './soundTimeline.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION = 3
+export const VIDEO_PRODUCTION_SCHEMA_VERSION = 4
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION = 1
 
 export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
@@ -51,6 +70,19 @@ const COMMAND_TYPES = new Set([
   'continuity.asset.unbind',
   'continuity.wardrobe.assign',
   'continuity.review.record',
+  'sound.voice.configure',
+  'sound.voice.approve',
+  'sound.asset.bind',
+  'sound.asset.approve',
+  'sound.asset.unbind',
+  'sound.cue.patch',
+  'sound.subtitle.patch',
+  'sound.subtitle.approve',
+  'sound.subtitles.approve-all',
+  'sound.subtitle-style.patch',
+  'sound.subtitle-style.approve',
+  'sound.mix.patch',
+  'sound.mix.approve',
 ])
 
 const NODE_BLUEPRINTS = Object.freeze([
@@ -505,7 +537,7 @@ function assertNode(input, path, knownIds) {
 
 export function assertVideoProductionProject(input) {
   const project = record(input, 'project')
-  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'continuityGraph', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
+  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'continuityGraph', 'soundTimeline', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
   if (project.kind !== PROJECT_KIND || project.schemaVersion !== VIDEO_PRODUCTION_SCHEMA_VERSION) fail('UNSUPPORTED_SCHEMA', 'Unsupported video production schema')
   id(project.id, 'project.id')
   string(project.title, 'project.title', 1, 120)
@@ -565,6 +597,19 @@ export function assertVideoProductionProject(input) {
         fail('CONTINUITY_PROFILE_MISMATCH', `Continuity wardrobe ${wardrobeId} does not match its character profile mirror`)
       }
     }
+  }
+  assertSoundTimeline(project.soundTimeline)
+  if (
+    project.soundTimeline.storyProjectId !== project.continuityGraph.storyProjectId
+    || project.soundTimeline.storyRevision !== project.continuityGraph.storyRevision
+  ) fail('PRODUCTION_STORY_IDENTITY_MISMATCH', 'Continuity and sound graphs must reference the same story revision')
+  const profileStoryIds = new Set(project.characterProfiles.map(({ storyCharacterId }) => storyCharacterId).filter(Boolean))
+  if (project.soundTimeline.voiceProfiles.some(({ characterId }) => characterId !== null && !profileStoryIds.has(characterId))) {
+    fail('SOUND_CHARACTER_MISMATCH', 'Sound voice profiles must reference production characters')
+  }
+  const storyShotIds = new Set(project.continuityGraph.shots.map(({ storyShotId }) => storyShotId).filter(Boolean))
+  if (project.soundTimeline.audioCues.some(({ shotId }) => shotId !== null && !storyShotIds.has(shotId))) {
+    fail('SOUND_SHOT_MISMATCH', 'Sound cues must reference continuity shots')
   }
   if (!Array.isArray(project.changeCards) || project.changeCards.length > VIDEO_PRODUCTION_LIMITS.maxChangeCards) fail('INVALID_CHANGE_CARDS', 'project.changeCards is invalid')
   project.changeCards.forEach((card, index) => assertChangeCard(card, `project.changeCards[${index}]`, knownIds))
@@ -642,6 +687,10 @@ export function createVideoProductionProject(input = {}) {
       characterMode,
       now,
     }),
+    soundTimeline: createSoundTimeline({
+      durationMs: durationMinutes * 60_000,
+      now,
+    }),
     changeCards: [],
     globalPaused: false,
     autoAdvance: false,
@@ -695,7 +744,8 @@ function migrateVideoProductionProjectV2(value, options = {}) {
   )
   const migrated = {
     ...value,
-    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    schemaVersion: 3,
+    updatedAt: Math.max(value.updatedAt ?? now, now),
     characterProfiles,
     continuityGraph: createVideoContinuityGraph({
       story,
@@ -709,13 +759,37 @@ function migrateVideoProductionProjectV2(value, options = {}) {
   return migrated
 }
 
+function migrateVideoProductionProjectV3(value, options = {}) {
+  if (!isRecord(value) || value.schemaVersion !== 3 || value.kind !== PROJECT_KIND) return value
+  const now = options.now ?? value.updatedAt ?? Date.now()
+  const story = isRecord(options.story) ? options.story : null
+  const soundTimeline = createSoundTimeline({
+    story,
+    durationMs: story ? null : value.settings.durationMinutes * 60_000,
+    now,
+  })
+  if (!story) {
+    soundTimeline.storyProjectId = value.continuityGraph?.storyProjectId ?? null
+    soundTimeline.storyRevision = value.continuityGraph?.storyRevision ?? null
+  }
+  return {
+    ...value,
+    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    updatedAt: Math.max(value.updatedAt ?? now, now),
+    soundTimeline,
+  }
+}
+
 export function migrateVideoProductionProject(input, options = {}) {
   const migratedV2 = migrateVideoProductionProjectV1(input)
   const migratedV3 = migrateVideoProductionProjectV2(migratedV2, options)
-  const result = clone(assertVideoProductionProject(migratedV3))
+  const migratedV4 = migrateVideoProductionProjectV3(migratedV3, options)
+  const result = clone(assertVideoProductionProject(migratedV4))
   if (isRecord(options.story) && (
     result.continuityGraph.storyProjectId !== options.story.id
     || result.continuityGraph.storyRevision !== options.story.revision
+    || result.soundTimeline.storyProjectId !== options.story.id
+    || result.soundTimeline.storyRevision !== options.story.revision
   )) {
     return synchronizeVideoProductionProjectForStory(result, options.story, {
       now: options.now ?? Math.max(Date.now(), result.updatedAt),
@@ -778,6 +852,11 @@ export function synchronizeVideoProductionProjectForStory(projectInput, storyInp
     characterMode: project.settings.characterMode,
     now,
     previous: project.continuityGraph,
+  })
+  project.soundTimeline = createSoundTimeline({
+    story,
+    now,
+    previous: project.soundTimeline,
   })
   project.title = String(story.title ?? project.title).slice(0, 120)
   project.brief = String(source.text ?? project.brief).slice(0, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
@@ -875,6 +954,76 @@ export function assertVideoProductionCommand(input, projectInput) {
   if (command.type === 'continuity.review.record') {
     knownFields(payload, new Set(['shotId', 'reviewerId', 'scores', 'decision', 'notes']), 'command.payload')
     recordContinuityReview(project?.continuityGraph ?? fail('PROJECT_REQUIRED', 'A project is required to validate a continuity review'), payload, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.voice.configure') {
+    knownFields(payload, new Set(['profileId', 'patch']), 'command.payload')
+    id(payload.profileId, 'command.payload.profileId')
+    configureVoiceProfile(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to configure a voice'), payload.profileId, payload.patch, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.voice.approve') {
+    knownFields(payload, new Set(['profileId']), 'command.payload')
+    id(payload.profileId, 'command.payload.profileId')
+    approveVoiceProfile(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve a voice'), payload.profileId, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.asset.bind') {
+    knownFields(payload, new Set(['cueId', 'binding']), 'command.payload')
+    id(payload.cueId, 'command.payload.cueId')
+    assertSoundAssetBinding(payload.binding)
+    bindSoundAsset(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to bind sound'), payload.cueId, payload.binding, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.asset.approve' || command.type === 'sound.asset.unbind') {
+    knownFields(payload, new Set(['cueId']), 'command.payload')
+    id(payload.cueId, 'command.payload.cueId')
+    const graph = project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to change sound assets')
+    if (command.type === 'sound.asset.approve') approveSoundAsset(graph, payload.cueId, { now: project.updatedAt })
+    else unbindSoundAsset(graph, payload.cueId, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.cue.patch') {
+    knownFields(payload, new Set(['cueId', 'patch']), 'command.payload')
+    id(payload.cueId, 'command.payload.cueId')
+    patchSoundCue(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to edit sound'), payload.cueId, payload.patch, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.subtitle.patch') {
+    knownFields(payload, new Set(['subtitleId', 'patch']), 'command.payload')
+    id(payload.subtitleId, 'command.payload.subtitleId')
+    patchSubtitleCue(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to edit subtitles'), payload.subtitleId, payload.patch, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.subtitle.approve') {
+    knownFields(payload, new Set(['subtitleId']), 'command.payload')
+    id(payload.subtitleId, 'command.payload.subtitleId')
+    approveSubtitleCue(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve subtitles'), payload.subtitleId, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.subtitles.approve-all') {
+    knownFields(payload, new Set(), 'command.payload')
+    approveAllSubtitles(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve subtitles'), { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.subtitle-style.patch') {
+    knownFields(payload, new Set(['patch']), 'command.payload')
+    patchSubtitleStyle(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to edit subtitle style'), payload.patch, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.subtitle-style.approve') {
+    knownFields(payload, new Set(), 'command.payload')
+    approveSubtitleStyle(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve subtitle style'), { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.mix.patch') {
+    knownFields(payload, new Set(['patch']), 'command.payload')
+    patchSoundMix(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to edit the mix'), payload.patch, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'sound.mix.approve') {
+    knownFields(payload, new Set(), 'command.payload')
+    approveSoundMix(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve the mix'), { now: project.updatedAt })
     return command
   }
   knownFields(payload, new Set(command.type === 'node.edit'
@@ -1030,6 +1179,9 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       if (node.id === 'video-director' && !continuityVideoReviewReady(next.continuityGraph)) {
         fail('CONTINUITY_REVIEW_INCOMPLETE', '仍有镜头未完成人工连续性复核，或被标记为定向重生')
       }
+      if (node.id === 'sound-director' && !soundTimelineReady(next.soundTimeline)) {
+        fail('SOUND_TIMELINE_INCOMPLETE', '必需对白/旁白音频、字幕、字幕样式或混音规格尚未全部批准')
+      }
       node.status = 'approved'
       node.stale = false
       appendEvent(next, 'node.approved', node.id, `${node.title}已由用户批准。`, now)
@@ -1142,6 +1294,58 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       next.continuityGraph = recordContinuityReview(next.continuityGraph, payload, { now })
       appendEvent(next, 'continuity.review-recorded', 'video-director', `镜头 ${payload.shotId} 已记录人工${payload.decision === 'accept' ? '接受' : '定向重生'}结论。`, now)
       break
+    case 'sound.voice.configure':
+      next.soundTimeline = configureVoiceProfile(next.soundTimeline, payload.profileId, payload.patch, { now })
+      appendEvent(next, 'sound.voice-configured', 'sound-director', `声线 ${payload.profileId} 已更新；关联语音素材需重新生成或绑定。`, now)
+      break
+    case 'sound.voice.approve':
+      next.soundTimeline = approveVoiceProfile(next.soundTimeline, payload.profileId, { now })
+      appendEvent(next, 'sound.voice-approved', 'sound-director', `声线 ${payload.profileId} 已人工批准。`, now)
+      break
+    case 'sound.asset.bind':
+      next.soundTimeline = bindSoundAsset(next.soundTimeline, payload.cueId, payload.binding, { now })
+      appendEvent(next, 'sound.asset-bound', 'sound-director', `音频槽位 ${payload.cueId} 已绑定明确资源版本，等待批准。`, now)
+      break
+    case 'sound.asset.approve':
+      next.soundTimeline = approveSoundAsset(next.soundTimeline, payload.cueId, { now })
+      appendEvent(next, 'sound.asset-approved', 'sound-director', `音频槽位 ${payload.cueId} 已人工批准。`, now)
+      break
+    case 'sound.asset.unbind':
+      next.soundTimeline = unbindSoundAsset(next.soundTimeline, payload.cueId, { now })
+      appendEvent(next, 'sound.asset-unbound', 'sound-director', `音频槽位 ${payload.cueId} 已移除。`, now)
+      break
+    case 'sound.cue.patch':
+      next.soundTimeline = patchSoundCue(next.soundTimeline, payload.cueId, payload.patch, { now })
+      appendEvent(next, 'sound.cue-edited', 'sound-director', `声音片段 ${payload.cueId} 已编辑；受影响音频或字幕审批已撤销。`, now)
+      break
+    case 'sound.subtitle.patch':
+      next.soundTimeline = patchSubtitleCue(next.soundTimeline, payload.subtitleId, payload.patch, { now })
+      appendEvent(next, 'sound.subtitle-edited', 'sound-director', `字幕 ${payload.subtitleId} 已编辑并等待重新批准。`, now)
+      break
+    case 'sound.subtitle.approve':
+      next.soundTimeline = approveSubtitleCue(next.soundTimeline, payload.subtitleId, { now })
+      appendEvent(next, 'sound.subtitle-approved', 'sound-director', `字幕 ${payload.subtitleId} 已批准。`, now)
+      break
+    case 'sound.subtitles.approve-all':
+      next.soundTimeline = approveAllSubtitles(next.soundTimeline, { now })
+      appendEvent(next, 'sound.subtitles-approved', 'sound-director', '当前全部字幕文本与时间码已批量批准。', now)
+      break
+    case 'sound.subtitle-style.patch':
+      next.soundTimeline = patchSubtitleStyle(next.soundTimeline, payload.patch, { now })
+      appendEvent(next, 'sound.subtitle-style-edited', 'sound-director', '字幕安全区与视觉样式已更新，等待重新批准。', now)
+      break
+    case 'sound.subtitle-style.approve':
+      next.soundTimeline = approveSubtitleStyle(next.soundTimeline, { now })
+      appendEvent(next, 'sound.subtitle-style-approved', 'sound-director', '字幕安全区与视觉样式已批准。', now)
+      break
+    case 'sound.mix.patch':
+      next.soundTimeline = patchSoundMix(next.soundTimeline, payload.patch, { now })
+      appendEvent(next, 'sound.mix-edited', 'sound-director', '响度、真峰值与对白闪避规格已更新，等待重新批准。', now)
+      break
+    case 'sound.mix.approve':
+      next.soundTimeline = approveSoundMix(next.soundTimeline, { now })
+      appendEvent(next, 'sound.mix-approved', 'sound-director', '48kHz 双声道混音规格已批准。', now)
+      break
     default:
       fail('UNKNOWN_COMMAND', `Unsupported production command ${command.type}`)
   }
@@ -1200,6 +1404,8 @@ export function productionProgress(projectInput) {
     ? '连续性资产尚未全部绑定并批准'
     : current?.id === 'video-director' && current.status === 'review' && !continuityVideoReviewReady(project.continuityGraph)
       ? '镜头人工复核尚未全部接受'
+      : current?.id === 'sound-director' && current.status === 'review' && !soundTimelineReady(project.soundTimeline)
+        ? '必需声音、字幕与混音规格尚未全部批准'
       : null
   return {
     approved,
