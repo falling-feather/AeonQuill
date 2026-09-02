@@ -489,6 +489,20 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
                       <a href={job.outputUrl} download={job.output?.filename}>下载结果</a>
                     ) : null}
                   </div>
+                ) : job.kind === 'custom-workflow' ? (
+                  <div className="job-actions">
+                    {running ? (
+                      <button type="button" onClick={() => onCancelJob(job.id)}>
+                        <Square size={12} />取消
+                      </button>
+                    ) : failed || cancelled ? (
+                      <button type="button" className="is-primary" onClick={() => onRetryJob(job.id)}>
+                        <RotateCcw size={13} />重新执行
+                      </button>
+                    ) : job.outputUrl ? (
+                      <a href={job.outputUrl} download>打开资源</a>
+                    ) : null}
+                  </div>
                 ) : null}
               </article>
             )

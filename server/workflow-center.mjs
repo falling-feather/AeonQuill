@@ -23,6 +23,7 @@ import {
 
 export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v2'
 export const WORKFLOW_CENTER_STATE_VERSION = 1
+export const CUSTOM_WORKFLOW_EXECUTION_VERSION = 'aeonquill-custom-workflow-execution-v1'
 export const MAX_CUSTOM_WORKFLOW_BYTES = 2 * 1024 * 1024
 export const MAX_CUSTOM_WORKFLOW_NODES = 240
 
@@ -37,6 +38,19 @@ const TRAVERSAL_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/u
 const SECRET_INPUT = /(?:api[_-]?key|access[_-]?token|secret|password|authorization|bearer)/iu
 const NETWORK_NODE = /(?:http|websocket|webhook|download|upload|remote|url|api[_ -]?request|ftp|s3|cloud)/iu
 const EXECUTION_NODE = /(?:python|script|shell|command|powershell|terminal|exec|eval|subprocess)/iu
+const DYNAMIC_INPUT_DENYLIST = /(?:^|_)(?:api|authorization|device|directory|file|filename|folder|format|key|model|path|prefix|secret|token|url|vae|ckpt|lora|clip|unet|controlnet)(?:_|$)/iu
+const CUSTOM_OUTPUT_NODE = /^(?:SaveImage|SaveVideo|PreviewImage)$/u
+const CUSTOM_IMAGE_INPUT_NODE = 'LoadImage'
+const CUSTOM_MAPPING_ROLES = Object.freeze([
+  'prompt', 'negativePrompt', 'sourceImage', 'lastFrame', 'seed', 'width', 'height', 'frames', 'steps', 'output',
+])
+const CUSTOM_NUMERIC_LIMITS = Object.freeze({
+  seed: [0, Number.MAX_SAFE_INTEGER],
+  width: [64, 8_192],
+  height: [64, 8_192],
+  frames: [1, 4_096],
+  steps: [1, 200],
+})
 
 const H3_LICENSE = Object.freeze({
   id: 'minimax-h3-community-license-2026-08',
@@ -323,6 +337,18 @@ function workflowError(message, code, status = 400, details) {
   return Object.assign(new Error(message), { code, status, ...(details ? { details } : {}) })
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function customMappingHash(mappings) {
+  return createHash('sha256').update(canonicalJson(mappings || {})).digest('hex')
+}
+
 function assertSafeRelativePath(value, label = 'relativePath') {
   if (typeof value !== 'string' || !value || value.includes('\0') || isAbsolute(value) || WINDOWS_ABSOLUTE.test(value) || UNC_PATH.test(value) || TRAVERSAL_SEGMENT.test(value)) {
     throw workflowError(`${label} 必须是受控相对路径`, 'WORKFLOW_UNSAFE_PATH')
@@ -393,7 +419,10 @@ function normalizeState(value) {
     verifiedArtifacts: value.verifiedArtifacts && typeof value.verifiedArtifacts === 'object' && !Array.isArray(value.verifiedArtifacts)
       ? value.verifiedArtifacts
       : {},
-    customWorkflows: Array.isArray(value.customWorkflows) ? value.customWorkflows : [],
+    customWorkflows: Array.isArray(value.customWorkflows) ? value.customWorkflows.map((entry) => ({
+      ...entry,
+      mappingHash: typeof entry?.mappingHash === 'string' ? entry.mappingHash : customMappingHash(entry?.mappings),
+    })) : [],
     jobs: Array.isArray(value.jobs) ? value.jobs.slice(-30).map((job) => (
       job?.status === 'running' || job?.status === 'queued'
         ? { ...job, status: 'failed', error: { code: 'BRIDGE_RESTARTED', message: '应用重启中断了安装；已保留可续传分片。' }, updatedAt: Date.now() }
@@ -511,6 +540,27 @@ function normalizeRegisteredNodes(value) {
   return new Set()
 }
 
+function registeredNodeCatalog(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Set)
+    ? value
+    : null
+}
+
+function registeredInputOptions(catalog, nodeType, inputName) {
+  const specification = registeredInputSpecification(catalog, nodeType, inputName)
+  const options = Array.isArray(specification) ? specification[0] : null
+  return Array.isArray(options) && options.every((entry) => typeof entry === 'string') ? options : null
+}
+
+function registeredInputSpecification(catalog, nodeType, inputName) {
+  const definition = catalog?.[nodeType]?.input
+  for (const section of ['required', 'optional']) {
+    const specification = definition?.[section]?.[inputName]
+    if (Array.isArray(specification)) return specification
+  }
+  return null
+}
+
 function parseWorkflowInput(workflow) {
   if (typeof workflow === 'string') {
     if (Buffer.byteLength(workflow) > MAX_CUSTOM_WORKFLOW_BYTES) throw workflowError('自定义工作流超过 2MB 上限', 'CUSTOM_WORKFLOW_TOO_LARGE', 413)
@@ -567,13 +617,13 @@ function mappingCandidates(workflow) {
         inputs.push({ nodeId, nodeType: node.class_type, inputName, valueType: typeof value })
       }
     }
-    if (/^(?:SaveImage|SaveVideo|PreviewImage|CreateVideo)$/u.test(node.class_type)) outputs.push({ nodeId, nodeType: node.class_type })
+    if (CUSTOM_OUTPUT_NODE.test(node.class_type)) outputs.push({ nodeId, nodeType: node.class_type })
   }
   return { inputs, outputs }
 }
 
 function validateMappings(workflow, mappings, findings) {
-  const allowedRoles = new Set(['prompt', 'negativePrompt', 'sourceImage', 'lastFrame', 'seed', 'width', 'height', 'frames', 'steps', 'output'])
+  const allowedRoles = new Set(CUSTOM_MAPPING_ROLES)
   if (!mappings || typeof mappings !== 'object' || Array.isArray(mappings)) {
     findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPINGS_REQUIRED', message: '必须明确映射 prompt 与 output' })
     return
@@ -584,6 +634,7 @@ function validateMappings(workflow, mappings, findings) {
   for (const required of ['prompt', 'output']) {
     if (!mappings[required]) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_REQUIRED', message: `缺少 ${required} 映射` })
   }
+  const mappedTargets = new Map()
   for (const [role, mapping] of Object.entries(mappings)) {
     if (!allowedRoles.has(role)) continue
     const keys = mapping && typeof mapping === 'object' && !Array.isArray(mapping) ? Object.keys(mapping) : []
@@ -598,11 +649,62 @@ function validateMappings(workflow, mappings, findings) {
       continue
     }
     if (role === 'output') {
-      if (!/^(?:SaveImage|SaveVideo|PreviewImage|CreateVideo)$/u.test(node.class_type)) {
+      if (!CUSTOM_OUTPUT_NODE.test(node.class_type)) {
         findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_OUTPUT_NODE', message: 'output 必须映射到受控输出节点' })
       }
     } else if (!Object.prototype.hasOwnProperty.call(node.inputs || {}, mapping.inputName)) {
       findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_INPUT', message: `${role} 映射输入不存在` })
+    } else {
+      const target = `${mapping.nodeId}\0${mapping.inputName}`
+      if (mappedTargets.has(target)) {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_CONFLICT', message: `${role} 与 ${mappedTargets.get(target)} 不能写入同一输入` })
+      } else {
+        mappedTargets.set(target, role)
+      }
+      const currentValue = node.inputs[mapping.inputName]
+      if (['prompt', 'negativePrompt'].includes(role) && typeof currentValue !== 'string') {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_TYPE', message: `${role} 必须映射到文本输入` })
+      }
+      if (['seed', 'width', 'height', 'frames', 'steps'].includes(role) && typeof currentValue !== 'number') {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_TYPE', message: `${role} 必须映射到数值输入` })
+      }
+      if (['sourceImage', 'lastFrame'].includes(role) && (node.class_type !== CUSTOM_IMAGE_INPUT_NODE || mapping.inputName !== 'image')) {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_FILE_MAPPING', message: `${role} 只能映射到 LoadImage.image，由光阴砚上传受管资源` })
+      }
+      if (!['sourceImage', 'lastFrame'].includes(role) && DYNAMIC_INPUT_DENYLIST.test(mapping.inputName)) {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_SENSITIVE_INPUT', message: `${role} 不得映射到模型、文件、设备、格式或凭据输入` })
+      }
+    }
+  }
+  const managedFileMappings = new Set(['sourceImage', 'lastFrame'].flatMap((role) => {
+    const mapping = mappings?.[role]
+    return mapping ? [`${mapping.nodeId}\0${mapping.inputName}`] : []
+  }))
+  for (const [nodeId, node] of Object.entries(workflow)) {
+    if (node.class_type !== CUSTOM_IMAGE_INPUT_NODE || !Object.prototype.hasOwnProperty.call(node.inputs || {}, 'image')) continue
+    if (!managedFileMappings.has(`${nodeId}\0image`)) {
+      findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_UNMAPPED_FILE_INPUT', message: `LoadImage 节点 ${nodeId} 必须映射为 sourceImage 或 lastFrame` })
+    }
+  }
+}
+
+function validateRegisteredMappingTypes(workflow, mappings, catalog, findings) {
+  if (!catalog || !mappings || typeof mappings !== 'object' || Array.isArray(mappings)) return
+  for (const [role, mapping] of Object.entries(mappings)) {
+    if (role === 'output' || !mapping || typeof mapping !== 'object') continue
+    const node = workflow[mapping.nodeId]
+    if (!node || typeof mapping.inputName !== 'string') continue
+    const specification = registeredInputSpecification(catalog, node.class_type, mapping.inputName)
+    if (!specification) {
+      findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_INPUT', message: `${role} 映射输入未在当前节点契约中注册` })
+      continue
+    }
+    const inputType = specification[0]
+    if (['prompt', 'negativePrompt'].includes(role) && inputType !== 'STRING') {
+      findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE', message: `${role} 必须映射到运行时 STRING 输入` })
+    }
+    if (['seed', 'width', 'height', 'frames', 'steps'].includes(role) && inputType !== 'INT') {
+      findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE', message: `${role} 必须映射到运行时 INT 输入` })
     }
   }
 }
@@ -620,6 +722,7 @@ export function inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes 
   const registered = registeredNodeTypes === undefined || registeredNodeTypes === null
     ? new Set(DEFAULT_SAFE_COMFY_NODE_TYPES)
     : normalizeRegisteredNodes(registeredNodeTypes)
+  const nodeCatalog = registeredNodeCatalog(registeredNodeTypes)
   const nodeTypes = new Set()
   const models = new Set()
   for (const [nodeId, node] of entries) {
@@ -641,6 +744,7 @@ export function inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes 
     nodeTypes.add(nodeType)
     if (NETWORK_NODE.test(nodeType)) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_NETWORK_NODE', message: `${nodeType} 属于网络节点` })
     if (EXECUTION_NODE.test(nodeType)) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_EXECUTION_NODE', message: `${nodeType} 可执行任意代码` })
+    if (!DEFAULT_SAFE_COMFY_NODE_TYPES.has(nodeType)) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_NODE_NOT_APPROVED', message: `${nodeType} 尚未进入光阴砚批准节点清单` })
     if (!registered.has(nodeType)) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_UNKNOWN_NODE', message: `${nodeType} 未在当前运行时注册` })
     if (!node.inputs || typeof node.inputs !== 'object' || Array.isArray(node.inputs)) {
       findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_INPUTS', message: `节点 ${nodeId} 缺少 inputs 对象` })
@@ -648,10 +752,18 @@ export function inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes 
     }
     for (const key of Object.keys(node.inputs)) {
       if (SECRET_INPUT.test(key)) findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_SECRET_FIELD', message: `节点 ${nodeId}.${key} 可能包含密钥` })
+      const value = node.inputs[key]
+      if (nodeCatalog && typeof value === 'string' && MODEL_EXTENSION.test(value)) {
+        const options = registeredInputOptions(nodeCatalog, nodeType, key)
+        if (!options || !options.includes(value)) {
+          findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MODEL_MISSING', message: `${nodeType}.${key} 引用的模型未出现在当前运行时选项中` })
+        }
+      }
     }
     scanInputValue(node.inputs, { findings, models }, `${nodeId}.inputs`)
   }
   validateMappings(parsed, mappings, findings)
+  validateRegisteredMappingTypes(parsed, mappings, nodeCatalog, findings)
   const candidates = mappingCandidates(parsed)
   const hash = createHash('sha256').update(JSON.stringify(parsed)).digest('hex')
   return {
@@ -666,6 +778,60 @@ export function inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes 
     canImport: !findings.some(({ severity }) => severity === 'error'),
     workflow: parsed,
   }
+}
+
+function assertManagedComfyFilename(value, role) {
+  if (
+    typeof value !== 'string'
+    || !value
+    || value.length > 240
+    || value.includes('\0')
+    || isAbsolute(value)
+    || WINDOWS_ABSOLUTE.test(value)
+    || UNC_PATH.test(value)
+    || value.startsWith('/')
+    || TRAVERSAL_SEGMENT.test(value)
+    || value.split(/[\\/]/u).some((segment) => !segment || !/^[A-Za-z0-9._-]+$/u.test(segment))
+  ) {
+    throw workflowError(`${role} 必须来自光阴砚受管输入目录`, 'CUSTOM_WORKFLOW_INPUT_ASSET_INVALID')
+  }
+  return value.replace(/\\/gu, '/')
+}
+
+function normalizeExecutionValues(values, mappings) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw workflowError('自定义工作流执行参数必须是对象', 'CUSTOM_WORKFLOW_PARAMETERS_INVALID')
+  }
+  const allowed = new Set(CUSTOM_MAPPING_ROLES.filter((role) => role !== 'output'))
+  const unknown = Object.keys(values).filter((role) => !allowed.has(role) || !mappings?.[role])
+  if (unknown.length) {
+    throw workflowError('执行参数包含未映射角色', 'CUSTOM_WORKFLOW_PARAMETER_NOT_MAPPED', 400, { roles: unknown })
+  }
+  const normalized = {}
+  if (mappings.prompt) {
+    const prompt = typeof values.prompt === 'string' ? values.prompt.trim() : ''
+    if (!prompt || prompt.length > 8_000) throw workflowError('正向提示词需要 1–8000 个字符', 'CUSTOM_WORKFLOW_PROMPT_INVALID')
+    normalized.prompt = prompt
+  }
+  if (mappings.negativePrompt && values.negativePrompt !== undefined) {
+    if (typeof values.negativePrompt !== 'string' || values.negativePrompt.length > 8_000) {
+      throw workflowError('负向提示词不能超过 8000 个字符', 'CUSTOM_WORKFLOW_PROMPT_INVALID')
+    }
+    normalized.negativePrompt = values.negativePrompt
+  }
+  for (const role of ['sourceImage', 'lastFrame']) {
+    if (!mappings[role]) continue
+    normalized[role] = assertManagedComfyFilename(values[role], role)
+  }
+  for (const [role, [minimum, maximum]] of Object.entries(CUSTOM_NUMERIC_LIMITS)) {
+    if (!mappings[role] || values[role] === undefined) continue
+    const value = Number(values[role])
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+      throw workflowError(`${role} 超出受控整数范围 ${minimum}–${maximum}`, 'CUSTOM_WORKFLOW_PARAMETER_RANGE')
+    }
+    normalized[role] = value
+  }
+  return normalized
 }
 
 export class WorkflowCenterService {
@@ -727,6 +893,12 @@ export class WorkflowCenterService {
     const pack = this.packs.find(({ id }) => id === packId)
     if (!pack) throw workflowError('工作流能力包不存在', 'WORKFLOW_PACK_NOT_FOUND', 404)
     return pack
+  }
+
+  #custom(customId) {
+    const entry = this.state.customWorkflows.find(({ id }) => id === customId)
+    if (!entry) throw workflowError('自定义工作流不存在', 'CUSTOM_WORKFLOW_NOT_FOUND', 404)
+    return entry
   }
 
   // @yao-pkg/pkg 6.22 misclassifies await inside private class methods as
@@ -1170,6 +1342,7 @@ export class WorkflowCenterService {
       nodeTypes: inspection.nodeTypes,
       models: inspection.models,
       mappings: inspection.mappings,
+      mappingHash: customMappingHash(inspection.mappings),
       enabled: false,
       source: 'user-api-json',
       createdAt: now,
@@ -1183,17 +1356,68 @@ export class WorkflowCenterService {
   }
 
   async setCustomEnabled(customId, enabled, registeredNodeTypes) {
-    const entry = this.state.customWorkflows.find(({ id }) => id === customId)
-    if (!entry) throw workflowError('自定义工作流不存在', 'CUSTOM_WORKFLOW_NOT_FOUND', 404)
+    const entry = this.#custom(customId)
     if (enabled) {
       const inspection = inspectCustomWorkflow({ workflow: entry.workflow, mappings: entry.mappings, registeredNodeTypes })
-      if (!inspection.canImport || inspection.hash !== entry.hash) throw workflowError('工作流版本或运行时节点已变化，必须重新检查', 'CUSTOM_WORKFLOW_RECHECK_REQUIRED', 409, { findings: inspection.findings })
+      const mappingHash = customMappingHash(entry.mappings)
+      if (!inspection.canImport || inspection.hash !== entry.hash || mappingHash !== entry.mappingHash) {
+        throw workflowError('工作流版本、映射或运行时依赖已变化，必须重新导入', 'CUSTOM_WORKFLOW_RECHECK_REQUIRED', 409, { findings: inspection.findings })
+      }
     }
     entry.enabled = Boolean(enabled)
     entry.updatedAt = Date.now()
     await this.#save()
     const { workflow: _workflow, ...summary } = entry
     return clone(summary)
+  }
+
+  customExecutionSummary(customId) {
+    const { workflow: _workflow, ...summary } = this.#custom(customId)
+    return clone(summary)
+  }
+
+  prepareCustomExecution(customId, { values, registeredNodeTypes, executionId } = {}) {
+    const entry = this.#custom(customId)
+    if (!entry.enabled) throw workflowError('自定义工作流尚未启用', 'CUSTOM_WORKFLOW_NOT_ENABLED', 409)
+    if (typeof executionId !== 'string' || !SAFE_ID.test(executionId)) {
+      throw workflowError('自定义工作流执行标识无效', 'CUSTOM_WORKFLOW_EXECUTION_ID_INVALID')
+    }
+    const inspection = inspectCustomWorkflow({
+      workflow: entry.workflow,
+      mappings: entry.mappings,
+      registeredNodeTypes,
+    })
+    const mappingHash = customMappingHash(entry.mappings)
+    if (!inspection.canImport || inspection.hash !== entry.hash || mappingHash !== entry.mappingHash) {
+      throw workflowError('工作流、映射、节点或模型已经变化，本次执行已拒绝', 'CUSTOM_WORKFLOW_RECHECK_REQUIRED', 409, {
+        findings: inspection.findings,
+      })
+    }
+    const normalizedValues = normalizeExecutionValues(values, entry.mappings)
+    const prepared = clone(entry.workflow)
+    for (const [role, value] of Object.entries(normalizedValues)) {
+      const mapping = entry.mappings[role]
+      prepared[mapping.nodeId].inputs[mapping.inputName] = value
+    }
+    const outputMapping = entry.mappings.output
+    const outputNode = prepared[outputMapping.nodeId]
+    if (Object.prototype.hasOwnProperty.call(outputNode.inputs, 'filename_prefix')) {
+      outputNode.inputs.filename_prefix = `AEONQUILL_${executionId}`
+    }
+    return {
+      workflow: prepared,
+      metadata: {
+        version: CUSTOM_WORKFLOW_EXECUTION_VERSION,
+        customWorkflowId: entry.id,
+        customWorkflowTitle: entry.title,
+        workflowHash: entry.hash,
+        mappingHash: entry.mappingHash,
+        outputNodeId: outputMapping.nodeId,
+        outputNodeType: outputNode.class_type,
+        parameterRoles: Object.keys(normalizedValues).sort(),
+        nodeCount: entry.nodeCount,
+      },
+    }
   }
 
   async removeCustom(customId) {

@@ -783,7 +783,8 @@
 
 .aq-custom-workflow__import,
 .aq-custom-workflow__report,
-.aq-custom-workflow__saved {
+.aq-custom-workflow__saved,
+.aq-custom-workflow__runner {
   padding: 16px;
   background: #fff;
   border: 1px solid #dedee5;
@@ -841,7 +842,10 @@
 }
 
 .aq-custom-workflow__title input,
-.aq-custom-workflow__mappings select {
+.aq-custom-workflow__mappings select,
+.aq-custom-runner__fields input,
+.aq-custom-runner__fields select,
+.aq-custom-runner__fields textarea {
   width: 100%;
   height: 35px;
   padding: 0 9px;
@@ -850,6 +854,15 @@
   border: 1px solid #d9dae1;
   border-radius: 8px;
   font-size: 10px;
+}
+
+.aq-custom-runner__fields textarea {
+  height: auto;
+  min-height: 62px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .aq-custom-workflow__mappings {
@@ -980,6 +993,119 @@
 
 .aq-custom-workflow__saved {
   grid-column: 1 / -1;
+}
+
+.aq-custom-workflow__runner {
+  grid-column: 1 / -1;
+}
+
+.aq-custom-workflow__runner > header {
+  align-items: flex-start;
+}
+
+.aq-custom-workflow__runner > header h3 {
+  margin: 0;
+  color: #303139;
+  font-size: 13px;
+}
+
+.aq-custom-workflow__runner > header p {
+  margin: 4px 0 0;
+  color: #7b7c86;
+  font-size: 9px;
+}
+
+.aq-custom-workflow__runner .is-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.aq-custom-runner__fields {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aq-custom-runner__fields label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: #666772;
+  font-size: 9px;
+}
+
+.aq-custom-runner__fields label.is-wide {
+  grid-column: 1 / -1;
+}
+
+.aq-custom-runner__job {
+  margin-top: 13px;
+  padding: 11px 12px;
+  display: grid;
+  gap: 7px;
+  color: #545660;
+  background: #f7f6fc;
+  border: 1px solid #ded9f2;
+  border-radius: 9px;
+}
+
+.aq-custom-runner__job > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 10px;
+}
+
+.aq-custom-runner__job progress {
+  width: 100%;
+  height: 5px;
+  accent-color: #6249c5;
+}
+
+.aq-custom-runner__job small,
+.aq-custom-runner__job p,
+.aq-custom-runner__job a {
+  margin: 0;
+  color: #747681;
+  font-size: 9px;
+}
+
+.aq-custom-runner__job.is-failed {
+  color: #8e3e3e;
+  background: #fff6f5;
+  border-color: #efd7d4;
+}
+
+.aq-custom-workflow__runner > footer {
+  margin-top: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.aq-custom-workflow__runner > footer button {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aq-custom-workflow__runner > footer button.is-primary,
+.aq-custom-workflow__saved button.is-primary {
+  color: #fff;
+  background: #6249c5;
+  border-color: #6249c5;
+}
+
+.aq-custom-workflow__runner > footer small {
+  color: #83848e;
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .aq-custom-workflow__saved > div {
@@ -1225,5 +1351,27 @@
 
   .aq-workflow-inspector__facts span:last-child {
     border-bottom: 0;
+  }
+
+  .aq-custom-runner__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .aq-custom-runner__fields label.is-wide {
+    grid-column: auto;
+  }
+
+  .aq-custom-workflow__runner > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aq-custom-workflow__runner > footer button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .aq-custom-runner__job small {
+    overflow-wrap: anywhere;
   }
 }

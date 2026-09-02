@@ -248,3 +248,132 @@ test('safe API workflow requires explicit mappings, persists by hash, and rechec
     await rm(workspace.root, { recursive: true, force: true })
   }
 })
+
+test('custom execution requires approved nodes, registered models, stable mappings and bounded parameter injection', async () => {
+  const workspace = await temporaryWorkspace()
+  const service = new WorkflowCenterService({ rootDirectory: workspace.stateRoot, getComfyRoot: () => workspace.comfyRoot, packs: [] })
+  const workflow = {
+    1: { class_type: 'CLIPTextEncode', inputs: { text: 'original prompt' } },
+    2: { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 512, batch_size: 1 } },
+    3: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'fixture.safetensors' } },
+    4: { class_type: 'SaveImage', inputs: { images: ['2', 0], filename_prefix: 'unsafe-user-prefix' } },
+  }
+  const mappings = {
+    prompt: { nodeId: '1', inputName: 'text' },
+    width: { nodeId: '2', inputName: 'width' },
+    height: { nodeId: '2', inputName: 'height' },
+    output: { nodeId: '4' },
+  }
+  const objectInfo = {
+    CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+    EmptyLatentImage: { input: { required: { width: ['INT', {}], height: ['INT', {}] } } },
+    CheckpointLoaderSimple: { input: { required: { ckpt_name: [['fixture.safetensors'], {}] } } },
+    SaveImage: { input: { required: {} } },
+  }
+  try {
+    await service.open()
+    const imported = await service.importCustom({ title: '参数化图片工作流', workflow, mappings, registeredNodeTypes: objectInfo })
+    assert.match(imported.mappingHash, /^[a-f0-9]{64}$/u)
+    await service.setCustomEnabled(imported.id, true, objectInfo)
+    const prepared = service.prepareCustomExecution(imported.id, {
+      values: { prompt: 'a controlled ink landscape', width: 768, height: 432 },
+      registeredNodeTypes: objectInfo,
+      executionId: 'custom-run-fixture',
+    })
+    assert.equal(prepared.workflow['1'].inputs.text, 'a controlled ink landscape')
+    assert.equal(prepared.workflow['2'].inputs.width, 768)
+    assert.equal(prepared.workflow['2'].inputs.height, 432)
+    assert.equal(prepared.workflow['4'].inputs.filename_prefix, 'AEONQUILL_custom-run-fixture')
+    assert.equal(prepared.metadata.outputNodeId, '4')
+    assert.equal(workflow['1'].inputs.text, 'original prompt')
+    assert.throws(
+      () => service.prepareCustomExecution(imported.id, {
+        values: { prompt: 'invalid width', width: 63 },
+        registeredNodeTypes: objectInfo,
+        executionId: 'custom-run-invalid',
+      }),
+      (error) => error.code === 'CUSTOM_WORKFLOW_PARAMETER_RANGE',
+    )
+    service.state.customWorkflows[0].mappings.width.inputName = 'height'
+    assert.throws(
+      () => service.prepareCustomExecution(imported.id, {
+        values: { prompt: 'mapping drift' },
+        registeredNodeTypes: objectInfo,
+        executionId: 'custom-run-drift',
+      }),
+      (error) => error.code === 'CUSTOM_WORKFLOW_RECHECK_REQUIRED',
+    )
+  } finally {
+    await service.close()
+    await rm(workspace.root, { recursive: true, force: true })
+  }
+})
+
+test('custom scanner rejects registered but unapproved nodes, missing models and unmanaged image loaders', () => {
+  const registeredButUnapproved = inspectCustomWorkflow({
+    workflow: {
+      1: { class_type: 'HarmlessLookingCustomNode', inputs: { text: 'hello' } },
+      2: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+    },
+    mappings: { prompt: { nodeId: '1', inputName: 'text' }, output: { nodeId: '2' } },
+    registeredNodeTypes: ['HarmlessLookingCustomNode', 'SaveImage'],
+  })
+  assert.ok(registeredButUnapproved.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_NODE_NOT_APPROVED'))
+
+  const missingModel = inspectCustomWorkflow({
+    workflow: {
+      1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'missing.safetensors' } },
+      2: { class_type: 'CLIPTextEncode', inputs: { text: 'hello' } },
+      3: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+    },
+    mappings: { prompt: { nodeId: '2', inputName: 'text' }, output: { nodeId: '3' } },
+    registeredNodeTypes: {
+      CheckpointLoaderSimple: { input: { required: { ckpt_name: [['present.safetensors'], {}] } } },
+      CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+      SaveImage: { input: { required: {} } },
+    },
+  })
+  assert.ok(missingModel.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MODEL_MISSING'))
+
+  const unmanagedLoader = inspectCustomWorkflow({
+    workflow: {
+      1: { class_type: 'LoadImage', inputs: { image: 'existing.png' } },
+      2: { class_type: 'CLIPTextEncode', inputs: { text: 'hello' } },
+      3: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+    },
+    mappings: { prompt: { nodeId: '2', inputName: 'text' }, output: { nodeId: '3' } },
+    registeredNodeTypes: ['LoadImage', 'CLIPTextEncode', 'SaveImage'],
+  })
+  assert.ok(unmanagedLoader.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_UNMAPPED_FILE_INPUT'))
+
+  const sensitiveMapping = inspectCustomWorkflow({
+    workflow: {
+      1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'present.safetensors' } },
+      2: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+    },
+    mappings: { prompt: { nodeId: '1', inputName: 'ckpt_name' }, output: { nodeId: '2' } },
+    registeredNodeTypes: {
+      CheckpointLoaderSimple: { input: { required: { ckpt_name: [['present.safetensors'], {}] } } },
+      SaveImage: { input: { required: {} } },
+    },
+  })
+  assert.ok(sensitiveMapping.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_SENSITIVE_INPUT'))
+  assert.ok(sensitiveMapping.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE'))
+
+  const conflictingMappings = inspectCustomWorkflow({
+    workflow: {
+      1: { class_type: 'CLIPTextEncode', inputs: { text: 'hello' } },
+      2: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'AEONQUILL' } },
+    },
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      negativePrompt: { nodeId: '1', inputName: 'text' },
+      output: { nodeId: '2' },
+    },
+    registeredNodeTypes: {
+      CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+      SaveImage: { input: { required: {} } },
+    },
+  })
+  assert.ok(conflictingMappings.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_CONFLICT'))
+})

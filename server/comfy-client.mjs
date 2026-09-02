@@ -94,9 +94,13 @@ export class ComfyClient {
   }
 
   async uploadImage(filePath, filename, signal) {
+    return this.uploadAsset(filePath, filename, 'image/png', signal)
+  }
+
+  async uploadAsset(filePath, filename, mimeType, signal) {
     const bytes = await readFile(filePath)
     const form = new FormData()
-    form.append('image', new Blob([bytes], { type: 'image/png' }), filename)
+    form.append('image', new Blob([bytes], { type: mimeType }), filename)
     form.append('type', 'input')
     form.append('overwrite', 'true')
     const response = await this.request('/upload/image', {
@@ -206,13 +210,13 @@ export class ComfyClient {
     return payload[promptId] || null
   }
 
-  async fetchOutput(file) {
+  async fetchOutput(file, signal) {
     const query = new URLSearchParams({
       filename: file.filename,
       subfolder: file.subfolder || '',
       type: file.type || 'output',
     })
-    return this.request(`/view?${query}`, {}, 120_000)
+    return this.request(`/view?${query}`, { signal }, 120_000)
   }
 
   async openExecutionTracker(clientId, onMessage = () => {}) {

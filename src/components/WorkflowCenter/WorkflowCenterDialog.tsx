@@ -27,9 +27,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   cancelWorkflowInstall,
+  cancelCustomWorkflowJob,
+  createCustomWorkflowJob,
   disableWorkflowPack,
   enableWorkflowPack,
   fetchWorkflowCenterCatalog,
+  fetchCustomWorkflowJob,
   importCustomWorkflow,
   inspectCustomWorkflow,
   installWorkflowPack,
@@ -41,16 +44,28 @@ import {
   type WorkflowCenterCatalog,
   type WorkflowPack,
 } from '../../lib/workflowCenterApi'
+import { listLibraryAssets, type LibraryAsset } from '../../lib/libraryApi'
+import type { ProcessingJob } from '../../types'
 import './workflow-center.css'
 
 interface WorkflowCenterDialogProps {
   open: boolean
   onClose: () => void
   onOpenRuntimeSettings?: () => void
+  projects?: Array<{ id: string; title: string }>
+  activeProjectId?: string
 }
 
 type WorkflowTab = 'builtin' | 'custom'
 type WorkflowCategory = 'all' | 'video' | 'image'
+
+const CUSTOM_NUMERIC_FIELDS = {
+  seed: { label: '随机种子', min: 0, max: Number.MAX_SAFE_INTEGER },
+  width: { label: '宽度', min: 64, max: 8_192 },
+  height: { label: '高度', min: 64, max: 8_192 },
+  frames: { label: '帧数', min: 1, max: 4_096 },
+  steps: { label: '采样步数', min: 1, max: 200 },
+} as const
 
 const STATUS_LABELS: Record<WorkflowPack['status'], string> = {
   uninstalled: '未安装',
@@ -111,7 +126,7 @@ function externalLink(url: string, label: string) {
   )
 }
 
-export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: WorkflowCenterDialogProps) {
+export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, projects = [], activeProjectId }: WorkflowCenterDialogProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const [tab, setTab] = useState<WorkflowTab>('builtin')
@@ -131,6 +146,17 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
   const [customMappings, setCustomMappings] = useState<CustomWorkflowMappings>({})
   const [customInspection, setCustomInspection] = useState<CustomWorkflowInspection | null>(null)
   const [customInspectionStale, setCustomInspectionStale] = useState(false)
+  const [selectedCustomId, setSelectedCustomId] = useState<string | null>(null)
+  const [customRunProjectId, setCustomRunProjectId] = useState('')
+  const [customRunTitle, setCustomRunTitle] = useState('')
+  const [customRunPrompt, setCustomRunPrompt] = useState('')
+  const [customRunNegative, setCustomRunNegative] = useState('')
+  const [customRunSourceId, setCustomRunSourceId] = useState('')
+  const [customRunLastFrameId, setCustomRunLastFrameId] = useState('')
+  const [customRunNumbers, setCustomRunNumbers] = useState<Record<string, string>>({})
+  const [customRunAssets, setCustomRunAssets] = useState<LibraryAsset[]>([])
+  const [customRunJob, setCustomRunJob] = useState<ProcessingJob | null>(null)
+  const [customRunAssetsLoading, setCustomRunAssetsLoading] = useState(false)
 
   const refresh = useCallback(async (force = false) => {
     setLoading(true)
@@ -163,7 +189,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
       }
       if (event.key !== 'Tab') return
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
       ) ?? []).filter((element) => element.offsetParent !== null)
       if (!focusable.length) return
       const first = focusable[0]
@@ -197,6 +223,54 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
   }, [activeInstall, open, refresh])
 
   useEffect(() => {
+    if (!open) return
+    setCustomRunProjectId((current) => projects.some(({ id }) => id === current)
+      ? current
+      : projects.some(({ id }) => id === activeProjectId)
+        ? activeProjectId!
+        : projects[0]?.id ?? '')
+  }, [activeProjectId, open, projects])
+
+  useEffect(() => {
+    if (!open || !selectedCustomId || !customRunProjectId) {
+      setCustomRunAssets([])
+      return
+    }
+    let disposed = false
+    setCustomRunAssetsLoading(true)
+    void listLibraryAssets({ scope: 'project', projectId: customRunProjectId })
+      .then((assets) => {
+        if (!disposed) setCustomRunAssets(assets.filter(({ mediaKind }) => mediaKind === 'image'))
+      })
+      .catch((reason) => {
+        if (!disposed) setError(reason instanceof Error ? reason.message : '项目图片资源读取失败')
+      })
+      .finally(() => {
+        if (!disposed) setCustomRunAssetsLoading(false)
+      })
+    return () => { disposed = true }
+  }, [customRunProjectId, open, selectedCustomId])
+
+  useEffect(() => {
+    if (!open || !customRunJob || !['queued', 'running'].includes(customRunJob.status)) return
+    const jobId = customRunJob.id
+    let disposed = false
+    const poll = () => void fetchCustomWorkflowJob(jobId)
+      .then((job) => {
+        if (!disposed) setCustomRunJob(job)
+      })
+      .catch((reason) => {
+        if (!disposed) setError(reason instanceof Error ? reason.message : '自定义工作流任务状态读取失败')
+      })
+    const timer = window.setInterval(poll, 900)
+    poll()
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [customRunJob?.id, customRunJob?.status, open])
+
+  useEffect(() => {
     setLicenseAccepted(false)
     setDiskAccepted(false)
     setError(null)
@@ -214,6 +288,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
   }, [catalog?.packs, category, query])
 
   const selectedPack = catalog?.packs.find(({ id }) => id === selectedPackId) ?? visiblePacks[0] ?? null
+  const selectedCustom = catalog?.customWorkflows.find(({ id, enabled }) => id === selectedCustomId && enabled) ?? null
 
   const selectedRegistryWarnings = useMemo(() => {
     const selectedRootIds = new Set(
@@ -317,6 +392,63 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
       setCustomInspection(null)
       setCustomInspectionStale(false)
     }, '自定义工作流已通过真实节点复检并加入受控目录。')
+  }
+
+  const openCustomRunner = (workflow: NonNullable<WorkflowCenterCatalog['customWorkflows'][number]>) => {
+    setSelectedCustomId(workflow.id)
+    setCustomRunTitle(`${workflow.title} 输出`.slice(0, 120))
+    setCustomRunPrompt('')
+    setCustomRunNegative('')
+    setCustomRunSourceId('')
+    setCustomRunLastFrameId('')
+    setCustomRunNumbers({})
+    setCustomRunJob(null)
+    setError(null)
+    setMessage(null)
+  }
+
+  const submitCustomRun = async () => {
+    if (!selectedCustom || !customRunProjectId) return
+    setBusy('custom-run')
+    setError(null)
+    setMessage(null)
+    try {
+      const numericValues = Object.fromEntries(
+        Object.entries(customRunNumbers)
+          .filter(([, value]) => value.trim() !== '')
+          .map(([role, value]) => [role, Number(value)]),
+      )
+      const job = await createCustomWorkflowJob({
+        customWorkflowId: selectedCustom.id,
+        projectId: customRunProjectId,
+        title: customRunTitle,
+        prompt: customRunPrompt,
+        ...(selectedCustom.mappings.negativePrompt ? { negativePrompt: customRunNegative } : {}),
+        ...(selectedCustom.mappings.sourceImage ? { sourceLibraryItemId: customRunSourceId } : {}),
+        ...(selectedCustom.mappings.lastFrame ? { lastFrameLibraryItemId: customRunLastFrameId } : {}),
+        ...numericValues,
+      })
+      setCustomRunJob(job)
+      setMessage('任务已进入统一 GPU 队列；可在此观察、取消，并在完成后打开资源库产物。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '自定义工作流提交失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const cancelCustomRun = async () => {
+    if (!customRunJob) return
+    setBusy('custom-run-cancel')
+    setError(null)
+    try {
+      setCustomRunJob(await cancelCustomWorkflowJob(customRunJob.id))
+      setMessage('取消信号已送达统一任务队列与 ComfyUI。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '自定义工作流取消失败')
+    } finally {
+      setBusy(null)
+    }
   }
 
   if (!open) return null
@@ -516,12 +648,13 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
             </aside>
 
             <section className="aq-custom-workflow__saved">
-              <header><div><h3>已导入工作流</h3><p>启用前每次按当前 ComfyUI 节点表重检；此阶段不会直接执行任意 JSON。</p></div><FileJson2 size={18} /></header>
+              <header><div><h3>已导入工作流</h3><p>启用与每次执行都会复检节点、模型、工作流哈希和映射哈希；任务只读取受管资源并回填项目资源库。</p></div><FileJson2 size={18} /></header>
               <div>
                 {(catalog?.customWorkflows ?? []).map((workflow) => (
                   <article key={workflow.id}>
                     <span className={workflow.enabled ? 'is-ready' : 'is-idle'}><FileJson2 size={16} /></span>
                     <div><strong>{workflow.title}</strong><small>{workflow.nodeCount} 节点 · {workflow.hash.slice(0, 10)}…</small></div>
+                    {workflow.enabled ? <button type="button" className="is-primary" onClick={() => openCustomRunner(workflow)} disabled={Boolean(busy)}><Play size={13} />运行</button> : null}
                     <button type="button" onClick={() => void run(`custom-toggle:${workflow.id}`, () => setCustomWorkflowEnabled(workflow.id, !workflow.enabled), workflow.enabled ? '自定义工作流已停用。' : '自定义工作流已通过节点复检并启用。')} disabled={Boolean(busy)}>{workflow.enabled ? '停用' : '启用'}</button>
                     <button type="button" className="is-danger" onClick={() => void run(`custom-remove:${workflow.id}`, () => removeCustomWorkflow(workflow.id), '自定义工作流登记已删除。')} disabled={Boolean(busy)} aria-label={`删除 ${workflow.title}`}><Trash2 size={14} /></button>
                   </article>
@@ -529,6 +662,41 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
                 {!catalog?.customWorkflows.length ? <p className="aq-workflow-center__empty">尚未导入自定义工作流。</p> : null}
               </div>
             </section>
+
+            {selectedCustom ? (
+              <section className="aq-custom-workflow__runner" aria-label="自定义工作流运行面板">
+                <header>
+                  <div><h3>运行：{selectedCustom.title}</h3><p>只有映射过的参数会写入工作流；留空数值沿用 JSON 原值。</p></div>
+                  <button type="button" className="is-close" onClick={() => setSelectedCustomId(null)} aria-label="关闭运行面板"><X size={16} /></button>
+                </header>
+                <div className="aq-custom-runner__fields">
+                  <label><span>所属项目 *</span><select value={customRunProjectId} onChange={(event) => { setCustomRunProjectId(event.target.value); setCustomRunSourceId(''); setCustomRunLastFrameId('') }}><option value="">请选择项目</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+                  <label><span>输出名称 *</span><input value={customRunTitle} maxLength={120} onChange={(event) => setCustomRunTitle(event.target.value)} /></label>
+                  <label className="is-wide"><span>正向提示词 *</span><textarea value={customRunPrompt} maxLength={8000} rows={3} onChange={(event) => setCustomRunPrompt(event.target.value)} placeholder="描述希望工作流生成或处理的内容" /></label>
+                  {selectedCustom.mappings.negativePrompt ? <label className="is-wide"><span>负向提示词</span><textarea value={customRunNegative} maxLength={8000} rows={2} onChange={(event) => setCustomRunNegative(event.target.value)} /></label> : null}
+                  {selectedCustom.mappings.sourceImage ? <label><span>首帧 / 输入图 *</span><select value={customRunSourceId} onChange={(event) => setCustomRunSourceId(event.target.value)} disabled={customRunAssetsLoading}><option value="">{customRunAssetsLoading ? '正在读取项目图片…' : '请选择项目资源'}</option>{customRunAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title} · v{asset.version.version}</option>)}</select></label> : null}
+                  {selectedCustom.mappings.lastFrame ? <label><span>末帧 *</span><select value={customRunLastFrameId} onChange={(event) => setCustomRunLastFrameId(event.target.value)} disabled={customRunAssetsLoading}><option value="">{customRunAssetsLoading ? '正在读取项目图片…' : '请选择项目资源'}</option>{customRunAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title} · v{asset.version.version}</option>)}</select></label> : null}
+                  {(Object.keys(CUSTOM_NUMERIC_FIELDS) as Array<keyof typeof CUSTOM_NUMERIC_FIELDS>).filter((role) => selectedCustom.mappings[role]).map((role) => (
+                    <label key={role}><span>{CUSTOM_NUMERIC_FIELDS[role].label}</span><input type="number" step="1" min={CUSTOM_NUMERIC_FIELDS[role].min} max={CUSTOM_NUMERIC_FIELDS[role].max} value={customRunNumbers[role] ?? ''} onChange={(event) => setCustomRunNumbers((current) => ({ ...current, [role]: event.target.value }))} placeholder="沿用 JSON 原值" /></label>
+                  ))}
+                </div>
+                {customRunJob ? (
+                  <div className={`aq-custom-runner__job is-${customRunJob.status}`}>
+                    <div><strong>{customRunJob.detail}</strong><span>{customRunJob.progress}%</span></div>
+                    <progress value={customRunJob.progress} max={100} />
+                    <small>{customRunJob.id} · {customRunJob.status}</small>
+                    {customRunJob.error ? <p>{customRunJob.error.code}：{customRunJob.error.message}</p> : null}
+                    {customRunJob.outputUrl ? <a href={customRunJob.outputUrl} target="_blank" rel="noreferrer">打开不可变输出</a> : null}
+                  </div>
+                ) : null}
+                <footer>
+                  {customRunJob && ['queued', 'running'].includes(customRunJob.status)
+                    ? <button type="button" onClick={() => void cancelCustomRun()} disabled={Boolean(busy)}><CircleSlash2 size={14} />取消任务</button>
+                    : <button type="button" className="is-primary" onClick={() => void submitCustomRun()} disabled={Boolean(busy) || !customRunProjectId || !customRunTitle.trim() || !customRunPrompt.trim() || (Boolean(selectedCustom.mappings.sourceImage) && !customRunSourceId) || (Boolean(selectedCustom.mappings.lastFrame) && !customRunLastFrameId)}>{busy === 'custom-run' ? <LoaderCircle size={15} className="is-spinning" /> : <Play size={14} />}提交统一任务</button>}
+                  <small>取消会同步移除排队 Prompt 或中断当前 ComfyUI 执行；空闲后运行时按策略自动休眠。</small>
+                </footer>
+              </section>
+            ) : null}
           </div>
         )}
       </section>

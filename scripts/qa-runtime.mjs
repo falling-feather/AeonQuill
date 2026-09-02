@@ -60,7 +60,7 @@ function assertSafeTemporaryDirectory(directory, prefix) {
   }
 }
 
-export async function startIsolatedBridge(label = 'qa') {
+export async function startIsolatedBridge(label = 'qa', options = {}) {
   const prefix = `miaohui-${label}-`
   const runtimeDirectory = await mkdtemp(join(tmpdir(), prefix))
   const port = await availablePort()
@@ -75,8 +75,9 @@ export async function startIsolatedBridge(label = 'qa') {
     MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
     MIAOHUI_PORT: String(port),
     MIAOHUI_HOST: '127.0.0.1',
-    MIAOHUI_COMFY_POLICY: 'manual',
-    COMFY_URL: `http://127.0.0.1:${unavailableComfyPort}`,
+    MIAOHUI_COMFY_POLICY: options.comfyPolicy || 'manual',
+    COMFY_URL: options.comfyUrl || `http://127.0.0.1:${unavailableComfyPort}`,
+    ...(options.environment || {}),
   }
   let child
   let sessionCookie = ''

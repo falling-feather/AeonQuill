@@ -1139,7 +1139,13 @@ function App({
       if (!reused && retried.kind === 'video' && retried.request && 'mode' in retried.request) {
         addVideoPlaceholder(retried, retried.request)
       }
-      showToast(retried.kind === 'image' ? '图像任务已重新提交' : '已使用快速预设重新提交')
+      showToast(
+        retried.kind === 'image'
+          ? '图像任务已重新提交'
+          : retried.kind === 'custom-workflow'
+            ? '自定义工作流已重新提交'
+            : '已使用快速预设重新提交',
+      )
     } catch (reason) {
       showToast(reason instanceof Error ? reason.message : '重试任务失败')
     }

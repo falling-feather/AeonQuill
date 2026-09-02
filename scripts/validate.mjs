@@ -81,6 +81,8 @@ try {
     await run('production build', npmInvocation.executable, [...npmInvocation.prefix, 'run', 'build'])
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])
+    await run('controlled custom ComfyUI execution', process.execPath, ['scripts/validate-custom-workflow-api.mjs'])
+    await run('controlled custom workflow browser vertical', process.execPath, ['scripts/validate-custom-workflow-ui.mjs'])
     await run('isolated browser smoke', process.execPath, ['scripts/validate-browser.mjs'], {
       env: { MIAOHUI_QA_SKIP_BUILD: '1' },
     })

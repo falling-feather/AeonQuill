@@ -495,6 +495,13 @@ export class ProjectStore {
       fail('LIBRARY_ITEM_FORBIDDEN', 'Project library item belongs to another project', 403)
     }
     if (options.projectId !== undefined) assertProjectId(options.projectId)
+    if (row.scope === 'global' && options.requireProjectReference) {
+      if (!options.projectId) fail('LIBRARY_ITEM_FORBIDDEN', 'Project context is required for referenced library assets', 403)
+      const reference = this.database.prepare(`
+        SELECT 1 FROM library_project_refs WHERE project_id = ? AND item_id = ?
+      `).get(options.projectId, itemId)
+      if (!reference) fail('LIBRARY_ITEM_FORBIDDEN', 'Global library item is not linked to this project', 403)
+    }
     return this.hydrateLibraryItem(row, options.projectId)
   }
 

@@ -1840,6 +1840,8 @@ export default function ProductApp() {
       open={workflowCenterOpen}
       onClose={() => setWorkflowCenterOpen(false)}
       onOpenRuntimeSettings={openRuntimeSettings}
+      projects={libraryProjects}
+      activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
     />
   )
 

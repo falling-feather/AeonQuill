@@ -5,6 +5,11 @@ import { extname, join, resolve, sep } from 'node:path'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { ComfyClient, findVideoOutput } from './comfy-client.mjs'
+import {
+  CUSTOM_WORKFLOW_JOB_KIND,
+  CustomWorkflowExecutor,
+  validateCustomWorkflowJobRequest,
+} from './custom-workflow-executor.mjs'
 import { AssetPreviewService } from './asset-preview-service.mjs'
 import { ClientStateStore } from './client-state-store.mjs'
 import { IMAGE_TOOLS_VERSION, ImageProcessor, validateImageRequest } from './image-processor.mjs'
@@ -78,7 +83,7 @@ import {
   validateFinalCutRequest,
   VIDEO_FINALIZER_VERSION,
 } from './video-finalizer.mjs'
-import { WorkflowCenterService } from './workflow-center.mjs'
+import { CUSTOM_WORKFLOW_EXECUTION_VERSION, WorkflowCenterService } from './workflow-center.mjs'
 import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
@@ -764,6 +769,50 @@ function newJob(request, inputPath, lastFramePath, options = {}) {
     inputPath,
     lastFramePath,
     logs: [{ at: now, level: 'info', message: '任务已创建' }],
+  }
+}
+
+function newCustomWorkflowJob(request, workflow, options = {}) {
+  const id = `custom-run-${randomUUID()}`
+  const now = Date.now()
+  const scheduling = createScheduling({
+    resourceClass: 'gpu',
+    priority: options.priority ?? 50,
+    timeoutMs: 2 * 60 * 60 * 1_000,
+    idempotencyKey: options.idempotencyKey,
+    attempt: options.attempt || 1,
+    maxAttempts: 3,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: CUSTOM_WORKFLOW_JOB_KIND,
+    tool: 'custom-comfy-workflow',
+    label: `自定义 · ${workflow.title}`,
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: '等待受控 ComfyUI 执行器',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: CUSTOM_WORKFLOW_EXECUTION_VERSION,
+    requestHash: options.requestHash,
+    retryOf: options.retryOf,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, 'gpu', 15 * 60_000, now)],
+    request,
+    sourceElementId: request.projectId,
+    workflowMetadata: {
+      version: CUSTOM_WORKFLOW_EXECUTION_VERSION,
+      customWorkflowId: workflow.id,
+      customWorkflowTitle: workflow.title,
+      workflowHash: workflow.hash,
+      mappingHash: workflow.mappingHash,
+      outputNodeId: workflow.mappings.output.nodeId,
+      parameterRoles: Object.keys(workflow.mappings).filter((role) => role !== 'output').sort(),
+      nodeCount: workflow.nodeCount,
+    },
+    logs: [{ at: now, level: 'info', message: '受控自定义工作流任务已创建' }],
   }
 }
 
@@ -2206,6 +2255,14 @@ async function runtimeIsIdle() {
   }
 }
 
+function activeCustomWorkflowJobs(customWorkflowId) {
+  return store.list().filter((job) => (
+    job.kind === CUSTOM_WORKFLOW_JOB_KIND
+    && job.request?.customWorkflowId === customWorkflowId
+    && ['queued', 'running'].includes(job.status)
+  ))
+}
+
 async function scheduleRuntimeIdleStop() {
   const scheduled = await runtimeManager.scheduleIdleStop(runtimeIsIdle)
   if (scheduled) {
@@ -2267,6 +2324,37 @@ async function createVideoJob(body, retrySource, options = {}) {
     for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
     return { job: store.publicJob(added.job), reused: true }
   }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
+async function createCustomWorkflowJob(body, retrySource, options = {}) {
+  const validated = validateCustomWorkflowJobRequest(
+    retrySource ? retrySource.request : body,
+    { workspaceStore, workflowCenter, projectStore },
+  )
+  const request = validated.request
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('custom-workflow-retry', {
+        sourceJobId: retrySource.id,
+        sourceRequestHash: retrySource.requestHash,
+        attempt,
+      })
+    : hashRequest('custom-workflow', request)
+  const existing = existingIdempotentJob(CUSTOM_WORKFLOW_JOB_KIND, idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  await assertStorageCapacity(runtimeDirectory, 320 * 1024 * 1024)
+  const job = newCustomWorkflowJob(request, validated.workflow, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+    attempt,
+    retryOf: retrySource?.id,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
   await scheduler.enqueue(job.id)
   return { job: store.publicJob(store.get(job.id)), reused: false }
 }
@@ -2561,6 +2649,18 @@ runtimeManager.subscribe(() => {
     .catch(() => {})
 })
 
+const customWorkflowExecutor = new CustomWorkflowExecutor({
+  workflowCenter,
+  store,
+  projectStore,
+  comfy,
+  runtimeManager,
+  inspectRuntime,
+  managedComfyInputRoot: buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs }).directories.input,
+  deliverOutput: deliverConfiguredOutput,
+  scheduleRuntimeIdleStop,
+})
+
 async function prepareRecoveredJobs() {
   for (const job of store.list()) {
     if (job.error?.code === 'BRIDGE_RESTARTED') {
@@ -2589,7 +2689,7 @@ async function prepareRecoveredJobs() {
       continue
     }
     if (job.status !== 'queued' || job.scheduling?.schemaVersion === 1) continue
-    const resourceClass = job.kind === 'video' || gpuImageOperations.has(job.request?.operation) ? 'gpu' : 'cpu'
+    const resourceClass = job.kind === 'video' || job.kind === CUSTOM_WORKFLOW_JOB_KIND || gpuImageOperations.has(job.request?.operation) ? 'gpu' : 'cpu'
     await store.update(job.id, {
       requestHash: job.requestHash || hashRequest(`legacy-${job.kind || 'job'}`, job.request || {}),
       scheduling: createScheduling({
@@ -2612,6 +2712,7 @@ async function prepareRecoveredJobs() {
 scheduler
   .register('image', runImageJob)
   .register('video', runVideoJob)
+  .register(CUSTOM_WORKFLOW_JOB_KIND, (jobId, context) => customWorkflowExecutor.run(jobId, context))
   .register('provider-video', runProviderVideoJob)
   .register('final-cut', runFinalCutJob)
   .register('video-chain', runVideoChainJob)
@@ -3029,6 +3130,15 @@ const server = createServer(async (request, response) => {
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'enabled') || typeof body.enabled !== 'boolean') {
         return sendError(response, 400, 'CUSTOM_WORKFLOW_ENABLE_REQUEST_INVALID', '自定义工作流启用字段无效')
       }
+      const customWorkflowId = decodeURIComponent(customWorkflowEnableMatch[1])
+      if (!body.enabled && activeCustomWorkflowJobs(customWorkflowId).length) {
+        return sendError(
+          response,
+          409,
+          'CUSTOM_WORKFLOW_IN_USE',
+          '该自定义工作流仍有排队或运行中的任务，请先取消或等待完成',
+        )
+      }
       try {
         let objectInfo
         if (body.enabled) {
@@ -3036,7 +3146,7 @@ const server = createServer(async (request, response) => {
           objectInfo = context.objectInfo
         }
         const customWorkflow = await workflowCenter.setCustomEnabled(
-          decodeURIComponent(customWorkflowEnableMatch[1]),
+          customWorkflowId,
           body.enabled,
           objectInfo,
         )
@@ -3047,8 +3157,17 @@ const server = createServer(async (request, response) => {
     }
     const customWorkflowMatch = /^\/api\/workflow-center\/custom\/([^/]+)$/u.exec(pathname)
     if (request.method === 'DELETE' && customWorkflowMatch) {
+      const customWorkflowId = decodeURIComponent(customWorkflowMatch[1])
+      if (activeCustomWorkflowJobs(customWorkflowId).length) {
+        return sendError(
+          response,
+          409,
+          'CUSTOM_WORKFLOW_IN_USE',
+          '该自定义工作流仍有排队或运行中的任务，请先取消或等待完成',
+        )
+      }
       return sendJson(response, 200, {
-        result: await workflowCenter.removeCustom(decodeURIComponent(customWorkflowMatch[1])),
+        result: await workflowCenter.removeCustom(customWorkflowId),
       })
     }
     if (request.method === 'GET' && pathname === '/api/workspace/catalog') {
@@ -3470,6 +3589,16 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, result.reused ? 200 : 202, result)
     }
+    if (request.method === 'POST' && pathname === '/api/jobs/custom-workflow') {
+      const body = await readJsonBody(request, 64 * 1024)
+      const result = await createCustomWorkflowJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 50),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
     if (request.method === 'POST' && pathname === '/api/jobs/image') {
       const body = await readJsonBody(request)
       const result = await createImageJob(body, undefined, {
@@ -3553,6 +3682,8 @@ const server = createServer(async (request, response) => {
         ? source.request?.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
           ? await createSemanticImageJob({}, source, options)
           : await createImageJob({}, source, options)
+        : source.kind === CUSTOM_WORKFLOW_JOB_KIND
+          ? await createCustomWorkflowJob({}, source, options)
         : source.kind === 'provider-video'
           ? await createProviderVideoJob({}, source, options)
           : source.kind === 'final-cut'

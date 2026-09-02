@@ -1,4 +1,5 @@
 import { ensureLocalSession } from './videoApi'
+import type { CustomWorkflowJobRequest, ProcessingJob } from '../types'
 
 export type WorkflowArtifactStatus = {
   id: string
@@ -117,6 +118,7 @@ export type CustomWorkflowSummary = {
   nodeTypes: string[]
   models: string[]
   mappings: CustomWorkflowMappings
+  mappingHash: string
   enabled: boolean
   source: 'user-api-json'
   createdAt: number
@@ -249,4 +251,30 @@ export async function removeCustomWorkflow(customId: string) {
     { method: 'DELETE' },
   )
   return response.result
+}
+
+export async function createCustomWorkflowJob(
+  request: CustomWorkflowJobRequest,
+  options: { idempotencyKey?: string; priority?: number } = {},
+) {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'idempotency-key': options.idempotencyKey ?? `custom-workflow-${crypto.randomUUID()}`,
+  }
+  if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
+  const payload = await api<{ job: ProcessingJob; reused?: boolean }>(
+    '/api/jobs/custom-workflow',
+    { method: 'POST', headers, body: JSON.stringify(request) },
+  )
+  return payload.job
+}
+
+export async function fetchCustomWorkflowJob(jobId: string) {
+  const payload = await api<{ job: ProcessingJob }>(`/api/jobs/${encodeURIComponent(jobId)}`)
+  return payload.job
+}
+
+export async function cancelCustomWorkflowJob(jobId: string) {
+  const payload = await api<{ job: ProcessingJob }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' })
+  return payload.job
 }

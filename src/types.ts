@@ -320,10 +320,25 @@ export type VideoChainJobRequest = {
   fps: 24 | 25 | 30
 }
 
+export type CustomWorkflowJobRequest = {
+  customWorkflowId: string
+  projectId: string
+  title: string
+  prompt: string
+  negativePrompt?: string
+  sourceLibraryItemId?: string
+  lastFrameLibraryItemId?: string
+  seed?: number
+  width?: number
+  height?: number
+  frames?: number
+  steps?: number
+}
+
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video' | 'provider-video' | 'final-cut' | 'video-chain'
-  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'byok-video' | 'final-cut' | 'video-chain'
+  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'final-cut' | 'video-chain'
+  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'final-cut' | 'video-chain'
   label: string
   status: ProcessingJobStatus
   phase?: VideoJobPhase
@@ -391,9 +406,21 @@ export type ProcessingJob = {
         negativePoints: number
         threshold: number
       }
+    | {
+        version: string
+        customWorkflowId: string
+        customWorkflowTitle: string
+        workflowHash: string
+        mappingHash: string
+        outputNodeId: string
+        outputNodeType?: string
+        parameterRoles: string[]
+        nodeCount: number
+      }
   request?:
     | (Omit<VideoJobRequest, 'sourceImageDataUrl' | 'lastFrameImageDataUrl'> & { hasLastFrame?: boolean })
     | StoredImageJobRequest
+    | CustomWorkflowJobRequest
     | FinalCutJobRequest
     | VideoChainJobRequest
   sourceElementId?: string
