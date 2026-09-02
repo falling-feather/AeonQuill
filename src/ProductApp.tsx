@@ -2137,6 +2137,7 @@ export default function ProductApp() {
       {workflowCenterDialog}
       <RuntimeSettingsDialog
         open={settingsOpen}
+        projects={projectCatalog.projects.map(({ id, title }) => ({ id, title }))}
         diagnostics={runtimeProbe.diagnostics}
         loading={refreshingRuntime}
         saving={settingsSaving}

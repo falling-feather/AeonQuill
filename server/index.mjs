@@ -88,6 +88,7 @@ import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
+import { StorageLifecycleService, STORAGE_LIFECYCLE_VERSION } from './storage-lifecycle.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -98,6 +99,7 @@ const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
 const assetDirectory = join(dataDirectory, 'assets')
 const localRuntimeConfig = await loadLocalRuntimeConfig()
+const managedComfyLaunch = buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs })
 const buildIdentity = await resolveBuildIdentity({ projectRoot, runtimeConfig: localRuntimeConfig })
 const port = Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || localRuntimeConfig.bridgePort || 8787)
 const host = process.env.AEONQUILL_HOST || process.env.MIAOHUI_HOST || '127.0.0.1'
@@ -146,6 +148,26 @@ const assetPreviewService = new AssetPreviewService({
   rootDirectory: join(cacheDirectory, 'previews'),
   ffmpegPath,
 })
+const storageLifecycle = new StorageLifecycleService({
+  rootDirectory: join(dataDirectory, 'storage-lifecycle'),
+  runtimeDirectory,
+  dataDirectory,
+  cacheDirectory,
+  inputDirectory,
+  assetDirectory,
+  outputDirectory: localRuntimeConfig.outputDirectory,
+  outputDirectorySource: localRuntimeConfig.outputDirectorySource,
+  comfyDirectories: {
+    input: managedComfyLaunch.directories.input,
+    output: managedComfyLaunch.directories.output,
+    temp: managedComfyLaunch.directories.temp,
+  },
+  projectStore,
+  workspaceStore,
+  jobStore: store,
+  getRuntimeRegistry: () => workflowCenter.runtimeRegistry(),
+  onProjectAssetsRemoved: (assetIds) => assetPreviewService.removeVariants(assetIds),
+})
 let hardwareHint = null
 let hardwareHintPromise = null
 
@@ -175,6 +197,7 @@ await Promise.all([
   workflowCenter.open(),
   runtimeRegistryMigration.open(),
   assetPreviewService.open(),
+  storageLifecycle.open(),
 ])
 
 try {
@@ -944,6 +967,81 @@ function newImageJob(request, inputPath, options = {}) {
     inputPath,
     maskPath: options.maskPath,
     logs: [{ at: now, level: 'info', message: '图片任务已创建' }],
+  }
+}
+
+function newStorageCleanupJob(request, options = {}) {
+  const id = `storage-cleanup-${randomUUID()}`
+  const now = Date.now()
+  const scheduling = createScheduling({
+    resourceClass: 'cpu',
+    priority: options.priority ?? 90,
+    timeoutMs: 30 * 60 * 1_000,
+    idempotencyKey: options.idempotencyKey,
+    attempt: 1,
+    maxAttempts: 1,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: 'storage-cleanup',
+    tool: 'storage-lifecycle',
+    label: '安全空间清理',
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: `等待清理 ${request.candidateIds.length} 个已确认候选`,
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: STORAGE_LIFECYCLE_VERSION,
+    requestHash: options.requestHash,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, 'cpu', Math.max(1_000, request.candidateIds.length * 25), now)],
+    request,
+    logs: [{ at: now, level: 'info', message: `已锁定扫描快照与 ${request.candidateIds.length} 个清理候选` }],
+  }
+}
+
+async function runStorageCleanupJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  try {
+    await store.update(jobId, {
+      phase: 'validating',
+      progress: 2,
+      detail: '正在重新核对引用、运行任务与文件身份',
+    })
+    const result = await storageLifecycle.cleanup(job.request, {
+      signal,
+      onProgress: ({ completed, total, reclaimedBytes }) => store.update(jobId, {
+        phase: 'cleaning',
+        progress: Math.max(3, Math.min(96, Math.round(3 + (completed / total) * 93))),
+        detail: `已安全处理 ${completed}/${total} 项 · 回收 ${reclaimedBytes} 字节`,
+      }),
+    })
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: result.failures.length
+        ? `安全清理完成，${result.failures.length} 项失败并保留`
+        : `安全清理完成，实际回收 ${result.reclaimedBytes} 字节`,
+      storageCleanup: result,
+      completedAt: Date.now(),
+    })
+    await store.log(jobId, result.failures.length ? 'warning' : 'success', `清理复扫一致性：${result.verification.consistent ? '通过' : '需要再次检查'}`)
+  } catch (error) {
+    const latest = store.get(jobId)
+    if (error?.name === 'AbortError' || signal.aborted || latest?.cancelRequested) {
+      await store.update(jobId, {
+        status: 'cancelled',
+        phase: 'cancelled',
+        detail: '空间清理已取消；已完成的逐文件操作不会回滚',
+      })
+      await store.log(jobId, 'warning', '用户已取消空间清理；请重新扫描确认当前状态')
+      return
+    }
+    throw error
   }
 }
 
@@ -2283,6 +2381,23 @@ function existingIdempotentJob(kind, idempotencyKey, requestHashValue) {
   return existing
 }
 
+async function createStorageCleanupJob(body, options = {}) {
+  const request = storageLifecycle.validateCleanupRequest(body)
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = hashRequest('storage-cleanup', request)
+  const existing = existingIdempotentJob('storage-cleanup', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  const job = newStorageCleanupJob(request, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
 async function createVideoJob(body, retrySource, options = {}) {
   const request = retrySource ? { ...retrySource.request, preset: 'fast' } : validateVideoRequest(body)
   const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
@@ -2656,7 +2771,7 @@ const customWorkflowExecutor = new CustomWorkflowExecutor({
   comfy,
   runtimeManager,
   inspectRuntime,
-  managedComfyInputRoot: buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs }).directories.input,
+  managedComfyInputRoot: managedComfyLaunch.directories.input,
   deliverOutput: deliverConfiguredOutput,
   scheduleRuntimeIdleStop,
 })
@@ -2716,6 +2831,7 @@ scheduler
   .register('provider-video', runProviderVideoJob)
   .register('final-cut', runFinalCutJob)
   .register('video-chain', runVideoChainJob)
+  .register('storage-cleanup', runStorageCleanupJob)
 await prepareRecoveredJobs()
 await scheduler.recover()
 
@@ -2962,6 +3078,10 @@ const server = createServer(async (request, response) => {
           localRuntimeConfig.outputDirectory = patch.outputDirectory
           localRuntimeConfig.outputDirectorySource = 'custom'
         }
+        storageLifecycle.configureOutputDirectory(
+          localRuntimeConfig.outputDirectory,
+          localRuntimeConfig.outputDirectorySource,
+        )
       }
       runtimeCache = null
       const diagnostics = await inspectRuntimeDiagnostics(true, config)
@@ -3005,6 +3125,33 @@ const server = createServer(async (request, response) => {
       await scheduleRuntimeIdleStop()
       runtimeCache = null
       return sendJson(response, 200, await inspectRuntime(true))
+    }
+    if (request.method === 'GET' && pathname === '/api/storage/policy') {
+      return sendJson(response, 200, { policy: storageLifecycle.getPolicy() })
+    }
+    if (request.method === 'PUT' && pathname === '/api/storage/policy') {
+      const body = await readJsonBody(request, 32 * 1024)
+      return sendJson(response, 200, { policy: await storageLifecycle.updatePolicy(body) })
+    }
+    if (request.method === 'GET' && pathname === '/api/storage/scan') {
+      const projectId = url.searchParams.get('projectId') || undefined
+      if (projectId && !workspaceStore.getCatalog().catalog.projects.some(({ id }) => id === projectId)) {
+        return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', 'Storage project filter was not found')
+      }
+      return sendJson(response, 200, await storageLifecycle.scan({
+        projectId,
+        includeRuntimeRoots: url.searchParams.get('runtime') !== '0',
+      }))
+    }
+    if (request.method === 'POST' && pathname === '/api/storage/cleanup') {
+      const body = await readJsonBody(request, 512 * 1024)
+      const result = await createStorageCleanupJob(body, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], 90),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
     }
     if (request.method === 'GET' && pathname === '/api/workflow-center/catalog') {
       const context = await inspectWorkflowCenterContext({ force: url.searchParams.get('refresh') === '1' })
@@ -3553,7 +3700,10 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, { project })
     }
     if (request.method === 'POST' && pathname === '/api/projects/gc') {
-      const removed = await projectStore.collectGarbage()
+      const removed = await projectStore.collectGarbage({
+        protectedAssetIds: workspaceStore.storageReferences().projectAssetIds,
+        isExternallyProtected: (assetId) => workspaceStore.storageReferences().projectAssetIds.includes(assetId),
+      })
       await assetPreviewService.removeVariants(removed)
       return sendJson(response, 200, { removed })
     }
@@ -3666,6 +3816,9 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && retryMatch) {
       const source = store.get(decodeURIComponent(retryMatch[1]))
       if (!source) return sendError(response, 404, 'JOB_NOT_FOUND', 'Task was not found')
+      if (source.kind === 'storage-cleanup') {
+        return sendError(response, 409, 'STORAGE_RESCAN_REQUIRED', '空间状态可能已变化，请重新扫描后发起新的清理')
+      }
       if (!['failed', 'cancelled'].includes(source.status)) {
         return sendError(response, 409, 'JOB_NOT_RETRYABLE', 'Only failed or cancelled tasks can be retried')
       }

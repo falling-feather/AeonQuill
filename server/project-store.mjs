@@ -413,6 +413,27 @@ export class ProjectStore {
     return row ? { ...row, provenance: JSON.parse(row.provenanceJson) } : null
   }
 
+  storageInventory() {
+    this.assertOpen()
+    return this.database.prepare(`
+      SELECT a.id, a.mime_type AS mimeType, a.extension, a.bytes,
+             a.relative_path AS relativePath, a.created_at AS createdAt,
+             (SELECT COUNT(*) FROM project_assets pa WHERE pa.asset_id = a.id) AS projectReferences,
+             (SELECT COUNT(*) FROM asset_versions av WHERE av.asset_id = a.id) AS versionReferences,
+             (SELECT COUNT(*) FROM library_versions lv WHERE lv.asset_id = a.id) AS libraryReferences
+      FROM assets a
+      ORDER BY a.created_at ASC, a.id ASC
+    `).all().map((row) => ({
+      ...row,
+      bytes: Number(row.bytes),
+      createdAt: Number(row.createdAt),
+      projectReferences: Number(row.projectReferences),
+      versionReferences: Number(row.versionReferences),
+      libraryReferences: Number(row.libraryReferences),
+      referenceCount: Number(row.projectReferences) + Number(row.versionReferences) + Number(row.libraryReferences),
+    }))
+  }
+
   libraryTags(itemId) {
     return this.database.prepare('SELECT tag FROM library_tags WHERE item_id = ? ORDER BY tag ASC')
       .all(itemId).map(({ tag }) => tag)
@@ -1115,8 +1136,13 @@ export class ProjectStore {
     return Number(result.changes) > 0
   }
 
-  async collectGarbage() {
+  async collectGarbage(options = {}) {
     this.assertOpen()
+    const candidateAssetIds = options.candidateAssetIds === undefined
+      ? null
+      : new Set(options.candidateAssetIds)
+    const protectedAssetIds = new Set(options.protectedAssetIds || [])
+    for (const assetId of [...(candidateAssetIds || []), ...protectedAssetIds]) assertAssetId(assetId)
     const trashDirectory = join(this.rootDirectory, 'trash')
     await mkdir(trashDirectory, { recursive: true })
     const orphans = this.database.prepare(`
@@ -1125,9 +1151,13 @@ export class ProjectStore {
       WHERE NOT EXISTS (SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id)
         AND NOT EXISTS (SELECT 1 FROM asset_versions av WHERE av.asset_id = a.id)
         AND NOT EXISTS (SELECT 1 FROM library_versions lv WHERE lv.asset_id = a.id)
-    `).all()
+    `).all().filter((asset) => (
+      (!candidateAssetIds || candidateAssetIds.has(asset.id))
+      && !protectedAssetIds.has(asset.id)
+    ))
     const removed = []
     for (const asset of orphans) {
+      if (await options.isExternallyProtected?.(asset.id)) continue
       const filePath = this.assetPath(asset)
       const trashPath = pathWithin(trashDirectory, join(trashDirectory, `${asset.id}-${randomUUID()}.trash`))
       let moved = false
@@ -1138,6 +1168,8 @@ export class ProjectStore {
         if (error.code !== 'ENOENT') throw error
       }
       try {
+        const externallyProtected = protectedAssetIds.has(asset.id)
+          || Boolean(await options.isExternallyProtected?.(asset.id))
         this.database.exec('BEGIN IMMEDIATE')
         const stillReferenced = this.database.prepare(`
           SELECT 1 AS found
@@ -1145,7 +1177,7 @@ export class ProjectStore {
              OR EXISTS (SELECT 1 FROM asset_versions WHERE asset_id = ?)
              OR EXISTS (SELECT 1 FROM library_versions WHERE asset_id = ?)
         `).get(asset.id, asset.id, asset.id)
-        if (stillReferenced) {
+        if (stillReferenced || externallyProtected) {
           this.database.exec('ROLLBACK')
           if (moved) await rename(trashPath, filePath)
           continue

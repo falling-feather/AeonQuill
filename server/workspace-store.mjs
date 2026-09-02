@@ -28,6 +28,21 @@ const MAX_MODE_DOCUMENT_BYTES = Object.freeze({
 })
 const AUTO_RECOVERY_INTERVAL_MS = 30_000
 const RECOVERY_LIMIT_PER_DOCUMENT = 20
+const PROJECT_ASSET_REFERENCE = /\/api\/project-assets\/([a-f0-9]{64})(?=["'?#\\/]|$)/gu
+const JOB_ASSET_REFERENCE = /\/api\/assets\/([A-Za-z0-9._%-]{1,240})(?=["'?#\\/]|$)/gu
+
+function collectStorageReferences(source, projectAssetIds, jobAssetFilenames) {
+  if (typeof source !== 'string' || !source) return
+  for (const match of source.matchAll(PROJECT_ASSET_REFERENCE)) projectAssetIds.add(match[1])
+  for (const match of source.matchAll(JOB_ASSET_REFERENCE)) {
+    try {
+      const filename = decodeURIComponent(match[1])
+      if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,239}$/u.test(filename)) jobAssetFilenames.add(filename)
+    } catch {
+      // Invalid encoded references are ignored; they cannot resolve to a managed asset.
+    }
+  }
+}
 
 export class WorkspaceStoreError extends Error {
   constructor(code, message, status = 400, details = undefined) {
@@ -510,6 +525,36 @@ export class WorkspaceStore {
       FROM recovery_points WHERE project_id = ?
       ORDER BY created_at DESC, id DESC
     `).all(projectId).map(rowToRecovery)
+  }
+
+  storageReferences() {
+    this.assertOpen()
+    const projectAssetIds = new Set()
+    const jobAssetFilenames = new Set()
+    const sources = {
+      catalog: 0,
+      currentDocuments: 0,
+      recoveryPoints: 0,
+    }
+    const catalog = this.database.prepare('SELECT value_json AS value FROM workspace_meta WHERE key = ?').get('project-catalog')
+    if (catalog?.value) {
+      collectStorageReferences(catalog.value, projectAssetIds, jobAssetFilenames)
+      sources.catalog = 1
+    }
+    for (const row of this.database.prepare('SELECT value_json AS value FROM mode_documents').all()) {
+      collectStorageReferences(row.value, projectAssetIds, jobAssetFilenames)
+      sources.currentDocuments += 1
+    }
+    for (const row of this.database.prepare('SELECT project_json AS projectJson, body_json AS bodyJson FROM recovery_points').all()) {
+      collectStorageReferences(row.projectJson, projectAssetIds, jobAssetFilenames)
+      collectStorageReferences(row.bodyJson, projectAssetIds, jobAssetFilenames)
+      sources.recoveryPoints += 1
+    }
+    return {
+      projectAssetIds: [...projectAssetIds].sort(),
+      jobAssetFilenames: [...jobAssetFilenames].sort(),
+      sources,
+    }
   }
 
   restoreRecoveryPoint(recoveryId, options = {}) {

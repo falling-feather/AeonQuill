@@ -211,6 +211,8 @@ export type VideoJobPhase =
   | 'encoding'
   | 'restoring'
   | 'saving'
+  | 'validating'
+  | 'cleaning'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -335,10 +337,123 @@ export type CustomWorkflowJobRequest = {
   steps?: number
 }
 
+export type StorageRetentionDays = {
+  terminalInputs: number
+  intermediateOutputs: number
+  previewCache: number
+  comfyResiduals: number
+  projectOrphans: number
+}
+
+export type StoragePolicy = {
+  schemaVersion: 1
+  revision: number
+  updatedAt: number
+  preserveDeliveries: true
+  retentionDays: StorageRetentionDays
+  projectOverrides: Record<string, Partial<StorageRetentionDays>>
+}
+
+export type StorageCandidate = {
+  id: string
+  category: string
+  kind: 'project-asset' | 'managed-file'
+  bytes: number
+  ageDays: number
+  projectId?: string
+  jobId?: string
+  label: string
+  reason: string
+}
+
+export type StorageCategory = {
+  id: string
+  label: string
+  cleanable: boolean
+  bytes: number
+  files: number
+  candidateBytes: number
+  candidateFiles: number
+  protectedFiles: number
+  missingFiles: number
+  scanErrors: number
+  truncated: boolean
+  roots: Array<{
+    id: string
+    label: string
+    category?: string
+    bytes: number
+    files: number
+    exists: boolean
+    shared?: boolean
+    referenceCount?: number
+    removalMode?: 'runtime-removal-check-only'
+    removalBlocked?: boolean
+    deletionMode?: 'manual-only'
+    skippedLinks?: number
+    excludedFiles?: number
+  }>
+}
+
+export type StorageScan = {
+  version: string
+  scanId: string
+  fingerprint: string
+  scannedAt: number
+  expiresAt: number
+  projectId?: string
+  policy: StoragePolicy
+  policyIssue?: { code: string; message: string } | null
+  capacity: {
+    totalBytes: number
+    freeBytes: number
+    reserveBytes: number
+    usableBytes: number
+    status: 'healthy' | 'warning' | 'critical'
+  }
+  estimates: Array<{ id: string; label: string; requiredBytes: number; available: boolean }>
+  totals: { bytes: number; files: number; candidateBytes: number; candidateFiles: number }
+  references: { projectAssets: number; jobAssets: number; recoveryPoints: number }
+  categories: StorageCategory[]
+  candidates: StorageCandidate[]
+  safety: {
+    modelsRequireRuntimeRemovalCheck: true
+    customOutputManualOnly: boolean
+    deliveriesPreserved: true
+    symlinksFollowed: false
+  }
+}
+
+export type StorageCleanupRequest = {
+  scanId: string
+  fingerprint: string
+  candidateIds: string[]
+  acknowledgedBytes: number
+}
+
+export type StorageCleanupResult = {
+  version: string
+  scanId: string
+  selectedFiles: number
+  acknowledgedBytes: number
+  reclaimedBytes: number
+  removed: string[]
+  skipped: Array<{ id: string; code: string }>
+  failures: Array<{ id: string; code: string; message: string }>
+  verification: {
+    scanId: string
+    scannedAt: number
+    candidateBytes: number
+    candidateFiles: number
+    selectedStillCandidates: string[]
+    consistent: boolean
+  }
+}
+
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'final-cut' | 'video-chain'
-  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'final-cut' | 'video-chain'
+  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'final-cut' | 'video-chain' | 'storage-cleanup'
+  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'final-cut' | 'video-chain' | 'storage-lifecycle'
   label: string
   status: ProcessingJobStatus
   phase?: VideoJobPhase
@@ -423,6 +538,7 @@ export type ProcessingJob = {
     | CustomWorkflowJobRequest
     | FinalCutJobRequest
     | VideoChainJobRequest
+    | StorageCleanupRequest
   sourceElementId?: string
   comfyPromptId?: string
   sampleStep?: number
@@ -481,6 +597,11 @@ export type ProcessingJob = {
     directoryLabel?: string
     message?: string
   }
+  storageLifecycle?: {
+    lastCleanupAt?: number
+    expiredFiles?: string[]
+  }
+  storageCleanup?: StorageCleanupResult
   output?:
     | {
         filename: string

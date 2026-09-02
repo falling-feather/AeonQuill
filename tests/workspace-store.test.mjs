@@ -183,3 +183,51 @@ test('purging an expired project removes only its registered mode bodies and rec
     assert.equal(store.getCatalog().catalog.projects.map(({ id }) => id).join(','), 'project-ad')
   })
 })
+
+test('storage references include rollback-only project assets and job outputs', async () => {
+  await withStore(async (store) => {
+    const assetId = 'a'.repeat(64)
+    const jobFilename = 'recovery-native.mp4'
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: '恢复点引用', initialModeId: 'balanced',
+    }, { now: 1_000, projectId: 'project-recovery-assets', documentId: 'document-balanced' })
+    store.saveCatalog(created.catalog, { baseRevision: 0, now: 2_000 })
+    const first = {
+      schemaVersion: 1,
+      id: 'document-balanced',
+      title: '引用版本',
+      revision: 1,
+      createdAt: 1_000,
+      updatedAt: 3_000,
+      camera: { x: 0, y: 0, zoom: 1 },
+      elements: [{
+        id: 'image-recovery', kind: 'image', name: 'Recovery asset', x: 0, y: 0, width: 1, height: 1,
+        rotation: 0, opacity: 1, radius: 0, fill: '#fff', stroke: '#000',
+        src: `/api/project-assets/${assetId}`,
+        sourceSrc: `/api/assets/${jobFilename}`,
+        locked: false, visible: true, zIndex: 1,
+      }],
+    }
+    store.saveModeDocument({
+      projectId: created.project.id,
+      documentId: created.document.id,
+      modeId: 'balanced',
+      baseRevision: null,
+      revision: 1,
+      value: JSON.stringify(first),
+    }, { now: 3_000 })
+    store.saveModeDocument({
+      projectId: created.project.id,
+      documentId: created.document.id,
+      modeId: 'balanced',
+      baseRevision: 1,
+      revision: 2,
+      value: JSON.stringify({ ...first, revision: 2, updatedAt: 4_000, elements: [] }),
+    }, { now: 4_000, forceRecovery: true })
+
+    const references = store.storageReferences()
+    assert.deepEqual(references.projectAssetIds, [assetId])
+    assert.deepEqual(references.jobAssetFilenames, [jobFilename])
+    assert.equal(references.sources.recoveryPoints, 1)
+  })
+})

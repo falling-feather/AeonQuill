@@ -908,7 +908,7 @@
 }
 
 .aq-runtime-settings {
-  width: min(960px, 100%);
+  width: min(1120px, 100%);
   max-height: min(860px, calc(100dvh - 48px));
   display: flex;
   flex-direction: column;
@@ -1057,7 +1057,8 @@
   grid-template-columns: minmax(270px, 0.75fr) minmax(420px, 1.25fr);
   grid-template-areas:
     "overview issues"
-    "overview form";
+    "overview form"
+    "storage storage";
   gap: 18px;
   padding: 22px 28px 26px;
   overflow-y: auto;
@@ -1148,6 +1149,417 @@
 
 .aq-runtime-settings__form {
   grid-area: form;
+}
+
+.aq-storage-lifecycle {
+  grid-area: storage;
+  min-width: 0;
+  padding: 19px;
+  border: 1px solid var(--aq-dialog-line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff 0%, #fcfcfb 100%);
+}
+
+.aq-storage-lifecycle button,
+.aq-storage-lifecycle select,
+.aq-storage-lifecycle input {
+  font: inherit;
+}
+
+.aq-storage-lifecycle button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid #cfd2d8;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aq-storage-lifecycle button:hover:not(:disabled) {
+  background: #f5f6f7;
+}
+
+.aq-storage-lifecycle__toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 15px;
+}
+
+.aq-storage-lifecycle__toolbar > label {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.aq-storage-lifecycle__toolbar > label > span {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.aq-storage-lifecycle__toolbar select {
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid #cfd2d8;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 11px;
+}
+
+.aq-storage-lifecycle__toolbar > div,
+.aq-storage-lifecycle__policy footer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aq-storage-lifecycle__feedback {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 9px 10px;
+  color: #226b56;
+  border-radius: 7px;
+  background: #effaf6;
+  font-size: 10px;
+}
+
+.aq-storage-lifecycle__feedback.is-error {
+  color: #a63d35;
+  background: #fff3f1;
+}
+
+.aq-storage-lifecycle__capacity {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.aq-storage-lifecycle__capacity article {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 11px 12px;
+  border: 1px solid #e1e5ea;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.aq-storage-lifecycle__capacity article.is-warning,
+.aq-storage-lifecycle__capacity article.is-critical {
+  border-color: #f0cf9d;
+  background: #fff8ed;
+}
+
+.aq-storage-lifecycle__capacity article.is-critical {
+  color: #a63d35;
+  border-color: #efc4bf;
+  background: #fff3f1;
+}
+
+.aq-storage-lifecycle__capacity small,
+.aq-storage-lifecycle__capacity span {
+  color: var(--aq-dialog-muted);
+  font-size: 9px;
+}
+
+.aq-storage-lifecycle__capacity strong {
+  margin: 4px 0 2px;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-storage-lifecycle__categories {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.aq-storage-lifecycle__categories article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 10px 11px;
+  border: 1px solid #e6e8eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aq-storage-lifecycle__categories article > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aq-storage-lifecycle__categories strong,
+.aq-storage-lifecycle__categories em {
+  font-size: 10px;
+}
+
+.aq-storage-lifecycle__categories em {
+  font-style: normal;
+  font-weight: 750;
+}
+
+.aq-storage-lifecycle__categories small,
+.aq-storage-lifecycle__categories i {
+  color: var(--aq-dialog-muted);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.aq-storage-lifecycle__categories article > small,
+.aq-storage-lifecycle__categories i {
+  grid-column: 1 / -1;
+}
+
+.aq-storage-lifecycle__categories i {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #286fc5;
+}
+
+.aq-storage-lifecycle__policy,
+.aq-storage-lifecycle__candidates {
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid #e1e3e7;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.aq-storage-lifecycle__policy > div:first-child,
+.aq-storage-lifecycle__candidates > header > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.aq-storage-lifecycle__policy > div:first-child strong,
+.aq-storage-lifecycle__candidates > header strong {
+  font-size: 11px;
+}
+
+.aq-storage-lifecycle__policy > div:first-child span,
+.aq-storage-lifecycle__candidates > header span {
+  margin-top: 2px;
+  color: var(--aq-dialog-muted);
+  font-size: 9px;
+}
+
+.aq-storage-lifecycle__policy-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.aq-storage-lifecycle__policy-grid label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  gap: 3px 6px;
+  align-items: center;
+}
+
+.aq-storage-lifecycle__policy-grid label > span {
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.aq-storage-lifecycle__policy-grid input {
+  width: 58px;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 1px solid #cfd2d8;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.aq-storage-lifecycle__policy-grid small {
+  grid-column: 1 / -1;
+  color: var(--aq-dialog-muted);
+  font-size: 8px;
+}
+
+.aq-storage-lifecycle__policy footer,
+.aq-storage-lifecycle__candidates > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid #eceef0;
+}
+
+.aq-storage-lifecycle__policy footer > span,
+.aq-storage-lifecycle__candidates > footer > span {
+  color: var(--aq-dialog-muted);
+  font-size: 9px;
+}
+
+.aq-storage-lifecycle__policy footer button:last-child {
+  color: #fff;
+  border-color: #286fc5;
+  background: #286fc5;
+}
+
+.aq-storage-lifecycle__candidates > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aq-storage-lifecycle__candidate-list {
+  max-height: 230px;
+  margin-top: 10px;
+  overflow-y: auto;
+  border: 1px solid #eceef0;
+  border-radius: 7px;
+}
+
+.aq-storage-lifecycle__candidate-list > label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-bottom: 1px solid #eceef0;
+  cursor: pointer;
+}
+
+.aq-storage-lifecycle__candidate-list > label:last-of-type {
+  border-bottom: 0;
+}
+
+.aq-storage-lifecycle__candidate-list > label > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aq-storage-lifecycle__candidate-list strong {
+  font-size: 9px;
+}
+
+.aq-storage-lifecycle__candidate-list small,
+.aq-storage-lifecycle__candidate-list > p {
+  color: var(--aq-dialog-muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.aq-storage-lifecycle__candidate-list em {
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.aq-storage-lifecycle__candidate-list > p {
+  margin: 0;
+  padding: 8px 9px;
+  background: #f8fafc;
+}
+
+.aq-storage-lifecycle__candidates > footer button.is-danger {
+  color: #fff;
+  border-color: #b0443b;
+  background: #b0443b;
+}
+
+.aq-storage-lifecycle__job {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  color: #286fc5;
+  border-radius: 8px;
+  background: #f1f7ff;
+}
+
+.aq-storage-lifecycle__job.is-completed {
+  color: #17805f;
+  background: #effaf6;
+}
+
+.aq-storage-lifecycle__job.is-failed {
+  color: #a63d35;
+  background: #fff3f1;
+}
+
+.aq-storage-lifecycle__job > div {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 5px;
+}
+
+.aq-storage-lifecycle__job strong {
+  color: var(--aq-dialog-ink);
+  font-size: 10px;
+}
+
+.aq-storage-lifecycle__job small {
+  margin-top: 2px;
+  font-size: 8px;
+}
+
+.aq-storage-lifecycle__job i {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.aq-storage-lifecycle__empty {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--aq-dialog-muted);
+  border-radius: 8px;
+  background: #f7f7f6;
+  font-size: 10px;
+}
+
+.aq-storage-lifecycle__empty.is-ready {
+  min-height: 54px;
+  color: #17805f;
+  background: #effaf6;
+}
+
+.aq-storage-lifecycle__safety {
+  margin: 10px 0 0;
+  color: var(--aq-dialog-muted);
+  font-size: 8px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .aq-runtime-settings__section-title {
@@ -1604,7 +2016,8 @@
     grid-template-areas:
       "overview"
       "issues"
-      "form";
+      "form"
+      "storage";
     align-content: start;
   }
 
@@ -1615,6 +2028,15 @@
 
   .aq-runtime-settings__overview article:nth-child(odd) {
     border-right: 1px solid var(--aq-dialog-line);
+  }
+
+  .aq-storage-lifecycle__capacity,
+  .aq-storage-lifecycle__categories {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aq-storage-lifecycle__policy-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1881,7 +2303,8 @@
   }
 
   .aq-runtime-settings__issues,
-  .aq-runtime-settings__form {
+  .aq-runtime-settings__form,
+  .aq-storage-lifecycle {
     padding: 15px 13px;
   }
 
@@ -1918,6 +2341,38 @@
   .aq-runtime-settings__fields label,
   .aq-runtime-settings__fields label:nth-child(-n + 3) {
     grid-column: 1;
+  }
+
+  .aq-storage-lifecycle__toolbar,
+  .aq-storage-lifecycle__policy footer,
+  .aq-storage-lifecycle__candidates > header,
+  .aq-storage-lifecycle__candidates > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aq-storage-lifecycle__toolbar > label {
+    min-width: 0;
+  }
+
+  .aq-storage-lifecycle__toolbar > div,
+  .aq-storage-lifecycle__policy footer > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aq-storage-lifecycle__toolbar button,
+  .aq-storage-lifecycle__policy footer button,
+  .aq-storage-lifecycle__candidates > header button,
+  .aq-storage-lifecycle__candidates > footer button {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .aq-storage-lifecycle__capacity,
+  .aq-storage-lifecycle__categories,
+  .aq-storage-lifecycle__policy-grid {
+    grid-template-columns: 1fr;
   }
 }
 

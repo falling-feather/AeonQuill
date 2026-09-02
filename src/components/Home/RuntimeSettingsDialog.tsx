@@ -23,6 +23,7 @@ import type {
   RuntimeDiagnostics,
 } from '../../types'
 import { pickNativeOutputDirectory, supportsNativeDirectoryPicker } from '../../lib/desktopDialog'
+import { StorageLifecyclePanel } from './StorageLifecyclePanel'
 
 interface RuntimeSettingsDialogProps {
   open: boolean
@@ -31,6 +32,7 @@ interface RuntimeSettingsDialogProps {
   saving: boolean
   error?: string
   message?: string
+  projects: Array<{ id: string; title: string }>
   onClose: () => void
   onRefresh: () => void
   onConfigure: (request: RuntimeConfigurationRequest) => void
@@ -52,6 +54,7 @@ export function RuntimeSettingsDialog({
   saving,
   error,
   message,
+  projects,
   onClose,
   onRefresh,
   onConfigure,
@@ -474,6 +477,8 @@ export function RuntimeSettingsDialog({
               </button>
             </footer>
           </form>
+
+          <StorageLifecyclePanel open={open} disabled={disabled} projects={projects} />
         </div>
 
         <div className="aq-runtime-settings__disclaimer">

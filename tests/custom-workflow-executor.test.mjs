@@ -156,6 +156,8 @@ test('custom workflow executor observes cancellation and always runs the idle-st
   const job = executionJob('custom-run-cancel', target.imported.id)
   await target.store.add(job)
   let idleStops = 0
+  let signalTrackerReady
+  const trackerReady = new Promise((resolve) => { signalTrackerReady = resolve })
   const comfy = {
     async objectInfo() { return objectInfo },
     async openExecutionTracker() {
@@ -163,6 +165,7 @@ test('custom workflow executor observes cancellation and always runs the idle-st
         waitForPrompt(_promptId, signal) {
           return new Promise((resolve, reject) => {
             signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true })
+            signalTrackerReady()
           })
         },
         close() {},
@@ -182,7 +185,7 @@ test('custom workflow executor observes cancellation and always runs the idle-st
   })
   const controller = new AbortController()
   const running = executor.run(job.id, { signal: controller.signal })
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  await trackerReady
   controller.abort()
   await running
   assert.equal(target.store.get(job.id).status, 'cancelled')

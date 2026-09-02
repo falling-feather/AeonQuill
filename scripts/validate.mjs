@@ -82,6 +82,8 @@ try {
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])
     await run('controlled custom ComfyUI execution', process.execPath, ['scripts/validate-custom-workflow-api.mjs'])
+    await run('safe storage lifecycle API', process.execPath, ['scripts/validate-storage-lifecycle-api.mjs'])
+    await run('safe storage lifecycle browser vertical', process.execPath, ['scripts/validate-storage-lifecycle-ui.mjs'])
     await run('controlled custom workflow browser vertical', process.execPath, ['scripts/validate-custom-workflow-ui.mjs'])
     await run('isolated browser smoke', process.execPath, ['scripts/validate-browser.mjs'], {
       env: { MIAOHUI_QA_SKIP_BUILD: '1' },

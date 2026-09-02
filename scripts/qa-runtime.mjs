@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const qaTemporaryRoot = resolve(process.env.AEONQUILL_QA_TEMP_ROOT || join(projectRoot, '.runtime', 'qa-temp'))
 
 function cookieFromResponse(response) {
   return String(response.headers.get('set-cookie') || '').split(';', 1)[0]
@@ -53,7 +53,7 @@ async function terminateProcessTree(child) {
 }
 
 function assertSafeTemporaryDirectory(directory, prefix) {
-  const tempRoot = `${resolve(tmpdir())}${process.platform === 'win32' ? '\\' : '/'}`.toLowerCase()
+  const tempRoot = `${qaTemporaryRoot}${process.platform === 'win32' ? '\\' : '/'}`.toLowerCase()
   const target = resolve(directory).toLowerCase()
   if (!target.startsWith(tempRoot) || !basename(directory).startsWith(prefix)) {
     throw new Error(`Refusing to clean unexpected QA directory: ${directory}`)
@@ -62,7 +62,8 @@ function assertSafeTemporaryDirectory(directory, prefix) {
 
 export async function startIsolatedBridge(label = 'qa', options = {}) {
   const prefix = `miaohui-${label}-`
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), prefix))
+  await mkdir(qaTemporaryRoot, { recursive: true })
+  const runtimeDirectory = await mkdtemp(join(qaTemporaryRoot, prefix))
   const port = await availablePort()
   const unavailableComfyPort = await availablePort()
   const baseUrl = `http://127.0.0.1:${port}`

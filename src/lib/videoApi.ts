@@ -6,6 +6,9 @@ import type {
   RuntimeDiagnostics,
   RuntimeRegistryMigrationPreview,
   RuntimeStatus,
+  StorageCleanupRequest,
+  StoragePolicy,
+  StorageScan,
   VideoChainJobRequest,
   VideoJobRequest,
 } from '../types'
@@ -99,6 +102,39 @@ export async function fetchRuntimeDiagnostics(refresh = false) {
   return api<RuntimeDiagnostics>(`/api/runtime/diagnostics${refresh ? '?refresh=1' : ''}`)
 }
 
+export async function fetchStorageScan(projectId?: string, includeRuntimeRoots = true) {
+  const parameters = new URLSearchParams()
+  if (projectId) parameters.set('projectId', projectId)
+  if (!includeRuntimeRoots) parameters.set('runtime', '0')
+  const query = parameters.size ? `?${parameters.toString()}` : ''
+  return api<StorageScan>(`/api/storage/scan${query}`)
+}
+
+export async function updateStoragePolicy(request: {
+  baseRevision: number
+  retentionDays?: StoragePolicy['retentionDays']
+  projectOverrides?: StoragePolicy['projectOverrides']
+}) {
+  const payload = await api<{ policy: StoragePolicy }>('/api/storage/policy', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  return payload.policy
+}
+
+export async function createStorageCleanupJob(request: StorageCleanupRequest) {
+  const payload = await api<{ job: ProcessingJob }>('/api/storage/cleanup', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'idempotency-key': `storage-cleanup-${crypto.randomUUID()}`,
+    },
+    body: JSON.stringify(request),
+  })
+  return payload.job
+}
+
 export async function applyRuntimeRegistryMigration(planId: string, beforeHash: string) {
   return api<{ preview: RuntimeRegistryMigrationPreview }>('/api/runtime/registry-migration/apply', {
     method: 'POST',
@@ -164,6 +200,11 @@ export async function createVideoJob(request: VideoJobRequest, options: CreateVi
     headers,
     body: JSON.stringify(request),
   })
+  return payload.job
+}
+
+export async function fetchVideoJob(jobId: string) {
+  const payload = await api<{ job: ProcessingJob }>(`/api/jobs/${encodeURIComponent(jobId)}`)
   return payload.job
 }
 
