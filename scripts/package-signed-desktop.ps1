@@ -211,8 +211,50 @@ function Remove-TemporaryCertificate {
   }
 }
 
+function Get-IsolatedAuthenticodeStatusCode {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $cleanModulePath = @(
+    (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules'),
+    (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+    (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')
+  ) -join ';'
+  $bootstrap = @'
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$module = Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+Import-Module -Name $module -Force
+$signature = Get-AuthenticodeSignature -LiteralPath $env:AEONQUILL_AUTHENTICODE_PATH
+[Console]::Out.WriteLine([int]$signature.Status)
+'@
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+  $previousModulePath = $env:PSModulePath
+  $previousArtifactPath = $env:AEONQUILL_AUTHENTICODE_PATH
+  try {
+    $env:PSModulePath = $cleanModulePath
+    $env:AEONQUILL_AUTHENTICODE_PATH = $Path
+    $output = @(& $windowsPowerShell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $encoded)
+    if ($LASTEXITCODE -ne 0) {
+      throw "隔离 Authenticode 检查进程失败：$Path；退出码 $LASTEXITCODE"
+    }
+    $statusText = [string]($output | Where-Object { [string]$_ -match '^\d+$' } | Select-Object -Last 1)
+    if ([string]::IsNullOrWhiteSpace($statusText)) {
+      throw "隔离 Authenticode 检查未返回状态码：$Path；$($output -join ' ')"
+    }
+    return [int]$statusText
+  } finally {
+    $env:PSModulePath = $previousModulePath
+    if ([string]::IsNullOrWhiteSpace($previousArtifactPath)) {
+      Remove-Item Env:\AEONQUILL_AUTHENTICODE_PATH -ErrorAction SilentlyContinue
+    } else {
+      $env:AEONQUILL_AUTHENTICODE_PATH = $previousArtifactPath
+    }
+  }
+}
+
 function Assert-SelfSignedArtifact {
-  param([string]$Path, [string]$ExpectedSigner)
+  param([string]$Path, [string]$ExpectedSigner, [string]$ExpectedThumbprint)
   try {
     $rawCertificate = [Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($Path)
     $signerCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($rawCertificate)
@@ -223,11 +265,79 @@ function Assert-SelfSignedArtifact {
   if (-not $subject.Contains($ExpectedSigner)) {
     throw "签名主体不符合预期：$Path；实际为 $subject"
   }
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedThumbprint) -and
+      $signerCertificate.Thumbprint -ne $ExpectedThumbprint) {
+    throw "签名证书不符合本次封包证书：$Path"
+  }
+  $codeSigningEku = @(
+    $signerCertificate.Extensions |
+      Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
+      ForEach-Object { $_.Format($false) }
+  ) -join ';'
+  if ($codeSigningEku -notmatch '1\.3\.6\.1\.5\.5\.7\.3\.3') {
+    throw "签名证书缺少 Code Signing EKU：$Path"
+  }
+
+  # Get-AuthenticodeSignature validates the PE digest before evaluating trust.
+  # A local self-signed certificate is intentionally not placed in a trusted
+  # root store, so status 1 is accepted only when its chain has exactly the
+  # expected UntrustedRoot condition. HashMismatch (3), NotSigned (2), and
+  # every other status fail closed.
+  $statusCode = Get-IsolatedAuthenticodeStatusCode -Path $Path
+  $statusLabel = 'Valid'
+  if ($statusCode -eq 1) {
+    $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+    try {
+      $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+      [void]$chain.Build($signerCertificate)
+      $chainStatuses = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() })
+      if ($chainStatuses.Count -ne 1 -or $chainStatuses[0] -ne 'UntrustedRoot') {
+        throw "自签名链存在非预期错误：$Path；$($chainStatuses -join ',')"
+      }
+    } finally {
+      $chain.Dispose()
+    }
+    $statusLabel = 'UntrustedRootOnly'
+  } elseif ($statusCode -ne 0) {
+    throw "Authenticode 摘要或签名状态无效：$Path；状态码 $statusCode"
+  }
   [pscustomobject]@{
     Path = $Path
-    Status = 'EmbeddedSignature'
+    Status = $statusLabel
     Subject = $subject
     Thumbprint = [string]$signerCertificate.Thumbprint
+  }
+}
+
+function Set-NsisBundleType {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $unknownToken = '__TAURI_BUNDLE_TYPE_VAR_UNK'
+  $nsisToken = '__TAURI_BUNDLE_TYPE_VAR_NSS'
+  if ($unknownToken.Length -ne $nsisToken.Length) {
+    throw 'Tauri bundle type tokens must have identical lengths.'
+  }
+  $bytes = [IO.File]::ReadAllBytes($Path)
+  $latin1 = [Text.Encoding]::GetEncoding(28591)
+  $source = $latin1.GetString($bytes)
+  $unknownIndex = $source.IndexOf($unknownToken, [StringComparison]::Ordinal)
+  $nsisIndex = $source.IndexOf($nsisToken, [StringComparison]::Ordinal)
+  if ($unknownIndex -lt 0) {
+    if ($nsisIndex -ge 0 -and $source.IndexOf($nsisToken, $nsisIndex + 1, [StringComparison]::Ordinal) -lt 0) {
+      return
+    }
+    throw "主程序缺少唯一的 Tauri bundle type 占位符：$Path"
+  }
+  if ($source.IndexOf($unknownToken, $unknownIndex + 1, [StringComparison]::Ordinal) -ge 0 -or $nsisIndex -ge 0) {
+    throw "主程序包含歧义的 Tauri bundle type 标记：$Path"
+  }
+  $replacement = [Text.Encoding]::ASCII.GetBytes($nsisToken)
+  [Array]::Copy($replacement, 0, $bytes, $unknownIndex, $replacement.Length)
+  [IO.File]::WriteAllBytes($Path, $bytes)
+  $verified = $latin1.GetString([IO.File]::ReadAllBytes($Path))
+  if ($verified.IndexOf($unknownToken, [StringComparison]::Ordinal) -ge 0 -or
+      $verified.IndexOf($nsisToken, [StringComparison]::Ordinal) -lt 0) {
+    throw "主程序 NSIS bundle type 预补丁复核失败：$Path"
   }
 }
 
@@ -242,7 +352,7 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.29'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.30'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
 
@@ -290,13 +400,19 @@ try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\tauri-toolchain.ps1') release
   if ($LASTEXITCODE -ne 0) { throw "Tauri release 构建失败：$LASTEXITCODE" }
 
+  # Tauri patches this token after entering `bundle`, which invalidates an
+  # already-signed PE before NSIS copies it and then restores the source file.
+  # Patch the unsigned release first so the bundle step is idempotent and the
+  # exact signed bytes enter the installer.
+  Set-NsisBundleType -Path $builtApplication
+
   foreach ($artifact in @(
     @{ Path = $builtApplication; Label = '主程序' },
     @{ Path = $bundledSidecar; Label = '分包 sidecar' }
   )) {
     & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $artifact.Path
     if ($LASTEXITCODE -ne 0) { throw "$($artifact.Label)签名失败：$LASTEXITCODE" }
-    Assert-SelfSignedArtifact -Path $artifact.Path -ExpectedSigner $SignerName | Out-Null
+    Assert-SelfSignedArtifact -Path $artifact.Path -ExpectedSigner $SignerName -ExpectedThumbprint $certificateThumbprint | Out-Null
   }
 
   Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
@@ -310,9 +426,9 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "安装器签名失败：$LASTEXITCODE" }
 
   $reports = @(
-    Assert-SelfSignedArtifact -Path $builtApplication -ExpectedSigner $SignerName
-    Assert-SelfSignedArtifact -Path $bundledSidecar -ExpectedSigner $SignerName
-    Assert-SelfSignedArtifact -Path $installer -ExpectedSigner $SignerName
+    Assert-SelfSignedArtifact -Path $builtApplication -ExpectedSigner $SignerName -ExpectedThumbprint $certificateThumbprint
+    Assert-SelfSignedArtifact -Path $bundledSidecar -ExpectedSigner $SignerName -ExpectedThumbprint $certificateThumbprint
+    Assert-SelfSignedArtifact -Path $installer -ExpectedSigner $SignerName -ExpectedThumbprint $certificateThumbprint
   )
   $reports | Format-Table Path, Status, Subject -AutoSize
 
