@@ -74,6 +74,7 @@ observePage(page, issues)
 try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: '导入完整项目包', exact: true }).waitFor({ state: 'visible' })
   assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
 
   await createProject(page, { title: '独立均衡项目', mode: 'balanced' })
@@ -114,6 +115,7 @@ try {
   assert.equal(await balancedProjectRow.locator('.aq-project-counts').innerText(), '1 / 1 / 0')
 
   await page.getByRole('button', { name: '打开独立均衡项目项目操作', exact: true }).click()
+  await page.getByRole('button', { name: '导出完整项目包', exact: true }).waitFor({ state: 'visible' })
   await page.getByRole('button', { name: '打开像素模式', exact: true }).waitFor({ state: 'visible' })
   await page.getByRole('button', { name: '打开独立均衡项目项目操作', exact: true }).click()
 
@@ -210,6 +212,41 @@ try {
   await legacyPage.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
   assert.deepEqual(legacyIssues, [])
 
+  const packageApi = await page.evaluate(async (projectId) => {
+    const previewResponse = await fetch(`/api/workspace/projects/${encodeURIComponent(projectId)}/package/preview`)
+    const preview = await previewResponse.json()
+    const packageResponse = await fetch(`/api/workspace/projects/${encodeURIComponent(projectId)}/package`)
+    const bundle = await packageResponse.arrayBuffer()
+    const importPreviewResponse = await fetch('/api/workspace/packages/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bundle,
+    })
+    const importPreview = await importPreviewResponse.json()
+    const importResponse = await fetch('/api/workspace/packages/import?conflictPolicy=copy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bundle,
+    })
+    const imported = await importResponse.json()
+    return {
+      previewStatus: previewResponse.status,
+      packageStatus: packageResponse.status,
+      previewImportStatus: importPreviewResponse.status,
+      importStatus: importResponse.status,
+      preview: preview.preview,
+      importPreview: importPreview.preview,
+      result: imported.result,
+    }
+  }, catalog.projects[0].id)
+  assert.equal(packageApi.previewStatus, 200)
+  assert.equal(packageApi.packageStatus, 200)
+  assert.equal(packageApi.previewImportStatus, 200)
+  assert.equal(packageApi.importStatus, 201)
+  assert.equal(packageApi.preview.format, 'aeonquill-project')
+  assert.equal(packageApi.importPreview.conflicts.some(({ kind }) => kind === 'project'), true)
+  assert.notEqual(packageApi.result.project.id, catalog.projects[0].id)
+
   assert.deepEqual(issues, [])
   console.log(JSON.stringify({
     ok: true,
@@ -217,6 +254,7 @@ try {
     projects: catalog.projects.length,
     documents: 4,
     migratedLegacyProjects: migratedLegacyProjects.length,
+    packageRoundTrip: true,
     desktop: 'project-center-v073-desktop.png',
     mobile: 'project-center-v073-mobile.png',
   }, null, 2))

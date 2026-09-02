@@ -100,6 +100,51 @@ export type WorkspaceRecoveryPoint = {
   createdAt: number
 }
 
+export type ProjectPackagePreview = {
+  format: 'aeonquill-project' | 'legacy-miaohui-canvas'
+  packageSchemaVersion: number | null
+  complete: boolean
+  project: {
+    id: string
+    title: string
+    initialModeId: WorkspaceModeDocument['modeId']
+    status: string
+  }
+  documents: {
+    total: number
+    byMode: Record<WorkspaceModeDocument['modeId'], number>
+    bodiesByMode: Record<WorkspaceModeDocument['modeId'], number>
+    missingBodies: string[]
+    missingBalancedMetadata: string[]
+  }
+  recoveryPoints: number
+  library: {
+    collections: number
+    projectItems: number
+    globalReferences: number
+    versions: number
+  }
+  assets: { count: number; bytes: number }
+  rawBytes: number | null
+  archiveBytes: number | null
+  warnings: string[]
+  conflicts?: Array<{ kind: 'project' | 'document'; id: string }>
+}
+
+export type ProjectPackageImportResult = {
+  legacy: boolean
+  preview: ProjectPackagePreview
+  catalog: ProjectCatalog
+  project: ProjectCatalog['projects'][number]
+  documents: WorkspaceModeDocument[]
+  idMap: {
+    projectId: Record<string, string>
+    documentIds: Record<string, string>
+    libraryItemIds: Record<string, string>
+    collectionIds: Record<string, string>
+  }
+}
+
 export type SmartVideoDocument = {
   schemaVersion: typeof SMART_VIDEO_DOCUMENT_SCHEMA_VERSION
   project: StoryProject
@@ -231,6 +276,73 @@ export async function restoreWorkspaceRecoveryPoint(recoveryPointId: string) {
     workspaceDocumentRevisions.set(payload.restored.document.documentId, payload.restored.document.revision)
   }
   return payload
+}
+
+export async function previewWorkspaceProjectPackage(projectId: string) {
+  const payload = await api<{ preview: ProjectPackagePreview }>(
+    `/api/workspace/projects/${encodeURIComponent(projectId)}/package/preview`,
+  )
+  return payload.preview
+}
+
+export async function downloadWorkspaceProjectPackage(projectId: string) {
+  await ensureLocalSession()
+  const response = await fetch(
+    `/api/workspace/projects/${encodeURIComponent(projectId)}/package`,
+    { credentials: 'same-origin' },
+  )
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new ProjectApiError(payload?.error?.message || `完整项目包导出返回 HTTP ${response.status}`, {
+      code: payload?.error?.code,
+      status: response.status,
+      details: payload?.error?.details,
+    })
+  }
+  return response.blob()
+}
+
+export async function previewWorkspaceProjectPackageFile(file: Blob) {
+  await ensureLocalSession()
+  const response = await fetch('/api/workspace/packages/preview', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: file,
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ProjectApiError(payload?.error?.message || `项目包预检返回 HTTP ${response.status}`, {
+      code: payload?.error?.code,
+      status: response.status,
+      details: payload?.error?.details,
+    })
+  }
+  return (payload as { preview: ProjectPackagePreview }).preview
+}
+
+export async function importWorkspaceProjectPackage(
+  file: Blob,
+  options: { conflictPolicy?: 'reject' | 'copy'; projectId?: string } = {},
+) {
+  await ensureLocalSession()
+  const query = new URLSearchParams({ conflictPolicy: options.conflictPolicy ?? 'reject' })
+  if (options.projectId) query.set('projectId', options.projectId)
+  const response = await fetch(`/api/workspace/packages/import?${query.toString()}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: file,
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ProjectApiError(payload?.error?.message || `项目包导入返回 HTTP ${response.status}`, {
+      code: payload?.error?.code,
+      status: response.status,
+      details: payload?.error?.details,
+    })
+  }
+  return (payload as { result: ProjectPackageImportResult }).result
 }
 
 export async function saveLocalProject(document: CanvasDocument) {

@@ -1,9 +1,10 @@
-import { Feather, FilePlus2, Library, Settings, Workflow } from 'lucide-react'
+import { Feather, FilePlus2, Library, Settings, Upload, Workflow } from 'lucide-react'
 
 interface HomeHeaderProps {
   onOpenSettings?: () => void
   onOpenLibrary?: () => void
   onOpenWorkflowCenter?: () => void
+  onImportProject?: () => void
   onCreateProject?: () => void
   createProjectDisabled?: boolean
 }
@@ -12,6 +13,7 @@ export function HomeHeader({
   onOpenSettings,
   onOpenLibrary,
   onOpenWorkflowCenter,
+  onImportProject,
   onCreateProject,
   createProjectDisabled = false,
 }: HomeHeaderProps) {
@@ -25,6 +27,15 @@ export function HomeHeader({
         <span className="aq-home-header__en">AEONQUILL</span>
       </div>
       <div className="aq-home-header__actions">
+        <button
+          type="button"
+          className="aq-header-action"
+          onClick={onImportProject}
+          aria-label="导入完整项目包"
+        >
+          <Upload size={17} strokeWidth={1.8} aria-hidden="true" />
+          <span>导入项目</span>
+        </button>
         <button
           type="button"
           className="aq-header-action"

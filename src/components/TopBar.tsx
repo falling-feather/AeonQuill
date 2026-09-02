@@ -92,7 +92,7 @@ export function TopBar({
                   onExport()
                 }}
               >
-                <Download size={15} /> 下载完整项目包
+                <Download size={15} /> 下载均衡画布兼容包
               </button>
               <button
                 type="button"
@@ -102,7 +102,7 @@ export function TopBar({
                   onImport()
                 }}
               >
-                <Upload size={15} /> 导入项目包
+                <Upload size={15} /> 导入均衡画布兼容包
               </button>
               <button
                 type="button"
@@ -150,7 +150,7 @@ export function TopBar({
         </button>
         <button type="button" className="button button-primary" onClick={onExport}>
           <Download size={17} strokeWidth={1.8} />
-          导出
+          导出画布
         </button>
       </div>
     </header>

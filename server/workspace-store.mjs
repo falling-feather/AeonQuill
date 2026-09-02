@@ -148,6 +148,12 @@ function normalizeModeDocument(modeId, value, documentId) {
   return JSON.stringify(document)
 }
 
+export function validateWorkspaceModeDocument(modeId, value, documentId) {
+  assertModeId(modeId)
+  assertId(documentId, 'documentId')
+  return normalizeModeDocument(modeId, value, documentId)
+}
+
 function projectDocument(catalog, projectId, documentId) {
   const project = catalog.projects.find((candidate) => candidate.id === projectId)
   if (!project) fail('WORKSPACE_PROJECT_NOT_FOUND', `Workspace project was not found: ${projectId}`, 404)

@@ -5,6 +5,7 @@ import {
   Check,
   Clapperboard,
   Clock3,
+  Download,
   Folder,
   FolderOpen,
   Grid3X3,
@@ -68,6 +69,8 @@ export interface AeonQuillShellProps {
   onOpenProject?: (projectId: string, modeId: ProductModeId) => void
   onProjectStatusChange?: (projectId: string, status: ProjectStatus) => void
   onOpenProjectRecovery?: (projectId: string) => void
+  onExportProject?: (projectId: string) => void
+  onImportProject?: () => void
   onRetryProjects?: () => void
   onOpenLibrary?: () => void
   onOpenWorkflowCenter?: () => void
@@ -90,6 +93,8 @@ export function AeonQuillShell({
   onOpenProject,
   onProjectStatusChange,
   onOpenProjectRecovery,
+  onExportProject,
+  onImportProject,
   onRetryProjects,
   onOpenLibrary,
   onOpenWorkflowCenter,
@@ -146,6 +151,7 @@ export function AeonQuillShell({
         onOpenSettings={onOpenSettings}
         onOpenLibrary={onOpenLibrary}
         onOpenWorkflowCenter={onOpenWorkflowCenter}
+        onImportProject={onImportProject}
         onCreateProject={openCreateDialog}
         createProjectDisabled={!projectCatalogReady}
       />
@@ -276,6 +282,7 @@ export function AeonQuillShell({
                               </div>
                             ) : null}
                             {status === 'active' ? <button type="button" onClick={() => { onProjectStatusChange?.(project.id, 'archived'); setActionProjectId(null) }}><Archive size={14} /> 归档</button> : null}
+                            {status !== 'trashed' ? <button type="button" onClick={() => { onExportProject?.(project.id); setActionProjectId(null) }}><Download size={14} /> 导出完整项目包</button> : null}
                             <button type="button" onClick={() => { onOpenProjectRecovery?.(project.id); setActionProjectId(null) }}><History size={14} /> 恢复点</button>
                             {status !== 'trashed' ? <button type="button" onClick={() => { onProjectStatusChange?.(project.id, 'trashed'); setActionProjectId(null) }}><Trash2 size={14} /> 移入回收站</button> : null}
                             {status === 'trashed' ? <span><Check size={14} /> 15 天后自动清理</span> : null}

@@ -655,9 +655,9 @@ function App({
       anchor.download = `${documentRef.current.id}.miaohui`
       anchor.click()
       URL.revokeObjectURL(url)
-      showToast('完整项目包已导出')
+      showToast('均衡画布兼容包已导出；完整三模式项目请从项目中心导出')
     } catch (reason) {
-      showToast(reason instanceof Error ? reason.message : '项目包导出失败')
+      showToast(reason instanceof Error ? reason.message : '均衡画布兼容包导出失败')
     }
   }, [showToast])
 
@@ -674,9 +674,9 @@ function App({
       replaceDocument(restored)
       setSelectedIds([])
       setActiveTool('select')
-      showToast('项目包已校验并导入')
+      showToast('均衡画布兼容包已校验并导入')
     } catch (reason) {
-      showToast(reason instanceof Error ? reason.message : '项目包导入失败')
+      showToast(reason instanceof Error ? reason.message : '均衡画布兼容包导入失败')
     }
   }, [replaceDocument, showToast, storageKey, syncHistoryCounts])
 

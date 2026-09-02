@@ -29,6 +29,8 @@ import {
   ProjectApiError,
   createWorkspaceRecoveryPoint,
   deserializeSmartVideoDocument,
+  downloadWorkspaceProjectPackage,
+  importWorkspaceProjectPackage,
   listWorkspaceRecoveryPoints,
   loadLocalProject,
   loadWorkspaceCatalog,
@@ -36,6 +38,8 @@ import {
   saveWorkspaceCatalog,
   saveWorkspaceModeDocument,
   serializeSmartVideoDocument,
+  previewWorkspaceProjectPackage,
+  previewWorkspaceProjectPackageFile,
   restoreWorkspaceRecoveryPoint,
   type StoredProject,
   type WorkspaceRecoveryPoint,
@@ -140,6 +144,31 @@ const PRODUCT_MODE_LABELS: Record<ProductModeId, string> = {
   balanced: '均衡模式',
   pixel: '像素模式',
   'smart-video': '智能视频',
+}
+
+function formatPackageBytes(bytes: number | null) {
+  if (bytes === null) return '待导出时计算'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GiB`
+}
+
+function packagePreviewText(preview: Awaited<ReturnType<typeof previewWorkspaceProjectPackage>>, action: '导出' | '导入') {
+  const bodies = preview.documents.bodiesByMode
+  const registered = preview.documents.byMode
+  const lines = [
+    `${action}项目“${preview.project.title}”`,
+    '',
+    `正文：均衡 ${bodies.balanced}/${registered.balanced} · 像素 ${bodies.pixel}/${registered.pixel} · 智能视频 ${bodies['smart-video']}/${registered['smart-video']}`,
+    `恢复点：${preview.recoveryPoints} · 项目资源：${preview.library.projectItems + preview.library.globalReferences} · 不可变资产：${preview.assets.count}`,
+    `资产体积：${formatPackageBytes(preview.assets.bytes)} · 包体：${formatPackageBytes(preview.archiveBytes)}`,
+  ]
+  if (!preview.complete) lines.push('', '注意：该文件不是三模式完整包。')
+  if (preview.conflicts?.length) lines.push('', `检测到 ${preview.conflicts.length} 个 ID 冲突，将创建独立副本。`)
+  if (preview.warnings.length) lines.push('', ...preview.warnings.map((warning) => `• ${warning}`))
+  lines.push('', `确认${action}？`)
+  return lines.join('\n')
 }
 
 type RecoveryDialogState = {
@@ -608,6 +637,8 @@ export default function ProductApp() {
   const catalogBridgeSavePromiseRef = useRef<Promise<void> | null>(null)
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
+  const packageInputRef = useRef<HTMLInputElement>(null)
+  const packageBusyRef = useRef(false)
   const [workspaceDocumentResolvedKey, setWorkspaceDocumentResolvedKey] = useState<string | null>(null)
   const currentRouteKey = routeKey(route)
   const activeWorkspaceProject = useMemo<WorkspaceProject | null>(() => {
@@ -830,6 +861,66 @@ export default function ProductApp() {
       setProjectCatalogError(error instanceof Error ? error.message : '项目状态更新失败')
     }
   }, [commitProjectCatalog])
+
+  const handleExportProjectPackage = useCallback(async (projectId: string) => {
+    if (packageBusyRef.current) return
+    packageBusyRef.current = true
+    try {
+      await flushProjectCatalogBridgeSave()
+      const preview = await previewWorkspaceProjectPackage(projectId)
+      if (!window.confirm(packagePreviewText(preview, '导出'))) return
+      const blob = await downloadWorkspaceProjectPackage(projectId)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${projectId}.aeonquill`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      window.alert(`完整项目包已导出：${formatPackageBytes(blob.size)}。`)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '完整项目包导出失败')
+    } finally {
+      packageBusyRef.current = false
+    }
+  }, [flushProjectCatalogBridgeSave])
+
+  const handleImportProjectPackage = useCallback(async (file: File) => {
+    if (packageBusyRef.current) return
+    packageBusyRef.current = true
+    try {
+      await flushProjectCatalogBridgeSave()
+      const preview = await previewWorkspaceProjectPackageFile(file)
+      if (!window.confirm(packagePreviewText(preview, '导入'))) return
+      const result = await importWorkspaceProjectPackage(file, {
+        conflictPolicy: preview.conflicts?.length ? 'copy' : 'reject',
+      })
+      const serializedCatalog = serializeProjectCatalog(result.catalog)
+      if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
+      catalogBridgeSaveRef.current = undefined
+      catalogBridgeBaseRevisionRef.current = undefined
+      clientStateDirtyRef.current.delete('project-catalog')
+      projectCatalogRef.current = result.catalog
+      setProjectCatalog(result.catalog)
+      setProjectCatalogError(undefined)
+      try { localStorage.setItem(PROJECT_CATALOG_STORAGE_KEY, serializedCatalog) } catch { /* SQLite remains canonical */ }
+      void saveClientState('project-catalog', serializedCatalog).catch(() => undefined)
+      const initialDocument = projectModeDocument(result.project, result.project.initialModeId)
+      if (initialDocument?.modeId === 'balanced') updatePreferences({ balancedProjectId: initialDocument.id })
+      const nextRoute = { modeId: result.project.initialModeId, projectId: result.project.id } as const
+      navigate(nextRoute)
+      setEntryIntentKey(routeKey(nextRoute))
+      setModeNotice({
+        tone: result.legacy ? 'info' : 'success',
+        message: result.legacy
+          ? '旧 `.miaohui` 已作为单个均衡文档导入；它不包含其他模式与项目资源关系。'
+          : `完整项目“${result.project.title}”已原子恢复。`,
+      })
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '项目包导入失败')
+    } finally {
+      packageBusyRef.current = false
+    }
+  }, [flushProjectCatalogBridgeSave, navigate, updatePreferences])
 
   const refreshRecoveryDialog = useCallback(async (projectId: string) => {
     setRecoveryDialog((current) => current?.projectId === projectId
@@ -2031,6 +2122,8 @@ export default function ProductApp() {
         onOpenProject={handleOpenProject}
         onProjectStatusChange={handleProjectStatusChange}
         onOpenProjectRecovery={handleOpenProjectRecovery}
+        onExportProject={(projectId) => void handleExportProjectPackage(projectId)}
+        onImportProject={() => packageInputRef.current?.click()}
         onRetryProjects={retryLocalContexts}
         onOpenLibrary={openLibrary}
         onOpenWorkflowCenter={openWorkflowCenter}
@@ -2067,6 +2160,17 @@ export default function ProductApp() {
         }}
         onCreate={() => void handleCreateRecoveryPoint()}
         onRestore={(recoveryPoint) => void handleRestoreRecoveryPoint(recoveryPoint)}
+      />
+      <input
+        ref={packageInputRef}
+        className="aq-sr-only"
+        type="file"
+        accept=".aeonquill,.miaohui,application/vnd.aeonquill.project,application/vnd.miaohui.project"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void handleImportProjectPackage(file)
+          event.target.value = ''
+        }}
       />
     </>
   )

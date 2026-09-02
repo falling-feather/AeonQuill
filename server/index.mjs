@@ -16,6 +16,11 @@ import {
 } from './job-scheduler.mjs'
 import { JobStore } from './job-store.mjs'
 import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store.mjs'
+import {
+  AEONQUILL_PACKAGE_EXTENSION,
+  AEONQUILL_PACKAGE_MIME,
+  ProjectPackageService,
+} from './project-package.mjs'
 import { WorkspaceStore } from './workspace-store.mjs'
 import { buildManagedComfyLaunch, ComfyRuntimeManager, loadLocalRuntimeConfig } from './runtime-manager.mjs'
 import {
@@ -110,6 +115,7 @@ const store = new JobStore(join(dataDirectory, 'jobs.json'), {
 })
 const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
 const workspaceStore = new WorkspaceStore(join(dataDirectory, 'workspaces'))
+const projectPackageService = new ProjectPackageService({ projectStore, workspaceStore })
 const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'))
 const workflowCenter = new WorkflowCenterService({
   rootDirectory: join(dataDirectory, 'workflow-center'),
@@ -3066,6 +3072,37 @@ const server = createServer(async (request, response) => {
         baseRevision: body.baseRevision,
         source: body.source || 'client',
       }))
+    }
+    const workspacePackageMatch = /^\/api\/workspace\/projects\/([^/]+)\/package$/u.exec(pathname)
+    const workspacePackagePreviewMatch = /^\/api\/workspace\/projects\/([^/]+)\/package\/preview$/u.exec(pathname)
+    if (request.method === 'GET' && workspacePackagePreviewMatch) {
+      return sendJson(response, 200, {
+        preview: await projectPackageService.previewExport(decodeURIComponent(workspacePackagePreviewMatch[1])),
+      })
+    }
+    if (request.method === 'GET' && workspacePackageMatch) {
+      const projectId = decodeURIComponent(workspacePackageMatch[1])
+      const exported = await projectPackageService.exportBundle(projectId)
+      response.writeHead(200, {
+        'content-type': AEONQUILL_PACKAGE_MIME,
+        'content-length': exported.body.length,
+        'content-disposition': `attachment; filename="${projectId}${AEONQUILL_PACKAGE_EXTENSION}"`,
+        'cache-control': 'no-store',
+        'x-aeonquill-package-complete': String(exported.preview.complete),
+      })
+      response.end(exported.body)
+      return
+    }
+    if (request.method === 'POST' && pathname === '/api/workspace/packages/preview') {
+      const bundle = await readBinaryBody(request, MAX_PACKAGE_BYTES)
+      return sendJson(response, 200, { preview: await projectPackageService.previewImport(bundle) })
+    }
+    if (request.method === 'POST' && pathname === '/api/workspace/packages/import') {
+      const conflictPolicy = url.searchParams.get('conflictPolicy') || 'reject'
+      const projectId = url.searchParams.get('projectId') || undefined
+      const bundle = await readBinaryBody(request, MAX_PACKAGE_BYTES)
+      const result = await projectPackageService.importBundle(bundle, { conflictPolicy, projectId })
+      return sendJson(response, 201, { result })
     }
     const workspaceDocumentMatch = /^\/api\/workspace\/documents\/([^/]+)$/u.exec(pathname)
     if (request.method === 'GET' && workspaceDocumentMatch) {
