@@ -31,7 +31,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
   assert.equal(metadata.version, '0.7.1')
-  assert.equal(metadata.functionalTrack, 'V0.7.24')
+  assert.equal(metadata.functionalTrack, 'V0.7.25')
   assert.equal(metadata.buildIdentityVersion, 'aeonquill-build-identity-v1')
   assert.equal(metadata.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
@@ -49,7 +49,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(cargoSource, /^tauri-plugin-single-instance = "2"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
-  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.24"/)
+  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.25"/)
   assert.match(tauriSource, /option_env!\("AEONQUILL_BUILD_COMMIT"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
   assert.match(tauriSource, /close_window\.close\(\)/)
@@ -230,6 +230,22 @@ test('lightweight release fails closed unless the packaged sidecar and hidden Ta
     stageAt > singleInstanceAt,
     'Download staging must happen only after sidecar, lifecycle, and single-instance gates pass',
   )
+})
+
+test('signed desktop build reuses only a trusted Microsoft WebView2 offline installer', async () => {
+  const [source, toolchainSource] = await Promise.all([
+    readFile(join(projectRoot, 'scripts', 'package-signed-desktop.ps1'), 'utf8'),
+    readFile(join(projectRoot, 'scripts', 'tauri-toolchain.ps1'), 'utf8'),
+  ])
+  assert.match(source, /AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER/)
+  assert.match(source, /Get-AuthenticodeSignature/)
+  assert.match(source, /SignatureStatus\]::Valid/)
+  assert.match(source, /CN=Microsoft Corporation/)
+  assert.match(source, /Get-FileHash[^\n]+SHA256/)
+  assert.match(source, /previousWebView2OfflineInstaller/)
+  assert.match(toolchainSource, /AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER/)
+  assert.match(toolchainSource, /05CD576F648F80F3F1933B8733F40447C393CA00B677D52DC51165276789E478/)
+  assert.match(toolchainSource, /tauri-cli 2\.11\.4/)
 })
 
 test('new user-visible jobs and diagnostics use AEONQUILL while legacy protocols remain readable', async () => {

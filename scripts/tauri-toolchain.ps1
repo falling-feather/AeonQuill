@@ -21,12 +21,29 @@ $env:PATH = "$(Join-Path $env:CARGO_HOME 'bin');$env:PATH"
 $aeonquillCargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
 $aeonquillManifest = Join-Path $aeonquillProjectRoot 'desktop\tauri\src-tauri\Cargo.toml'
 $aeonquillTauriCli = Join-Path $aeonquillProjectRoot 'node_modules\@tauri-apps\cli\tauri.js'
+$aeonquillOfflineTauriCli = Join-Path $aeonquillProjectRoot '.runtime\toolchains\tauri-offline-patch\target\release\cargo-tauri.exe'
+$aeonquillOfflineTauriCliSha256 = '05CD576F648F80F3F1933B8733F40447C393CA00B677D52DC51165276789E478'
 
 if (-not (Test-Path -LiteralPath $aeonquillCargo -PathType Leaf)) {
   throw 'Project-local Rust toolchain is missing. Install it under .runtime/toolchains/rust first.'
 }
 if (-not (Test-Path -LiteralPath $aeonquillTauriCli -PathType Leaf)) {
   throw '@tauri-apps/cli is not installed.'
+}
+
+$aeonquillUseOfflineTauriCli = -not [string]::IsNullOrWhiteSpace($env:AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER)
+if ($aeonquillUseOfflineTauriCli) {
+  if (-not (Test-Path -LiteralPath $aeonquillOfflineTauriCli -PathType Leaf)) {
+    throw 'The verified offline Tauri CLI is required when AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER is set.'
+  }
+  $aeonquillOfflineHash = (Get-FileHash -LiteralPath $aeonquillOfflineTauriCli -Algorithm SHA256).Hash
+  if ($aeonquillOfflineHash -ne $aeonquillOfflineTauriCliSha256) {
+    throw "The offline Tauri CLI hash does not match the reviewed build: $aeonquillOfflineHash"
+  }
+  $aeonquillOfflineVersion = ((& $aeonquillOfflineTauriCli --version) -join '').Trim()
+  if ($LASTEXITCODE -ne 0 -or $aeonquillOfflineVersion -ne 'tauri-cli 2.11.4') {
+    throw "The offline Tauri CLI version is not the reviewed 2.11.4 build: $aeonquillOfflineVersion"
+  }
 }
 
 if ($Mode -eq 'check') {
@@ -50,7 +67,11 @@ try {
   } elseif ($Mode -eq 'bundle') {
     $aeonquillTauriArguments += @('--bundles', 'nsis')
   }
-  & (Get-Command node.exe).Source $aeonquillTauriCli @aeonquillTauriArguments
+  if ($aeonquillUseOfflineTauriCli) {
+    & $aeonquillOfflineTauriCli @aeonquillTauriArguments
+  } else {
+    & (Get-Command node.exe).Source $aeonquillTauriCli @aeonquillTauriArguments
+  }
   exit $LASTEXITCODE
 } finally {
   Pop-Location

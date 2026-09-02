@@ -27,6 +27,7 @@ $previousProductVersion = $env:AEONQUILL_PRODUCT_VERSION
 $previousFunctionalTrack = $env:AEONQUILL_FUNCTIONAL_TRACK
 $previousBuildIdentityVersion = $env:AEONQUILL_BUILD_IDENTITY_VERSION
 $previousRuntimeRegistryVersion = $env:AEONQUILL_RUNTIME_REGISTRY_VERSION
+$previousWebView2OfflineInstaller = $env:AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER
 
 function Find-SignTool {
   $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
@@ -37,6 +38,66 @@ function Find-SignTool {
     throw 'Windows SDK x64 signtool.exe was not found.'
   }
   return $matches[0].FullName
+}
+
+function Get-VerifiedWebView2OfflineInstaller {
+  param(
+    [string]$SearchRoot,
+    [string]$ExplicitCandidate
+  )
+
+  $candidatePaths = @()
+  if (-not [string]::IsNullOrWhiteSpace($ExplicitCandidate)) {
+    $candidatePaths = @($ExplicitCandidate)
+  } elseif (Test-Path -LiteralPath $SearchRoot -PathType Container) {
+    $candidatePaths = @(
+      Get-ChildItem -LiteralPath $SearchRoot -Recurse -File -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+    )
+  }
+
+  $verified = @()
+  foreach ($candidatePath in $candidatePaths) {
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+      if (-not [string]::IsNullOrWhiteSpace($ExplicitCandidate)) {
+        throw "指定的 WebView2 离线安装器不存在：$candidatePath"
+      }
+      continue
+    }
+
+    $item = Get-Item -LiteralPath $candidatePath
+    $signature = Get-AuthenticodeSignature -LiteralPath $candidatePath
+    $subject = if ($null -eq $signature.SignerCertificate) { '' } else { [string]$signature.SignerCertificate.Subject }
+    $isTrustedMicrosoft = (
+      $item.Length -gt 50MB -and
+      $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+      $subject -match '(^|,\s*)CN=Microsoft Corporation(,|$)'
+    )
+    if (-not $isTrustedMicrosoft) {
+      if (-not [string]::IsNullOrWhiteSpace($ExplicitCandidate)) {
+        throw "指定的 WebView2 离线安装器未通过微软 Authenticode 与体量校验：$candidatePath"
+      }
+      continue
+    }
+
+    try {
+      $fileVersion = [version]$item.VersionInfo.FileVersion
+    } catch {
+      $fileVersion = [version]'0.0.0.0'
+    }
+    $verified += [pscustomobject]@{
+      Path = $item.FullName
+      Version = $fileVersion
+      Bytes = $item.Length
+      LastWriteTime = $item.LastWriteTimeUtc
+      Sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+    }
+  }
+
+  if ($verified.Count -eq 0) {
+    return $null
+  }
+  return $verified | Sort-Object Version, LastWriteTime -Descending | Select-Object -First 1
 }
 
 function New-TemporaryCodeSigningCertificate {
@@ -160,9 +221,22 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.24'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.25'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
+
+  $webView2SearchRoot = Join-Path (Split-Path -Parent $targetRelease) '.tauri\x64'
+  $webView2Installer = Get-VerifiedWebView2OfflineInstaller `
+    -SearchRoot $webView2SearchRoot `
+    -ExplicitCandidate $previousWebView2OfflineInstaller
+  if ($null -ne $webView2Installer) {
+    $env:AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER = $webView2Installer.Path
+    Write-Host ("使用已验证的微软 WebView2 离线安装器：{0}；{1} bytes；SHA-256 {2}" -f `
+      $webView2Installer.Version, $webView2Installer.Bytes, $webView2Installer.Sha256)
+  } else {
+    Remove-Item Env:\AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER -ErrorAction SilentlyContinue
+    Write-Warning '未发现已验证的 D 盘 WebView2 离线安装器；Tauri 将使用官方网络发现流程。'
+  }
 
   New-Item -ItemType Directory -Force -Path $buildTempRoot | Out-Null
   $env:TEMP = $buildTempRoot
@@ -242,7 +316,8 @@ try {
     @{ Name = 'AEONQUILL_PRODUCT_VERSION'; Value = $previousProductVersion },
     @{ Name = 'AEONQUILL_FUNCTIONAL_TRACK'; Value = $previousFunctionalTrack },
     @{ Name = 'AEONQUILL_BUILD_IDENTITY_VERSION'; Value = $previousBuildIdentityVersion },
-    @{ Name = 'AEONQUILL_RUNTIME_REGISTRY_VERSION'; Value = $previousRuntimeRegistryVersion }
+    @{ Name = 'AEONQUILL_RUNTIME_REGISTRY_VERSION'; Value = $previousRuntimeRegistryVersion },
+    @{ Name = 'AEONQUILL_WEBVIEW2_OFFLINE_INSTALLER'; Value = $previousWebView2OfflineInstaller }
   )) {
     if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
       Remove-Item ("Env:\{0}" -f $entry.Name) -ErrorAction SilentlyContinue
