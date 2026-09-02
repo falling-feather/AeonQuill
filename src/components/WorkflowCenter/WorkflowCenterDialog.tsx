@@ -53,12 +53,12 @@ type WorkflowTab = 'builtin' | 'custom'
 type WorkflowCategory = 'all' | 'video' | 'image'
 
 const STATUS_LABELS: Record<WorkflowPack['status'], string> = {
-  ready: '可执行',
-  incompatible: '运行时不兼容',
-  'missing-dependency': '缺少依赖',
-  unverified: '等待校验',
-  'enabled-sleeping': '已启用 · 休眠',
+  uninstalled: '未安装',
   'installed-disabled': '已安装 · 未启用',
+  'enabled-sleeping': '已启用 · 休眠',
+  waking: '正在唤醒',
+  executable: '可执行',
+  error: '异常',
 }
 
 const CUSTOM_MAPPING_ROLES: Array<{ id: CustomWorkflowMappingRole; label: string; required?: boolean }> = [
@@ -89,7 +89,7 @@ function packIcon(pack: WorkflowPack) {
 
 function statusTone(pack: WorkflowPack) {
   if (pack.ready) return 'ready'
-  if (pack.status === 'incompatible') return 'danger'
+  if (pack.status === 'error') return 'danger'
   if (pack.status === 'enabled-sleeping' || pack.status === 'installed-disabled') return 'idle'
   return 'warning'
 }
@@ -215,6 +215,18 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
 
   const selectedPack = catalog?.packs.find(({ id }) => id === selectedPackId) ?? visiblePacks[0] ?? null
 
+  const selectedRegistryWarnings = useMemo(() => {
+    const selectedRootIds = new Set(
+      selectedPack?.artifacts.flatMap((artifact) => artifact.location ? [artifact.location.rootId] : []) ?? [],
+    )
+    const grouped = new Map<string, number>()
+    for (const warning of catalog?.registry.warnings ?? []) {
+      if (warning.rootId && !selectedRootIds.has(warning.rootId)) continue
+      grouped.set(warning.message, (grouped.get(warning.message) ?? 0) + 1)
+    }
+    return [...grouped].map(([message, count]) => count > 1 ? `${message}（${count} 个相关目录）` : message)
+  }, [catalog?.registry.warnings, selectedPack])
+
   const run = async (key: string, action: () => Promise<unknown>, success: string) => {
     setBusy(key)
     setError(null)
@@ -333,9 +345,9 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
 
         <div className="aq-workflow-center__summary" aria-label="本机工作流摘要">
           <article><Cpu size={17} /><span><strong>{catalog?.hardware.device ?? '显卡待检测'}</strong><small>{catalog?.hardware.vramGb ? `${catalog.hardware.vramGb.toFixed(1)}GB 显存` : '启动检测后给出推荐'}</small></span></article>
-          <article><HardDrive size={17} /><span><strong>{catalog?.storage.configured ? '运行时目录已配置' : '尚未配置运行时'}</strong><small>下载只写入受控 ComfyUI/models 相对目录</small></span></article>
+          <article><HardDrive size={17} /><span><strong>{catalog?.storage.configured ? '运行时目录已登记' : '尚未配置运行时'}</strong><small>{catalog?.storage.configured ? `${catalog.storage.modelRoots} 个模型根 · ${catalog.storage.sharedRoots} 个共享根` : '下载只写入受控 ComfyUI/models 相对目录'}</small></span></article>
           <article><Gauge size={17} /><span><strong>{catalog?.runtime.connected ? `ComfyUI ${catalog.runtime.comfyVersion ?? ''}` : 'ComfyUI 当前休眠'}</strong><small>{catalog?.runtime.pytorchVersion ?? '按需启动，不常驻显存'}</small></span></article>
-          <article><ShieldCheck size={17} /><span><strong>{catalog?.packs.filter(({ ready }) => ready).length ?? 0}/{catalog?.packs.length ?? 0} 个内置能力可执行</strong><small>损坏、未知或未映射的工作流不会启用</small></span></article>
+          <article><ShieldCheck size={17} /><span><strong>{catalog ? `${catalog.packs.filter(({ installed }) => installed).length}/${catalog.packs.length} 已安装 · ${catalog.packs.filter(({ ready }) => ready).length} 可执行` : '能力状态待检测'}</strong><small>休眠、未启用、唤醒、可执行与异常分别显示</small></span></article>
         </div>
 
         {(error || message) ? (
@@ -384,7 +396,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
                   <div className="aq-workflow-inspector__facts">
                     <span><b>{selectedPack.minVramGb}GB</b>最低显存</span>
                     <span><b>{selectedPack.minSystemRamGb}GB</b>最低内存</span>
-                    <span><b>{readableBytes(selectedPack.downloadBytes)}</b>完整下载</span>
+                    <span><b>{readableBytes(selectedPack.downloadBytes)}</b>仍需下载</span>
                     <span><b>{selectedPack.estimatedMinutes}</b>预估生成</span>
                   </div>
 
@@ -394,11 +406,17 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
                       {selectedPack.artifacts.map((artifact) => (
                         <article key={artifact.id}>
                           <span className={`is-${artifact.status}`}>{artifact.verified ? <Check size={14} /> : artifact.present ? <PauseCircle size={14} /> : <CircleSlash2 size={14} />}</span>
-                          <div><strong>{artifact.label}</strong><small>{artifact.automatic ? `${readableBytes(artifact.bytes)} · 自动下载` : artifact.instruction ?? '手工依赖'}</small></div>
+                          <div>
+                            <strong>{artifact.label}</strong>
+                            <small>{artifact.automatic ? `${readableBytes(artifact.bytes)} · ${artifact.present ? '已发现' : '待下载'}` : artifact.instruction ?? '手工依赖'}</small>
+                            {artifact.location ? <small title={artifact.location.rootLabel}>{artifact.location.shared ? '共享根' : '当前运行时'} · {artifact.location.rootLabel}</small> : null}
+                            {artifact.expectedSha256 ? <small title={artifact.expectedSha256}>SHA-256 {artifact.expectedSha256.slice(0, 12)}… · {artifact.verified ? '已校验' : artifact.present ? '启用时校验' : '登记值'}</small> : null}
+                          </div>
                           {externalLink(artifact.sourceUrl, '来源')}
                         </article>
                       ))}
                     </div>
+                    {selectedRegistryWarnings.map((warning) => <p key={warning} className="aq-workflow-inspector__warning">{warning}</p>)}
                     {selectedPack.missingNodes.length ? <p className="aq-workflow-inspector__warning">当前节点表还缺：{selectedPack.missingNodes.join('、')}</p> : null}
                     {selectedPack.runtimeIssues.map((issue) => <p key={issue} className="aq-workflow-inspector__warning">{issue}</p>)}
                   </section>
@@ -438,7 +456,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings }: W
                         disabled={Boolean(busy) || Boolean(selectedPack.activeJob && ['queued', 'running'].includes(selectedPack.activeJob.status)) || (selectedPack.license.acceptanceRequired && !selectedPack.acceptedLicense && !licenseAccepted) || (selectedPack.downloadBytes > 0 && !selectedPack.installed && !diskAccepted)}
                       >
                         {busy === `install:${selectedPack.id}` ? <LoaderCircle size={15} className="is-spinning" /> : <Download size={15} />}
-                        {selectedPack.installed ? '校验并启用' : selectedPack.artifacts.some(({ automatic }) => automatic) ? '下载并安装' : '登记并查看步骤'}
+                        {selectedPack.installed ? '校验并启用' : selectedPack.downloadBytes > 0 ? '下载并安装' : '登记并查看步骤'}
                       </button>
                     )}
                     <small>停用不会删除模型；删除与共享模型清理由后续存储管理器单独确认。</small>

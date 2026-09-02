@@ -16,8 +16,12 @@ import {
   resolve,
   sep,
 } from 'node:path'
+import {
+  discoverRuntimeRegistry,
+  registeredArtifactCandidates,
+} from './runtime-registry.mjs'
 
-export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v1'
+export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v2'
 export const WORKFLOW_CENTER_STATE_VERSION = 1
 export const MAX_CUSTOM_WORKFLOW_BYTES = 2 * 1024 * 1024
 export const MAX_CUSTOM_WORKFLOW_NODES = 240
@@ -402,6 +406,29 @@ function artifactDownloadBytes(pack) {
   return pack.artifacts.reduce((total, artifact) => total + (artifact.downloadUrl ? Number(artifact.bytes || 0) : 0), 0)
 }
 
+function pendingDownloadBytes(artifacts) {
+  return artifacts.reduce((total, artifact) => total + (!artifact.present && artifact.automatic ? Number(artifact.bytes || 0) : 0), 0)
+}
+
+function artifactVerificationKey(artifact, targetPath) {
+  const normalized = process.platform === 'win32'
+    ? resolve(targetPath).toLocaleLowerCase('en-US')
+    : resolve(targetPath)
+  const locationHash = createHash('sha256').update(normalized).digest('hex').slice(0, 24)
+  return `${artifact.id}:${locationHash}`
+}
+
+function registryCategories(packs) {
+  const categories = new Set(['custom_nodes'])
+  for (const pack of packs) {
+    for (const artifact of pack.artifacts) {
+      const segments = artifact.relativePath?.replace(/\\/gu, '/').split('/').filter(Boolean)
+      if (segments?.[0] === 'models' && segments[1]) categories.add(segments[1])
+    }
+  }
+  return [...categories]
+}
+
 function requiredLicenseIds(pack) {
   const ids = new Set()
   if (pack.license?.acceptanceRequired) ids.add(pack.license.id)
@@ -412,6 +439,7 @@ function requiredLicenseIds(pack) {
 }
 
 function publicArtifact(artifact, inspection) {
+  const { location, ...publicInspection } = inspection
   return {
     id: artifact.id,
     kind: artifact.kind,
@@ -420,9 +448,38 @@ function publicArtifact(artifact, inspection) {
     relativePath: artifact.relativePath || null,
     sourceUrl: artifact.sourceUrl,
     licenseId: artifact.licenseId,
+    expectedSha256: artifact.sha256 || null,
     automatic: Boolean(artifact.downloadUrl),
     instruction: artifact.instruction,
-    ...inspection,
+    ...publicInspection,
+    location: location
+      ? {
+          rootId: location.rootId,
+          rootLabel: location.rootLabel,
+          source: location.source,
+          category: location.category,
+          shared: location.shared,
+          portable: location.portable,
+          referenceCount: location.references.length,
+        }
+      : null,
+  }
+}
+
+function publicRegistry(registry) {
+  const publicRoot = ({ path: _path, references: _references, ...root }) => root
+  const publicWarning = ({ path: _path, configPath: _configPath, ...warning }) => warning
+  return {
+    version: registry.version,
+    registryHash: registry.registryHash,
+    configured: registry.configured,
+    runtimePackageId: registry.runtimePackageId,
+    python: registry.python ? { exists: registry.python.exists } : null,
+    configFiles: registry.configFiles.map(({ path: _path, ...config }) => config),
+    modelRoots: registry.modelRoots.map(publicRoot),
+    nodeRoots: registry.nodeRoots.map(publicRoot),
+    sharedRoots: registry.sharedRoots.map(publicRoot),
+    warnings: registry.warnings.map(publicWarning),
   }
 }
 
@@ -615,6 +672,7 @@ export class WorkflowCenterService {
   constructor({
     rootDirectory,
     getComfyRoot,
+    getRuntimeConfig,
     packs = PACKS,
     fetchImpl = globalThis.fetch,
   } = {}) {
@@ -624,6 +682,7 @@ export class WorkflowCenterService {
     this.downloadDirectory = join(this.rootDirectory, 'downloads')
     this.quarantineDirectory = join(this.rootDirectory, 'quarantine')
     this.getComfyRoot = getComfyRoot || (() => undefined)
+    this.getRuntimeConfig = getRuntimeConfig || (() => ({ comfyRoot: this.getComfyRoot(), comfyArgs: [] }))
     this.packs = packs.map((pack) => clone(pack))
     this.fetchImpl = fetchImpl
     this.state = stateTemplate()
@@ -673,43 +732,91 @@ export class WorkflowCenterService {
   // @yao-pkg/pkg 6.22 misclassifies await inside private class methods as
   // top-level await. Keep async packaging-boundary methods conventionally
   // internal so the ESM-to-CJS transform includes this module in the snapshot.
-  async _inspectArtifact(artifact, comfyRoot) {
-    if (!comfyRoot) return { present: false, verified: false, status: 'runtime-unconfigured' }
+  async _runtimeRegistry() {
+    const configuration = this.getRuntimeConfig() || {}
+    return discoverRuntimeRegistry({
+      comfyRoot: configuration.comfyRoot || this.getComfyRoot(),
+      pythonPath: configuration.pythonPath,
+      runtimePackageId: configuration.offlineRuntimePackageId,
+      comfyArgs: configuration.comfyArgs,
+      modelCategories: registryCategories(this.packs),
+    })
+  }
+
+  _artifactLocation(candidate) {
+    if (!candidate) return null
+    return {
+      rootId: candidate.root.id,
+      rootPath: candidate.root.path,
+      rootLabel: candidate.root.label || candidate.root.category,
+      targetPath: candidate.targetPath,
+      source: candidate.root.source,
+      category: candidate.root.category,
+      shared: candidate.root.shared,
+      portable: candidate.root.portable,
+      references: candidate.root.references,
+    }
+  }
+
+  _verifiedArtifact(artifact, candidate, file) {
+    const verification = this.state.verifiedArtifacts[artifactVerificationKey(artifact, candidate.targetPath)]
+      || (candidate.root.source === 'configured-runtime' ? this.state.verifiedArtifacts[artifact.relativePath] : null)
+    return Boolean(
+      verification?.sha256 === artifact.sha256
+      && verification?.bytes === file.size
+      && verification?.mtimeMs === file.mtimeMs,
+    )
+  }
+
+  async _inspectArtifact(artifact, registry) {
+    if (!registry?.configured) return { present: false, verified: false, contentHash: null, location: null, status: 'runtime-unconfigured' }
     if (artifact.relativePath) {
-      const target = resolveInside(comfyRoot, artifact.relativePath)
-      const file = await pathStats(target)
-      const present = Boolean(file?.isFile() && (!artifact.bytes || file.size === artifact.bytes))
-      const verification = this.state.verifiedArtifacts[artifact.relativePath]
-      const verified = present
-        && verification?.sha256 === artifact.sha256
-        && verification?.bytes === file.size
-        && verification?.mtimeMs === file.mtimeMs
-      return {
-        present,
-        verified,
-        status: !file ? 'missing' : !file.isFile() ? 'wrong-kind' : artifact.bytes && file.size !== artifact.bytes ? 'size-mismatch' : verified ? 'verified' : 'present-unverified',
+      const candidates = registeredArtifactCandidates(artifact, registry)
+      let firstMismatch = null
+      for (const candidate of candidates) {
+        const file = await pathStats(candidate.targetPath)
+        if (!file) continue
+        const location = this._artifactLocation(candidate)
+        if (!file.isFile()) {
+          firstMismatch ||= { present: false, verified: false, contentHash: null, location, status: 'wrong-kind' }
+          continue
+        }
+        if (artifact.bytes && file.size !== artifact.bytes) {
+          firstMismatch ||= { present: false, verified: false, contentHash: null, location, status: 'size-mismatch' }
+          continue
+        }
+        const verified = this._verifiedArtifact(artifact, candidate, file)
+        return {
+          present: true,
+          verified,
+          contentHash: verified ? artifact.sha256 : null,
+          location,
+          status: verified ? 'verified' : 'present-unverified',
+        }
       }
+      return firstMismatch || { present: false, verified: false, contentHash: null, location: null, status: 'missing' }
     }
     const candidates = artifact.presentCandidates || []
     for (const candidate of candidates) {
       if (isAbsolute(candidate) || WINDOWS_ABSOLUTE.test(candidate) || TRAVERSAL_SEGMENT.test(candidate)) continue
-      const target = resolve(comfyRoot, ...candidate.replace(/\\/gu, '/').split('/'))
-      if (!target.startsWith(`${resolve(comfyRoot)}${sep}`)) continue
-      const entry = await pathStats(target)
-      if (entry) return { present: true, verified: false, status: 'present-manual' }
+      for (const registered of registeredArtifactCandidates({ relativePath: candidate }, registry)) {
+        const entry = await pathStats(registered.targetPath)
+        if (entry) return { present: true, verified: false, contentHash: null, location: this._artifactLocation(registered), status: 'present-manual' }
+      }
     }
-    return { present: false, verified: false, status: 'manual-required' }
+    return { present: false, verified: false, contentHash: null, location: null, status: 'manual-required' }
   }
 
   async catalog({ runtime = {}, objectInfo = null, hardware = null } = {}) {
-    const comfyRoot = this.getComfyRoot()
+    const registry = await this._runtimeRegistry()
+    const comfyRoot = registry.comfyRoot
     const registeredNodes = normalizeRegisteredNodes(objectInfo)
     const vramTotal = Number(runtime.vramTotal || hardware?.vramTotal || 0)
     const vramGb = vramTotal > 0 ? vramTotal / GIB : 0
     const activeJobs = new Map(this.state.jobs.filter((job) => ['queued', 'running', 'waiting-user'].includes(job.status)).map((job) => [job.packId, job]))
     const packs = []
     for (const pack of this.packs) {
-      const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this._inspectArtifact(artifact, comfyRoot)))
+      const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this._inspectArtifact(artifact, registry)))
       const artifacts = pack.artifacts.map((artifact, index) => publicArtifact(artifact, artifactStates[index]))
       const missingArtifacts = artifacts.filter(({ present }) => !present)
       const unverifiedArtifacts = artifacts.filter(({ present, verified, kind }) => present && !verified && kind === 'model')
@@ -718,22 +825,30 @@ export class WorkflowCenterService {
       const enabled = this.state.enabledPackIds.includes(pack.id)
       const installed = missingArtifacts.length === 0
       const integrityVerified = unverifiedArtifacts.length === 0
-      const ready = enabled && installed && integrityVerified && runtime.connected && missingNodes.length === 0 && runtimeIssues.length === 0
-      const status = ready
-        ? 'ready'
-        : runtimeIssues.length
-          ? 'incompatible'
-          : missingArtifacts.length
-            ? 'missing-dependency'
-            : !integrityVerified
-              ? 'unverified'
-              : enabled && !runtime.connected
-                ? 'enabled-sleeping'
-                : 'installed-disabled'
+      const lifecycleState = runtime.lifecycle?.state || (runtime.connected ? 'external' : 'stopped')
+      const waking = lifecycleState === 'starting'
+      const hasError = lifecycleState === 'error'
+        || runtimeIssues.length > 0
+        || (enabled && !integrityVerified)
+        || (enabled && runtime.connected && missingNodes.length > 0)
+      const status = !installed
+        ? 'uninstalled'
+        : !enabled
+          ? 'installed-disabled'
+          : waking
+            ? 'waking'
+            : hasError
+              ? 'error'
+              : runtime.connected
+                ? 'executable'
+                : 'enabled-sleeping'
+      const ready = status === 'executable'
+      const downloadBytes = pendingDownloadBytes(artifacts)
       packs.push({
         ...pack,
         artifacts,
-        downloadBytes: artifactDownloadBytes(pack),
+        downloadBytes,
+        fullDownloadBytes: artifactDownloadBytes(pack),
         requiredLicenseIds: requiredLicenseIds(pack),
         acceptedLicense: requiredLicenseIds(pack).every((id) => Boolean(this.state.acceptedLicenses[id])),
         enabled,
@@ -746,6 +861,7 @@ export class WorkflowCenterService {
         missingNodes,
         runtimeIssues,
         runtimeConnected: Boolean(runtime.connected),
+        lifecycleState,
         recommendation: hardwareRecommendation(pack, vramGb),
         activeJob: activeJobs.get(pack.id) || null,
       })
@@ -755,7 +871,9 @@ export class WorkflowCenterService {
       checkedAt: Date.now(),
       storage: {
         configured: Boolean(comfyRoot),
-        location: comfyRoot ? 'configured-runtime' : 'not-configured',
+        location: comfyRoot ? 'runtime-registry' : 'not-configured',
+        modelRoots: registry.modelRoots.length,
+        sharedRoots: registry.sharedRoots.length,
       },
       hardware: {
         device: runtime.device || hardware?.name || null,
@@ -766,7 +884,9 @@ export class WorkflowCenterService {
         connected: Boolean(runtime.connected),
         comfyVersion: runtime.comfyVersion || null,
         pytorchVersion: runtime.pytorchVersion || null,
+        lifecycle: runtime.lifecycle || null,
       },
+      registry: publicRegistry(registry),
       packs,
       customWorkflows: this.state.customWorkflows.map(({ workflow: _workflow, ...entry }) => clone(entry)),
       jobs: this.state.jobs.slice(-20).reverse(),
@@ -791,11 +911,14 @@ export class WorkflowCenterService {
     const accepted = new Set(Array.isArray(request.acceptedLicenseIds) ? request.acceptedLicenseIds : [])
     const missingLicenses = requiredLicenses.filter((id) => !accepted.has(id) && !this.state.acceptedLicenses[id])
     if (missingLicenses.length) throw workflowError('必须先确认模型许可证与适用范围', 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED', 409, { licenseIds: missingLicenses })
-    const diskBytes = artifactDownloadBytes(pack)
+    const registry = await this._runtimeRegistry()
+    if (!registry.configured) throw workflowError('请先在本机设置中配置 ComfyUI 根目录', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
+    const artifactStates = await Promise.all(pack.artifacts.map((artifact) => this._inspectArtifact(artifact, registry)))
+    const artifacts = pack.artifacts.map((artifact, index) => publicArtifact(artifact, artifactStates[index]))
+    const diskBytes = pendingDownloadBytes(artifacts)
     if (!Number.isSafeInteger(request.acknowledgedDiskBytes) || request.acknowledgedDiskBytes < diskBytes) {
       throw workflowError('必须确认本次能力包的最大下载体量', 'WORKFLOW_DISK_ACK_REQUIRED', 409, { downloadBytes: diskBytes })
     }
-    if (!this.getComfyRoot()) throw workflowError('请先在本机设置中配置 ComfyUI 根目录', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
     const existing = this.state.jobs.find((job) => job.packId === packId && ['queued', 'running'].includes(job.status))
     if (existing) return clone(existing)
     const now = Date.now()
@@ -834,8 +957,8 @@ export class WorkflowCenterService {
     return job
   }
 
-  async _downloadArtifact(job, artifact, signal, progressBase, totalBytes) {
-    const comfyRoot = this.getComfyRoot()
+  async _downloadArtifact(job, artifact, registry, signal, progressBase, totalBytes) {
+    const comfyRoot = registry.comfyRoot
     const target = resolveInside(comfyRoot, artifact.relativePath)
     const targetStats = await pathStats(target)
     if (targetStats?.isFile()) {
@@ -889,7 +1012,7 @@ export class WorkflowCenterService {
     }
     await rename(partial, target)
     const installed = await stat(target)
-    this.state.verifiedArtifacts[artifact.relativePath] = {
+    this.state.verifiedArtifacts[artifactVerificationKey(artifact, target)] = {
       sha256: digest,
       bytes: installed.size,
       mtimeMs: installed.mtimeMs,
@@ -898,21 +1021,49 @@ export class WorkflowCenterService {
     return received
   }
 
+  async _verifyExistingArtifact(job, artifact, inspection) {
+    if (!inspection.present || !inspection.location?.targetPath) return false
+    if (inspection.verified) return true
+    await this._updateJob(job.id, { phase: 'verifying-existing', currentArtifactId: artifact.id })
+    const digest = await sha256File(inspection.location.targetPath)
+    if (digest !== artifact.sha256) {
+      throw workflowError(`${artifact.label} 已存在，但 SHA-256 与能力包登记值不一致；为保护共享模型，未覆盖该文件`, 'WORKFLOW_ARTIFACT_HASH_MISMATCH', 409, {
+        artifactId: artifact.id,
+        rootId: inspection.location.rootId,
+      })
+    }
+    const file = await stat(inspection.location.targetPath)
+    this.state.verifiedArtifacts[artifactVerificationKey(artifact, inspection.location.targetPath)] = {
+      sha256: digest,
+      bytes: file.size,
+      mtimeMs: file.mtimeMs,
+      verifiedAt: Date.now(),
+    }
+    await this.#save()
+    return true
+  }
+
   async _runInstall(jobId, pack, signal) {
     const job = this.state.jobs.find(({ id }) => id === jobId)
     if (!job) return
     try {
       await this._updateJob(jobId, { status: 'running', phase: 'preflight', progress: 0 })
       let completedBytes = 0
+      const registry = await this._runtimeRegistry()
+      if (!registry.configured) throw workflowError('ComfyUI 运行时配置已失效', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
       const automaticArtifacts = pack.artifacts.filter(({ downloadUrl }) => downloadUrl)
       for (const artifact of automaticArtifacts) {
-        const artifactBytes = await this._downloadArtifact(job, artifact, signal, completedBytes, job.totalBytes)
+        const inspection = await this._inspectArtifact(artifact, registry)
+        if (inspection.present) {
+          await this._verifyExistingArtifact(job, artifact, inspection)
+          continue
+        }
+        const artifactBytes = await this._downloadArtifact(job, artifact, registry, signal, completedBytes, job.totalBytes)
         completedBytes += artifactBytes
       }
-      const comfyRoot = this.getComfyRoot()
       const manualMissing = []
       for (const artifact of pack.artifacts.filter(({ downloadUrl }) => !downloadUrl)) {
-        const state = await this._inspectArtifact(artifact, comfyRoot)
+        const state = await this._inspectArtifact(artifact, registry)
         if (!state.present) manualMissing.push({ id: artifact.id, label: artifact.label, instruction: artifact.instruction, sourceUrl: artifact.sourceUrl })
       }
       if (manualMissing.length) {
@@ -957,19 +1108,20 @@ export class WorkflowCenterService {
 
   async enablePack(packId, { runtime = {}, objectInfo = null } = {}) {
     const pack = this.#pack(packId)
-    const comfyRoot = this.getComfyRoot()
-    if (!comfyRoot) throw workflowError('请先配置 ComfyUI 运行时', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
+    const registry = await this._runtimeRegistry()
+    if (!registry.configured) throw workflowError('请先配置 ComfyUI 运行时', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
     const requiredLicenses = requiredLicenseIds(pack)
     if (requiredLicenses.some((id) => !this.state.acceptedLicenses[id])) throw workflowError('许可证尚未确认', 'WORKFLOW_LICENSE_ACCEPTANCE_REQUIRED', 409)
     for (const artifact of pack.artifacts) {
-      const inspection = await this._inspectArtifact(artifact, comfyRoot)
+      const inspection = await this._inspectArtifact(artifact, registry)
       if (!inspection.present) throw workflowError(`${artifact.label} 尚未安装`, 'WORKFLOW_DEPENDENCY_MISSING', 409, { artifactId: artifact.id })
       if (artifact.relativePath && !inspection.verified) {
-        const target = resolveInside(comfyRoot, artifact.relativePath)
+        const target = inspection.location?.targetPath
+        if (!target) throw workflowError(`${artifact.label} 无法定位`, 'WORKFLOW_DEPENDENCY_MISSING', 409, { artifactId: artifact.id })
         const digest = await sha256File(target)
         if (digest !== artifact.sha256) throw workflowError(`${artifact.label} 校验失败`, 'WORKFLOW_ARTIFACT_HASH_MISMATCH', 409, { artifactId: artifact.id })
         const file = await stat(target)
-        this.state.verifiedArtifacts[artifact.relativePath] = {
+        this.state.verifiedArtifacts[artifactVerificationKey(artifact, target)] = {
           sha256: digest,
           bytes: file.size,
           mtimeMs: file.mtimeMs,

@@ -109,6 +109,7 @@ const clientStateStore = new ClientStateStore(join(dataDirectory, 'client-state'
 const workflowCenter = new WorkflowCenterService({
   rootDirectory: join(dataDirectory, 'workflow-center'),
   getComfyRoot: () => localRuntimeConfig.comfyRoot,
+  getRuntimeConfig: () => localRuntimeConfig,
 })
 const agentAdapters = new AgentAdapterService()
 const generationAdapters = new GenerationAdapterService()

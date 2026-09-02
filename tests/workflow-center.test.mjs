@@ -147,7 +147,7 @@ test('resumes a controlled download, verifies SHA-256, atomically installs, and 
       objectInfo: { FixtureNode: {} },
     })
     assert.equal(changed.packs[0].ready, false)
-    assert.equal(changed.packs[0].status, 'unverified')
+    assert.equal(changed.packs[0].status, 'error')
   } finally {
     await service.close()
     await endpoint.close()

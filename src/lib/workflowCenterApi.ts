@@ -8,10 +8,21 @@ export type WorkflowArtifactStatus = {
   relativePath: string | null
   sourceUrl: string
   licenseId: string
+  expectedSha256: string | null
   automatic: boolean
   instruction?: string
   present: boolean
   verified: boolean
+  contentHash: string | null
+  location: null | {
+    rootId: string
+    rootLabel: string
+    source: 'configured-runtime' | 'extra-model-path'
+    category: string
+    shared: boolean
+    portable: boolean
+    referenceCount: number
+  }
   status: 'runtime-unconfigured' | 'missing' | 'wrong-kind' | 'size-mismatch' | 'verified' | 'present-unverified' | 'present-manual' | 'manual-required'
 }
 
@@ -60,18 +71,20 @@ export type WorkflowPack = {
   requiredNodes: string[]
   sourceUrl: string
   downloadBytes: number
+  fullDownloadBytes: number
   requiredLicenseIds: string[]
   acceptedLicense: boolean
   enabled: boolean
   installed: boolean
   integrityVerified: boolean
   ready: boolean
-  status: 'ready' | 'incompatible' | 'missing-dependency' | 'unverified' | 'enabled-sleeping' | 'installed-disabled'
+  status: 'uninstalled' | 'installed-disabled' | 'enabled-sleeping' | 'waking' | 'executable' | 'error'
   missingArtifacts: string[]
   unverifiedArtifacts: string[]
   missingNodes: string[]
   runtimeIssues: string[]
   runtimeConnected: boolean
+  lifecycleState: string
   recommendation: { level: 'unknown' | 'blocked' | 'caution' | 'recommended' | 'compatible'; label: string }
   activeJob: WorkflowInstallJob | null
 }
@@ -113,9 +126,21 @@ export type CustomWorkflowSummary = {
 export type WorkflowCenterCatalog = {
   version: string
   checkedAt: number
-  storage: { configured: boolean; location: 'configured-runtime' | 'not-configured' }
+  storage: { configured: boolean; location: 'runtime-registry' | 'not-configured'; modelRoots: number; sharedRoots: number }
   hardware: { device: string | null; vramTotal: number; vramGb: number | null }
-  runtime: { connected: boolean; comfyVersion: string | null; pytorchVersion: string | null }
+  runtime: { connected: boolean; comfyVersion: string | null; pytorchVersion: string | null; lifecycle: { state?: string; lastError?: string | null } | null }
+  registry: {
+    version: string
+    registryHash: string | null
+    configured: boolean
+    python: { exists: boolean } | null
+    runtimePackageId: string | null
+    configFiles: Array<{ status: 'loaded' | 'missing' | 'invalid'; sha256?: string; error: string | null; code?: string }>
+    modelRoots: Array<{ id: string; category: string; label: string; source: string; exists: boolean; shared: boolean; portable: boolean; isDefault: boolean }>
+    nodeRoots: Array<{ id: string; category: string; label: string; source: string; exists: boolean; shared: boolean; portable: boolean; isDefault: boolean }>
+    sharedRoots: Array<{ id: string; category: string; label: string; source: string; exists: boolean; shared: boolean; portable: boolean; isDefault: boolean }>
+    warnings: Array<{ code: string; message: string; rootId?: string }>
+  }
   packs: WorkflowPack[]
   customWorkflows: CustomWorkflowSummary[]
   jobs: WorkflowInstallJob[]
@@ -225,4 +250,3 @@ export async function removeCustomWorkflow(customId: string) {
   )
   return response.result
 }
-

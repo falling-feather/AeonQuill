@@ -112,7 +112,7 @@ try {
   assert.equal(workflows.promptAgent.version, 'aeonquill-h3-shot-planner-v2')
 
   const workflowCenter = await requestJson(bridge.baseUrl, '/api/workflow-center/catalog?refresh=1')
-  assert.equal(workflowCenter.version, 'aeonquill-workflow-center-v1')
+  assert.equal(workflowCenter.version, 'aeonquill-workflow-center-v2')
   assert.equal(workflowCenter.packs.length, 5)
   const h3QualityPack = workflowCenter.packs.find(({ id }) => id === 'h3-quality-int8')
   assert.equal(h3QualityPack.minVramGb, 8)
