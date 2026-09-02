@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "semantic-contract-smoke-v1",
+  "description": "Synthetic protocol fixtures for the semantic image quality harness. They validate decoding, hashing, region leakage metrics and fail-closed gates; they are not model-quality evidence.",
+  "datasetRights": "All tiny PPM and PGM fixtures were authored in this repository for protocol testing and contain no third-party creative material.",
+  "environment": {
+    "gpu": "Synthetic contract fixture",
+    "vramMiB": 8192,
+    "systemRamMiB": 32768,
+    "os": "test",
+    "runtimePackageId": "contract-runtime",
+    "comfyVersion": "0.3.70",
+    "nodeInventorySha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "thresholds": {
+    "minimumPerWorkflow": 12,
+    "minimumPerCategory": 8,
+    "outsideMaskMaeP95Max": 0.001,
+    "instructionP50Min": 4,
+    "identityP50Min": 4,
+    "compositionP50Min": 4,
+    "artifactFreedomP50Min": 4,
+    "acceptanceRateMin": 0.8,
+    "repairP50MaxSeconds": 60
+  },
+  "candidates": [
+    {
+      "id": "qwen-contract",
+      "label": "Qwen Image Edit 2511 INT8 contract fixture",
+      "workflowVersion": "qwen-image-edit-2511-int8-v1",
+      "artifacts": {
+        "diffusion": "11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829",
+        "textEncoder": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+        "vae": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+      },
+      "license": {
+        "code": "Apache-2.0 workflow integration",
+        "model": "Apache-2.0 declared by the upstream model card",
+        "redistribution": "requires-final-product-audit",
+        "commercial": "requires-final-product-audit",
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+          "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI"
+        ],
+        "reviewedAt": "2026-09-03"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "id": "region-product-001",
+      "candidateId": "qwen-contract",
+      "workflowId": "region-edit",
+      "category": "product",
+      "width": 4,
+      "height": 4,
+      "source": {
+        "path": "fixtures/source.ppm",
+        "sha256": "cdd323dc8b0b372368f9221085afcb61f4e68124e082a999c0f0fe5b45b71bf4"
+      },
+      "output": {
+        "path": "fixtures/masked-output.ppm",
+        "sha256": "745d6a23eadb31035c6f0a4a48b05affadcfdf9a6469eaa0c167c5813ecef375"
+      },
+      "mask": {
+        "path": "fixtures/center-mask.pgm",
+        "sha256": "8b7192967f8aa68a4603e6b8de6d171bdcb93f0e00899a0927ba25b5430da45e"
+      },
+      "instructionSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "seed": 1,
+      "latencyMs": 1,
+      "peakVramMiB": 0,
+      "review": {
+        "instructionAdherence": 5,
+        "identityPreservation": null,
+        "compositionPreservation": 5,
+        "artifactFreedom": 5,
+        "accepted": true,
+        "repairSeconds": [0],
+        "notes": "Synthetic metric contract only."
+      }
+    },
+    {
+      "id": "point-illustration-001",
+      "candidateId": "qwen-contract",
+      "workflowId": "point-edit",
+      "category": "illustration",
+      "width": 4,
+      "height": 4,
+      "source": {
+        "path": "fixtures/source.ppm",
+        "sha256": "cdd323dc8b0b372368f9221085afcb61f4e68124e082a999c0f0fe5b45b71bf4"
+      },
+      "output": {
+        "path": "fixtures/masked-output.ppm",
+        "sha256": "745d6a23eadb31035c6f0a4a48b05affadcfdf9a6469eaa0c167c5813ecef375"
+      },
+      "mask": {
+        "path": "fixtures/center-mask.pgm",
+        "sha256": "8b7192967f8aa68a4603e6b8de6d171bdcb93f0e00899a0927ba25b5430da45e"
+      },
+      "instructionSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "seed": 2,
+      "latencyMs": 1,
+      "peakVramMiB": 0,
+      "review": {
+        "instructionAdherence": 5,
+        "identityPreservation": null,
+        "compositionPreservation": 5,
+        "artifactFreedom": 5,
+        "accepted": true,
+        "repairSeconds": [0]
+      }
+    },
+    {
+      "id": "portrait-adjust-001",
+      "candidateId": "qwen-contract",
+      "workflowId": "portrait-adjust",
+      "category": "portrait",
+      "width": 4,
+      "height": 4,
+      "source": {
+        "path": "fixtures/source.ppm",
+        "sha256": "cdd323dc8b0b372368f9221085afcb61f4e68124e082a999c0f0fe5b45b71bf4"
+      },
+      "output": {
+        "path": "fixtures/portrait-output.ppm",
+        "sha256": "14c5cb4b997d7be7c4f01771a660b27a472f1240a74afe7a16a2a390afe5cce8"
+      },
+      "instructionSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "seed": 3,
+      "latencyMs": 1,
+      "peakVramMiB": 0,
+      "review": {
+        "instructionAdherence": 5,
+        "identityPreservation": 5,
+        "compositionPreservation": 5,
+        "artifactFreedom": 5,
+        "accepted": true,
+        "repairSeconds": [0]
+      }
+    },
+    {
+      "id": "region-hair-001",
+      "candidateId": "qwen-contract",
+      "workflowId": "region-edit",
+      "category": "hair-translucent",
+      "width": 4,
+      "height": 4,
+      "source": {
+        "path": "fixtures/source.ppm",
+        "sha256": "cdd323dc8b0b372368f9221085afcb61f4e68124e082a999c0f0fe5b45b71bf4"
+      },
+      "output": {
+        "path": "fixtures/masked-output.ppm",
+        "sha256": "745d6a23eadb31035c6f0a4a48b05affadcfdf9a6469eaa0c167c5813ecef375"
+      },
+      "mask": {
+        "path": "fixtures/center-mask.pgm",
+        "sha256": "8b7192967f8aa68a4603e6b8de6d171bdcb93f0e00899a0927ba25b5430da45e"
+      },
+      "instructionSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "seed": 4,
+      "latencyMs": 1,
+      "peakVramMiB": 0,
+      "review": {
+        "instructionAdherence": 5,
+        "identityPreservation": null,
+        "compositionPreservation": 5,
+        "artifactFreedom": 5,
+        "accepted": true,
+        "repairSeconds": [0]
+      }
+    }
+  ]
+}

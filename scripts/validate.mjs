@@ -75,6 +75,11 @@ try {
     '--manifest=benchmarks/image-quality/manifest.example.json',
     '--allow-incomplete',
   ])
+  await run('semantic image quality benchmark contract', process.execPath, [
+    'scripts/benchmark-semantic-image-quality.mjs',
+    '--manifest=benchmarks/semantic-image-quality/manifest.example.json',
+    '--allow-incomplete',
+  ])
   await run('TypeScript', npmInvocation.executable, [...npmInvocation.prefix, 'run', 'typecheck'])
 
   if (profile !== 'quick') {

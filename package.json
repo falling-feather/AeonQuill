@@ -32,6 +32,8 @@
     "validate:masked-edit": "node scripts/validate-masked-edit-api.mjs",
     "benchmark:image-quality": "node scripts/benchmark-image-quality.mjs",
     "benchmark:image-quality:smoke": "node scripts/benchmark-image-quality.mjs --manifest=benchmarks/image-quality/manifest.example.json --allow-incomplete",
+    "benchmark:semantic-image-quality": "node scripts/benchmark-semantic-image-quality.mjs",
+    "benchmark:semantic-image-quality:smoke": "node scripts/benchmark-semantic-image-quality.mjs --manifest=benchmarks/semantic-image-quality/manifest.example.json --allow-incomplete",
     "benchmark:video-quality": "node scripts/benchmark-video-quality.mjs",
     "benchmark:h3-workflow": "node scripts/run-h3-quality-smoke.mjs",
     "benchmark:seedvr2-workflow": "node scripts/run-seedvr2-quality-smoke.mjs",

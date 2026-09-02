@@ -2317,7 +2317,7 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 54px 12px 32px;
+  padding: 104px 12px 32px;
 }
 
 .mask-editor-toolbar {
@@ -2400,6 +2400,71 @@ textarea:focus-visible,
 .mask-history-button {
   width: 28px;
   padding: 0 !important;
+}
+
+.mask-morphology-toolbar {
+  position: absolute;
+  z-index: 5;
+  top: 53px;
+  left: 8px;
+  right: 8px;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
+  border: 1px solid rgba(221, 217, 205, 0.94);
+  border-radius: 9px;
+  background: rgba(255, 252, 244, 0.95);
+  box-shadow: 0 5px 18px rgba(74, 58, 28, 0.07);
+  backdrop-filter: blur(10px);
+}
+
+.mask-morphology-toolbar > label {
+  min-width: 98px;
+  display: grid;
+  grid-template-columns: 55px minmax(42px, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: #716952;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.mask-morphology-toolbar input {
+  width: 100%;
+  accent-color: #b37819;
+}
+
+.mask-preset-switch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.mask-morphology-toolbar button {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid #e5ddca;
+  border-radius: 6px;
+  color: #746544;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mask-morphology-toolbar button:hover:not(:disabled) {
+  border-color: #d1b579;
+  background: #fff9ea;
+}
+
+.mask-morphology-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .mask-editor-surface {
@@ -4702,8 +4767,12 @@ button.video-frame-card {
     grid-template-rows: 24px 252px;
   }
 
+  .image-compare-area.mode-mask-refine .image-preview-frame {
+    grid-template-rows: 24px 312px;
+  }
+
   .mask-editor {
-    padding: 50px 7px 27px;
+    padding: 100px 7px 27px;
   }
 
   .semantic-point-editor {
@@ -4713,6 +4782,15 @@ button.video-frame-card {
   .mask-editor-toolbar {
     gap: 4px;
     overflow-x: auto;
+  }
+
+  .mask-morphology-toolbar {
+    gap: 4px;
+    overflow-x: auto;
+  }
+
+  .mask-morphology-toolbar > label {
+    min-width: 91px;
   }
 
   .mask-editor-toolbar > label {

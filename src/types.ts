@@ -72,9 +72,19 @@ export type MaskStroke = {
   points: MaskPoint[]
 }
 
+export type MaskMorphology = {
+  expand: number
+  feather: number
+  trim: number
+}
+
 export type MaskRecipe = {
   schemaVersion: 1
   strokes: MaskStroke[]
+} | {
+  schemaVersion: 2
+  strokes: MaskStroke[]
+  morphology: MaskMorphology
 }
 
 export type MaskDraft = {

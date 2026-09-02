@@ -6,6 +6,7 @@ import type {
   MaskStroke,
   PixelDraft,
 } from '../types'
+import { applyMaskMorphology, DEFAULT_MASK_MORPHOLOGY } from './maskMorphology.mjs'
 
 export const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = {
   brightness: 100,
@@ -193,7 +194,7 @@ function drawMaskStroke(
 }
 
 function boundedMaskStrokes(recipe: MaskRecipe) {
-  const strokes = recipe.schemaVersion === 1 ? recipe.strokes.slice(0, MASK_MAX_STROKES) : []
+  const strokes = recipe.strokes.slice(0, MASK_MAX_STROKES)
   let pointCount = 0
   return strokes.flatMap((stroke) => {
     if (pointCount >= MASK_MAX_POINTS) return []
@@ -243,9 +244,19 @@ async function renderMaskRecipe(
   }
 
   const finalMask = maskContext.getImageData(0, 0, width, height)
+  const rawAlpha = new Uint8ClampedArray(width * height)
+  for (let index = 0; index < rawAlpha.length; index += 1) {
+    rawAlpha[index] = finalMask.data[index * 4]
+  }
+  const refinedAlpha = applyMaskMorphology(
+    rawAlpha,
+    width,
+    height,
+    recipe.schemaVersion === 2 ? recipe.morphology : DEFAULT_MASK_MORPHOLOGY,
+  )
   let changedAlpha = 0
   for (let index = 0; index < output.data.length; index += 4) {
-    const nextAlpha = finalMask.data[index]
+    const nextAlpha = refinedAlpha[index / 4]
     changedAlpha += Math.abs(nextAlpha - output.data[index + 3])
     output.data[index + 3] = nextAlpha
   }
@@ -480,7 +491,11 @@ export async function createUpscalePreview(
 }
 
 export function createEmptyMaskRecipe(): MaskRecipe {
-  return { schemaVersion: 1, strokes: [] }
+  return {
+    schemaVersion: 2,
+    strokes: [],
+    morphology: { ...DEFAULT_MASK_MORPHOLOGY },
+  }
 }
 
 export async function createMaskPreview(src: string, recipe: MaskRecipe): Promise<MaskDraft> {

@@ -41,7 +41,9 @@ const AGENT_CREATABLE_KINDS = new Set(['frame', 'text', 'note', 'shape', 'pixel'
 const PROCESSING_STEP_KEYS = new Set([
   'id', 'type', 'label', 'detail', 'enabled', 'createdAt', 'outputSrc', 'maskRecipe',
 ])
-const MASK_RECIPE_KEYS = new Set(['schemaVersion', 'strokes'])
+const MASK_RECIPE_V1_KEYS = new Set(['schemaVersion', 'strokes'])
+const MASK_RECIPE_V2_KEYS = new Set(['schemaVersion', 'strokes', 'morphology'])
+const MASK_MORPHOLOGY_KEYS = new Set(['expand', 'feather', 'trim'])
 const MASK_STROKE_KEYS = new Set(['id', 'mode', 'size', 'hardness', 'points'])
 const MASK_POINT_KEYS = new Set(['x', 'y'])
 
@@ -100,8 +102,17 @@ function assertCamera(camera, path = 'document.camera') {
 }
 
 function assertMaskRecipe(recipe, path) {
-  assertExactKeys(recipe, MASK_RECIPE_KEYS, path)
-  if (recipe.schemaVersion !== 1) fail('INVALID_MASK_RECIPE', `${path}.schemaVersion must be 1`)
+  if (!isRecord(recipe)) fail('INVALID_MASK_RECIPE', `${path} must be an object`)
+  if (recipe.schemaVersion !== 1 && recipe.schemaVersion !== 2) {
+    fail('INVALID_MASK_RECIPE', `${path}.schemaVersion must be 1 or 2`)
+  }
+  assertExactKeys(recipe, recipe.schemaVersion === 2 ? MASK_RECIPE_V2_KEYS : MASK_RECIPE_V1_KEYS, path)
+  if (recipe.schemaVersion === 2) {
+    assertExactKeys(recipe.morphology, MASK_MORPHOLOGY_KEYS, `${path}.morphology`)
+    assertInteger(recipe.morphology.expand, `${path}.morphology.expand`, -32, 32)
+    assertInteger(recipe.morphology.feather, `${path}.morphology.feather`, 0, 32)
+    assertInteger(recipe.morphology.trim, `${path}.morphology.trim`, 0, 127)
+  }
   if (!Array.isArray(recipe.strokes) || recipe.strokes.length > MAX_MASK_STROKES) {
     fail('INVALID_MASK_RECIPE', `${path}.strokes must contain at most ${MAX_MASK_STROKES} strokes`)
   }

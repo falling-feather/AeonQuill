@@ -196,6 +196,32 @@ test('accepts a bounded normalized mask recipe in the processing stack', () => {
     now: 1,
   })
   assert.deepEqual(document.elements[0].processingStack[0].maskRecipe, recipe)
+
+  const morphologyRecipe = {
+    schemaVersion: 2,
+    strokes: recipe.strokes,
+    morphology: { expand: -2, feather: 3, trim: 8 },
+  }
+  const morphologyDocument = createCanvasDocument({
+    elements: [{
+      ...element,
+      id: 'image-mask-v2',
+      kind: 'image',
+      src: 'data:image/png;base64,AA==',
+      processingStack: [{
+        id: 'step-mask-v2',
+        type: 'mask-refine',
+        label: '蒙版修边',
+        detail: '可逆形态学配方',
+        enabled: true,
+        createdAt: 1,
+        maskRecipe: morphologyRecipe,
+      }],
+    }],
+    camera,
+    now: 1,
+  })
+  assert.deepEqual(morphologyDocument.elements[0].processingStack[0].maskRecipe, morphologyRecipe)
 })
 
 test('rejects unsafe mask coordinates and unbounded processing metadata', () => {
@@ -237,5 +263,23 @@ test('rejects unsafe mask coordinates and unbounded processing metadata', () => 
       now: 1,
     }),
     (error) => error.code === 'UNKNOWN_FIELD',
+  )
+  assert.throws(
+    () => createCanvasDocument({
+      elements: [{
+        ...maskElement,
+        processingStack: [{
+          ...maskElement.processingStack[0],
+          maskRecipe: {
+            schemaVersion: 2,
+            strokes: [],
+            morphology: { expand: 33, feather: 0, trim: 0 },
+          },
+        }],
+      }],
+      camera,
+      now: 1,
+    }),
+    (error) => error.code === 'INVALID_INTEGER',
   )
 })

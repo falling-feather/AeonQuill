@@ -1,7 +1,8 @@
 import { Eraser, Paintbrush, RotateCcw, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createEmptyMaskRecipe, createMaskPreview } from '../lib/imageProcessing'
-import type { MaskBrushMode, MaskDraft, MaskPoint, MaskRecipe, MaskStroke } from '../types'
+import { DEFAULT_MASK_MORPHOLOGY } from '../lib/maskMorphology.mjs'
+import type { MaskBrushMode, MaskDraft, MaskMorphology, MaskPoint, MaskRecipe, MaskStroke } from '../types'
 
 type MaskEditorProps = {
   source: string
@@ -20,7 +21,17 @@ const MAX_POINTS = 20_000
 const MAX_POINTS_PER_STROKE = 2_048
 const MIN_POINT_DISTANCE = 0.002
 const EDITOR_HORIZONTAL_PADDING = 24
-const EDITOR_VERTICAL_CHROME = 86
+const EDITOR_VERTICAL_CHROME = 142
+
+const maskPresets: Array<{ id: string; label: string; value: MaskMorphology }> = [
+  { id: 'tight', label: '紧贴', value: { expand: -2, feather: 1, trim: 8 } },
+  { id: 'soft', label: '平滑', value: { expand: 1, feather: 3, trim: 4 } },
+  { id: 'wide', label: '外扩', value: { expand: 4, feather: 2, trim: 0 } },
+]
+
+function recipeMorphology(recipe: MaskRecipe): MaskMorphology {
+  return recipe.schemaVersion === 2 ? recipe.morphology : { ...DEFAULT_MASK_MORPHOLOGY }
+}
 
 function makeStrokeId() {
   return `mask-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
@@ -166,7 +177,8 @@ export const MaskEditor = memo(function MaskEditor({
       }
       const availablePoints = MAX_POINTS - currentPointCount
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        morphology: recipeMorphology(current),
         strokes: [
           ...current.strokes,
           {
@@ -176,6 +188,14 @@ export const MaskEditor = memo(function MaskEditor({
         ],
       }
     })
+  }, [])
+
+  const updateMorphology = useCallback((patch: Partial<MaskMorphology>) => {
+    setRecipe((current) => ({
+      schemaVersion: 2,
+      strokes: current.strokes,
+      morphology: { ...recipeMorphology(current), ...patch },
+    }))
   }, [])
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -275,7 +295,8 @@ export const MaskEditor = memo(function MaskEditor({
           className="mask-history-button"
           disabled={disabled || recipe.strokes.length === 0}
           onClick={() => setRecipe((current) => ({
-            schemaVersion: 1,
+            schemaVersion: 2,
+            morphology: recipeMorphology(current),
             strokes: current.strokes.slice(0, -1),
           }))}
           title="撤销上一笔"
@@ -292,6 +313,62 @@ export const MaskEditor = memo(function MaskEditor({
           aria-label="重置全部蒙版笔画"
         >
           <RotateCcw size={14} />
+        </button>
+      </div>
+
+      <div className="mask-morphology-toolbar" aria-label="蒙版边缘配方">
+        <div className="mask-preset-switch" role="group" aria-label="蒙版边缘预设">
+          {maskPresets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => updateMorphology(preset.value)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <label>
+          <span>边缘 {recipeMorphology(recipe).expand > 0 ? '+' : ''}{recipeMorphology(recipe).expand}px</span>
+          <input
+            type="range"
+            min={-16}
+            max={16}
+            value={recipeMorphology(recipe).expand}
+            disabled={disabled}
+            onChange={(event) => updateMorphology({ expand: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>羽化 {recipeMorphology(recipe).feather}px</span>
+          <input
+            type="range"
+            min={0}
+            max={16}
+            value={recipeMorphology(recipe).feather}
+            disabled={disabled}
+            onChange={(event) => updateMorphology({ feather: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>弱透明 {recipeMorphology(recipe).trim}</span>
+          <input
+            type="range"
+            min={0}
+            max={96}
+            value={recipeMorphology(recipe).trim}
+            disabled={disabled}
+            onChange={(event) => updateMorphology({ trim: Number(event.target.value) })}
+          />
+        </label>
+        <button
+          type="button"
+          className="mask-morphology-reset"
+          disabled={disabled}
+          onClick={() => updateMorphology({ ...DEFAULT_MASK_MORPHOLOGY })}
+        >
+          清除配方
         </button>
       </div>
 
@@ -325,6 +402,8 @@ export const MaskEditor = memo(function MaskEditor({
 
       <div className="mask-editor-status" aria-live="polite">
         <span>{recipe.strokes.length} 笔修正</span>
+        <span>边缘 {recipeMorphology(recipe).expand > 0 ? '+' : ''}{recipeMorphology(recipe).expand}px</span>
+        <span>羽化 {recipeMorphology(recipe).feather}px</span>
         <span>Alpha 改变 {preview?.changedPercent ?? 0}%</span>
         <span>原图始终保留</span>
       </div>

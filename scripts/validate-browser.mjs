@@ -118,6 +118,9 @@ try {
   await imageLab.waitFor({ state: 'visible' })
   await desktop.getByText('浏览器蒙版笔刷', { exact: true }).waitFor({ state: 'visible' })
   await desktop.getByText('归一化笔画 · 全分辨率确定性重放', { exact: true }).waitFor({ state: 'visible' })
+  await desktop.getByRole('button', { name: '平滑', exact: true }).click()
+  await desktop.getByText('边缘 +1px', { exact: true }).first().waitFor({ state: 'visible' })
+  await desktop.getByText('羽化 3px', { exact: true }).first().waitFor({ state: 'visible' })
   const maskCanvas = desktop.getByLabel('在图片上拖动以移除或恢复蒙版')
   const maskBox = await maskCanvas.boundingBox()
   assert.ok(maskBox)
@@ -144,7 +147,7 @@ try {
       element.kind === 'image'
       && element.processingStack?.some((step) =>
         step.type === 'mask-refine'
-        && step.maskRecipe?.schemaVersion === 1
+        && step.maskRecipe?.schemaVersion === 2
         && step.maskRecipe.strokes?.length === 1,
       ),
     )
@@ -154,7 +157,8 @@ try {
   const afterMask = await readStoredDocument(desktop)
   const maskDerived = afterMask.elements.find((element) => element.id === maskDerivedId)
   const maskStep = maskDerived.processingStack.find((step) => step.type === 'mask-refine')
-  assert.equal(maskStep.maskRecipe.schemaVersion, 1)
+  assert.equal(maskStep.maskRecipe.schemaVersion, 2)
+  assert.deepEqual(maskStep.maskRecipe.morphology, { expand: 1, feather: 3, trim: 4 })
   assert.equal(maskStep.maskRecipe.strokes.length, 1)
   assert.equal(maskStep.maskRecipe.strokes[0].points.every((point) =>
     point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1
@@ -180,7 +184,12 @@ try {
   assert.equal(afterMaskReload.elements.some((element) =>
     element.id === maskDerivedId
     && element.processingStack?.some((step) =>
-      step.type === 'mask-refine' && step.maskRecipe?.strokes?.length === 1
+      step.type === 'mask-refine'
+      && step.maskRecipe?.schemaVersion === 2
+      && step.maskRecipe?.morphology?.expand === 1
+      && step.maskRecipe?.morphology?.feather === 3
+      && step.maskRecipe?.morphology?.trim === 4
+      && step.maskRecipe?.strokes?.length === 1
     ),
   ), true)
   const scheduledJobId = await desktop.evaluate(async () => {
@@ -328,6 +337,9 @@ try {
   await mobile.getByRole('button', { name: '蒙版修边', exact: true }).click()
   await mobile.getByRole('dialog', { name: '图像处理实验室' }).waitFor({ state: 'visible' })
   await mobile.getByText('浏览器蒙版笔刷', { exact: true }).waitFor({ state: 'visible' })
+  await mobile.getByRole('button', { name: '外扩', exact: true }).click()
+  await mobile.getByText('边缘 +4px', { exact: true }).first().waitFor({ state: 'visible' })
+  await mobile.getByText('羽化 2px', { exact: true }).first().waitFor({ state: 'visible' })
   const mobileMaskBox = await mobile.getByLabel('在图片上拖动以移除或恢复蒙版').boundingBox()
   assert.ok(mobileMaskBox)
   assert.ok(mobileMaskBox.width >= 150 && mobileMaskBox.height >= 150)
