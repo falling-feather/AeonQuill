@@ -59,6 +59,7 @@ import {
 } from '../../lib/story/storyExecution.mjs'
 import {
   createVideoProductionProjectForStory,
+  synchronizeVideoProductionProjectForStory,
   type VideoProductionProject,
 } from '../../lib/story/productionPipeline.mjs'
 import {
@@ -230,7 +231,9 @@ function createPreviewPlan(
   return {
     project,
     plan: createGenerationPlan(project, { now }),
-    production: production ?? createVideoProductionProjectForStory(project, { now }),
+    production: production
+      ? synchronizeVideoProductionProjectForStory(production, project, { now })
+      : createVideoProductionProjectForStory(project, { now }),
   }
 }
 
@@ -800,6 +803,7 @@ export function SmartVideoWorkbench({
 
   useEffect(() => {
     if (!libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
+    if (activeWorkspace === 'production') return
     consumedLibraryAssetRef.current = libraryAsset.nonce
     let disposed = false
     void (async () => {
@@ -831,7 +835,7 @@ export function SmartVideoWorkbench({
     return () => { disposed = true }
     // 资源投递严格按 nonce 消费一次；镜头变化不应重复导入同一版本。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [libraryAsset?.nonce])
+  }, [libraryAsset?.nonce, activeWorkspace])
 
   return (
     <section className="aq-video-workbench" aria-label="智能视频工作台">
@@ -880,6 +884,8 @@ export function SmartVideoWorkbench({
           project={result.production}
           onProjectChange={updateProductionProject}
           onBridgeToStory={bridgeProductionSource}
+          libraryAsset={libraryAsset}
+          onLibraryAssetConsumed={onLibraryAssetConsumed}
         />
         {activeWorkspace !== 'production' ? (
           <>

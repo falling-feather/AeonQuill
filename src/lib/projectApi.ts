@@ -7,8 +7,8 @@ import {
   type StoryProject,
 } from './story/storyProject.mjs'
 import {
-  assertVideoProductionProject,
   createVideoProductionProjectForStory,
+  migrateVideoProductionProject,
   type VideoProductionProject,
 } from './story/productionPipeline.mjs'
 import { ensureLocalSession } from './videoApi'
@@ -156,7 +156,7 @@ export function serializeSmartVideoDocument(input: { project: StoryProject; plan
   const project = assertStoryProject(input.project)
   const plan = assertGenerationPlan(input.plan, project)
   const production = input.production
-    ? assertVideoProductionProject(input.production)
+    ? migrateVideoProductionProject(input.production, { story: project })
     : createVideoProductionProjectForStory(project)
   return JSON.stringify({ schemaVersion: SMART_VIDEO_DOCUMENT_SCHEMA_VERSION, project, plan, production })
 }
@@ -180,7 +180,7 @@ export function deserializeSmartVideoDocument(serialized: string): SmartVideoDoc
   const plan = assertGenerationPlan(record.plan as GenerationPlan, project)
   const production = isLegacy
     ? createVideoProductionProjectForStory(project)
-    : assertVideoProductionProject(record.production as VideoProductionProject)
+    : migrateVideoProductionProject(record.production, { story: project })
   return { schemaVersion: SMART_VIDEO_DOCUMENT_SCHEMA_VERSION, project, plan, production }
 }
 

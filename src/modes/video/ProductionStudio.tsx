@@ -37,7 +37,9 @@ import {
   type VideoGenerationMode,
   type VideoCharacterMode,
 } from '../../lib/story/productionPipeline.mjs'
+import { continuityGraphSummary } from '../../lib/story/continuityGraph.mjs'
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib/story/storyProject.mjs'
+import type { LibraryAssetInsertion } from '../../lib/libraryApi'
 import {
   clearTextAgentAdapter,
   configureTextAgentAdapter,
@@ -64,6 +66,17 @@ type ProductionStudioProps = {
   project: VideoProductionProject
   onProjectChange: (project: VideoProductionProject) => void
   onBridgeToStory: (source: ApprovedProductionStorySource) => void
+  libraryAsset?: LibraryAssetInsertion
+  onLibraryAssetConsumed?: (nonce: number) => void
+}
+
+type ContinuitySlotView = {
+  id: string
+  group: '人物视图' | '服饰状态' | '地点基准' | '镜头帧'
+  title: string
+  detail: string
+  status: 'planned' | 'ready' | 'approved'
+  assetHash: string | null
 }
 
 const STATUS_META: Record<VideoProductionNodeStatus, { label: string; tone: string }> = {
@@ -76,6 +89,14 @@ const STATUS_META: Record<VideoProductionNodeStatus, { label: string; tone: stri
   revision: { label: '需返工', tone: 'revision' },
   failed: { label: '失败', tone: 'failed' },
 }
+
+const REVIEW_DIMENSIONS = [
+  ['identity', '身份一致'],
+  ['wardrobe', '服饰连续'],
+  ['location', '场景连续'],
+  ['sharpness', '清晰度'],
+  ['motion', '运动质量'],
+] as const
 
 function messageOf(error: unknown) {
   if (error instanceof VideoProductionError) return `${error.code} · ${error.message}`
@@ -105,7 +126,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, project, onProjectChange, onBridgeToStory }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -116,8 +137,16 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
   const [instructionsDraft, setInstructionsDraft] = useState('')
   const [outputDraft, setOutputDraft] = useState('')
   const [notice, setNotice] = useState('剧本大纲等待用户审批；未批准节点不会越级。')
+  const [continuityTargetId, setContinuityTargetId] = useState<string | null>(null)
+  const [continuityGroup, setContinuityGroup] = useState<ContinuitySlotView['group']>('人物视图')
+  const [continuityPage, setContinuityPage] = useState(0)
+  const [continuityShotId, setContinuityShotId] = useState(project.continuityGraph.shots[0]?.id ?? '')
+  const [reviewDecision, setReviewDecision] = useState<'accept' | 'retry'>('accept')
+  const [reviewNotes, setReviewNotes] = useState('')
+  const [reviewScores, setReviewScores] = useState({ identity: 4, wardrobe: 4, location: 4, sharpness: 4, motion: 4 })
   const sequenceRef = useRef(1)
   const projectRef = useRef(project)
+  const consumedLibraryAssetRef = useRef<number | null>(null)
   const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
   const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
   const [adapterNotice, setAdapterNotice] = useState('密钥只驻留本次 sidecar 内存，关闭应用即清除。')
@@ -139,6 +168,53 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
 
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId) ?? project.nodes[0]
   const progress = useMemo(() => productionProgress(project), [project])
+  const continuitySummary = useMemo(() => continuityGraphSummary(project.continuityGraph), [project.continuityGraph])
+  const continuityShot = project.continuityGraph.shots.find(({ id }) => id === continuityShotId) ?? project.continuityGraph.shots[0] ?? null
+  const continuitySlots = useMemo<ContinuitySlotView[]>(() => {
+    const graph = project.continuityGraph
+    const characters = new Map(graph.characters.map((character) => [character.id, character]))
+    const shots = new Map(graph.shots.map((shot) => [shot.id, shot]))
+    return [
+      ...graph.views.map((slot) => ({
+        id: slot.id,
+        group: '人物视图' as const,
+        title: `${characters.get(slot.characterId)?.name ?? '角色'} · ${slot.view === 'front' ? '正面' : slot.view === 'side' ? '侧面' : slot.view === 'back' ? '背面' : slot.view}`,
+        detail: slot.required ? '必需参考' : '可选参考',
+        status: slot.status,
+        assetHash: slot.asset?.contentHash ?? null,
+      })),
+      ...graph.wardrobes.map((slot) => ({
+        id: slot.id,
+        group: '服饰状态' as const,
+        title: `${characters.get(slot.characterId)?.name ?? '角色'} · ${slot.label}`,
+        detail: slot.trigger,
+        status: slot.status,
+        assetHash: slot.asset?.contentHash ?? null,
+      })),
+      ...graph.locations.map((slot) => ({
+        id: slot.id,
+        group: '地点基准' as const,
+        title: slot.name,
+        detail: slot.visualPrompt,
+        status: slot.status,
+        assetHash: slot.asset?.contentHash ?? null,
+      })),
+      ...graph.frames.map((slot) => ({
+        id: slot.id,
+        group: '镜头帧' as const,
+        title: `${shots.get(slot.shotId)?.label ?? '镜头'} · ${slot.role === 'first-frame' ? '首帧' : '尾帧'}`,
+        detail: slot.required ? '质量模式必需' : '极速模式可选',
+        status: slot.status,
+        assetHash: slot.asset?.contentHash ?? null,
+      })),
+    ]
+  }, [project.continuityGraph])
+  const filteredContinuitySlots = continuitySlots.filter(({ group }) => group === continuityGroup)
+  const continuityPageCount = Math.max(1, Math.ceil(filteredContinuitySlots.length / 24))
+  const pagedContinuitySlots = filteredContinuitySlots.slice(continuityPage * 24, continuityPage * 24 + 24)
+  const continuityLatestReview = continuityShot?.latestReviewId
+    ? project.continuityGraph.reviews.find(({ id }) => id === continuityShot.latestReviewId) ?? null
+    : null
   const canBridge = useMemo(() => canBridgeProductionToStory(project), [project])
   const hasReviewGate = project.nodes.some((node) => node.status === 'review')
   const nodeById = useMemo(() => new Map(project.nodes.map((node) => [node.id, node])), [project.nodes])
@@ -180,6 +256,14 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
     setCharacterMode(project.settings.characterMode)
   }, [project.id])
 
+  useEffect(() => {
+    if (!continuityShotId && project.continuityGraph.shots[0]) setContinuityShotId(project.continuityGraph.shots[0].id)
+  }, [continuityShotId, project.continuityGraph.shots])
+
+  useEffect(() => {
+    if (continuityPage >= continuityPageCount) setContinuityPage(Math.max(0, continuityPageCount - 1))
+  }, [continuityPage, continuityPageCount])
+
   const execute = (
     type: VideoProductionCommandType,
     payload: Record<string, unknown> = {},
@@ -198,6 +282,54 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
       setNotice(messageOf(error))
       return null
     }
+  }
+
+  useEffect(() => {
+    if (!active || !libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
+    if (!continuityTargetId) {
+      setNotice('资源已就绪。请先选择人物、服饰、地点或镜头帧槽位，再完成绑定。')
+      return
+    }
+    consumedLibraryAssetRef.current = libraryAsset.nonce
+    const asset = libraryAsset.asset
+    try {
+      if (asset.mediaKind !== 'image') throw new Error('连续性槽位只接受资源库中的图片资产')
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(asset.version.mimeType)) throw new Error('连续性槽位仅支持 PNG、JPEG 或 WebP')
+      const next = execute('continuity.asset.bind', {
+        targetId: continuityTargetId,
+        binding: {
+          libraryItemId: asset.id,
+          libraryVersionId: asset.version.id,
+          contentHash: asset.version.assetId,
+          mimeType: asset.version.mimeType,
+          scope: asset.relationship === 'project-owned' ? 'project' : 'global-reference',
+          boundAt: Math.max(Date.now(), project.updatedAt),
+        },
+      }, `已把“${asset.title}”绑定到连续性槽位；请检查后人工批准。`)
+      if (next) setContinuityTargetId(null)
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      onLibraryAssetConsumed?.(libraryAsset.nonce)
+    }
+    // 资源投递按 nonce 消费一次；项目变化由命令回填，不能导致重复绑定。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, libraryAsset?.nonce, continuityTargetId])
+
+  const chooseContinuityAsset = (targetId: string) => {
+    setContinuityTargetId(targetId)
+    setNotice('槽位已选中。请打开页面顶部“资源库”，选择一个图片版本并点击“插入当前模式”。')
+  }
+
+  const submitContinuityReview = () => {
+    if (!continuityShot) return
+    execute('continuity.review.record', {
+      shotId: continuityShot.id,
+      reviewerId: 'local-user',
+      scores: reviewScores,
+      decision: reviewDecision,
+      notes: reviewNotes,
+    }, reviewDecision === 'accept' ? '已接受当前镜头；这是人工结论，不是自动评分阈值。' : '已登记定向重生；只需重跑当前镜头。')
   }
 
   const runNext = () => {
@@ -449,6 +581,102 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
                 <footer>{profile.wardrobeStates.map((wardrobe) => <span key={wardrobe.id}>{wardrobe.label}<small>{wardrobe.trigger}</small></span>)}</footer>
               </article>
             ))}
+          </section>
+        ) : null}
+
+        {selectedNode.id === 'character-designer' || selectedNode.id === 'asset-producer' ? (
+          <section className="aq-continuity-assets" aria-label="连续性资产槽位">
+            <header>
+              <div>
+                <span>连续性资产图</span>
+                <small>{continuitySummary.approvedAssets}/{continuitySummary.requiredAssets} 个必需资产已批准</small>
+              </div>
+              <b>{continuitySummary.blockedShots} 镜头受阻</b>
+            </header>
+            <p>先选定槽位，再从页面顶部“资源库”插入明确版本。项目只保存资源 ID、版本与内容哈希，不保存临时 URL。</p>
+            <label className="aq-continuity-filter">
+              <span>资产组</span>
+              <select value={continuityGroup} onChange={(event) => { setContinuityGroup(event.target.value as ContinuitySlotView['group']); setContinuityPage(0) }}>
+                {(['人物视图', '服饰状态', '地点基准', '镜头帧'] as const).map((group) => (
+                  <option key={group} value={group}>{group} · {continuitySlots.filter((slot) => slot.group === group).length}</option>
+                ))}
+              </select>
+            </label>
+            <div className="aq-continuity-slot-list">
+              {pagedContinuitySlots.length ? pagedContinuitySlots.map((slot) => (
+                <article key={slot.id} className={`is-${slot.status}${continuityTargetId === slot.id ? ' is-target' : ''}`} data-continuity-target={slot.id}>
+                  <div>
+                    <strong>{slot.title}</strong>
+                    <small>{slot.detail}</small>
+                    {slot.assetHash ? <code>sha256:{slot.assetHash.slice(0, 12)}…</code> : null}
+                  </div>
+                  <span>{slot.status === 'approved' ? '已批准' : slot.status === 'ready' ? '待批准' : '待绑定'}</span>
+                  <footer>
+                    <button type="button" className={continuityTargetId === slot.id ? 'is-selected' : ''} onClick={() => chooseContinuityAsset(slot.id)}>{slot.assetHash ? '替换版本' : '选择资源'}</button>
+                    {slot.status === 'ready' ? <button type="button" className="is-approve" onClick={() => execute('continuity.asset.approve', { targetId: slot.id }, `已批准“${slot.title}”。`)}>批准</button> : null}
+                    {slot.status !== 'planned' ? <button type="button" onClick={() => execute('continuity.asset.unbind', { targetId: slot.id }, `已移除“${slot.title}”；相关镜头复核已失效。`)}>移除</button> : null}
+                  </footer>
+                </article>
+              )) : <p className="is-empty">当前故事尚未生成这一类资产槽位。</p>}
+            </div>
+            {continuityPageCount > 1 ? (
+              <footer className="aq-continuity-pagination">
+                <button type="button" disabled={continuityPage === 0} onClick={() => setContinuityPage((page) => Math.max(0, page - 1))}>上一页</button>
+                <span>{continuityPage + 1} / {continuityPageCount}</span>
+                <button type="button" disabled={continuityPage + 1 >= continuityPageCount} onClick={() => setContinuityPage((page) => Math.min(continuityPageCount - 1, page + 1))}>下一页</button>
+              </footer>
+            ) : null}
+          </section>
+        ) : null}
+
+        {(selectedNode.id === 'video-director' || selectedNode.id === 'quality-controller') && project.continuityGraph.shots.length ? (
+          <section className="aq-continuity-review" aria-label="镜头人工复核">
+            <header>
+              <div><span>镜头人工复核</span><small>未校准 · 人工决定</small></div>
+              <b>{continuitySummary.approvedShots}/{continuitySummary.shots} 已接受</b>
+            </header>
+            <label>
+              <span>镜头</span>
+              <select value={continuityShot?.id ?? ''} onChange={(event) => setContinuityShotId(event.target.value)}>
+                {project.continuityGraph.shots.map((shot) => <option key={shot.id} value={shot.id}>{shot.label} · {shot.status}</option>)}
+              </select>
+            </label>
+            {continuityShot ? (
+              <>
+                {continuityShot.characterBindings.map((binding) => {
+                  const character = project.continuityGraph.characters.find(({ id }) => id === binding.characterId)
+                  const wardrobes = project.continuityGraph.wardrobes.filter(({ characterId }) => characterId === binding.characterId)
+                  return (
+                    <label key={binding.characterId}>
+                      <span>{character?.name ?? '角色'}服饰</span>
+                      <select value={binding.wardrobeId} onChange={(event) => execute('continuity.wardrobe.assign', { shotId: continuityShot.id, characterId: binding.characterId, wardrobeId: event.target.value }, '已切换镜头服饰；旧复核如受影响已自动失效。')}>
+                        {wardrobes.map((wardrobe) => <option key={wardrobe.id} value={wardrobe.id}>{wardrobe.label} · {wardrobe.status}</option>)}
+                      </select>
+                    </label>
+                  )
+                })}
+                <div className="aq-continuity-score-grid">
+                  {REVIEW_DIMENSIONS.map(([key, label]) => (
+                    <label key={key}><span>{label}</span><input type="number" min={0} max={5} step={0.1} value={reviewScores[key]} onChange={(event) => {
+                      const score = event.currentTarget.valueAsNumber
+                      if (!Number.isFinite(score)) return
+                      setReviewScores((scores) => ({ ...scores, [key]: Math.max(0, Math.min(5, Math.round(score * 10) / 10)) }))
+                    }} /></label>
+                  ))}
+                </div>
+                <label><span>人工结论</span><select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as 'accept' | 'retry')}><option value="accept">接受镜头</option><option value="retry">定向重生</option></select></label>
+                <label><span>复核备注</span><textarea value={reviewNotes} maxLength={2_000} placeholder="说明接受依据或需要修正的具体问题" onChange={(event) => setReviewNotes(event.target.value)} /></label>
+                <button type="button" className="aq-continuity-submit" disabled={continuityShot.status === 'blocked'} onClick={submitContinuityReview}>{continuityShot.status === 'blocked' ? '必需资产尚未批准' : '记录人工结论'}</button>
+                {continuityLatestReview ? (
+                  <article className={`aq-continuity-review-result is-${continuityLatestReview.decision}`}>
+                    <strong>第 {continuityLatestReview.attempt} 次 · {continuityLatestReview.decision === 'accept' ? '已接受' : '需定向重生'}</strong>
+                    {continuityLatestReview.notes ? <p>{continuityLatestReview.notes}</p> : null}
+                    {continuityLatestReview.reasons.map((reason) => <small key={reason}>{reason}</small>)}
+                    {continuityLatestReview.recommendedActions.map((action) => <small key={action}>{action}</small>)}
+                  </article>
+                ) : null}
+              </>
+            ) : null}
           </section>
         ) : null}
 

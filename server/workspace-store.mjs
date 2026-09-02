@@ -12,8 +12,8 @@ import {
 } from '../src/lib/project/projectCatalog.mjs'
 import { assertGenerationPlan, assertStoryProject } from '../src/lib/story/storyProject.mjs'
 import {
-  assertVideoProductionProject,
   createVideoProductionProjectForStory,
+  migrateVideoProductionProject,
 } from '../src/lib/story/productionPipeline.mjs'
 
 export const WORKSPACE_STORE_SCHEMA_VERSION = 1
@@ -119,7 +119,7 @@ function normalizeSmartVideoDocument(value, documentId) {
     plan = assertGenerationPlan(parsed.plan, project)
     production = isLegacy
       ? createVideoProductionProjectForStory(project)
-      : assertVideoProductionProject(parsed.production)
+      : migrateVideoProductionProject(parsed.production, { story: project })
   } catch (error) {
     fail(error?.code || 'INVALID_MODE_DOCUMENT', error?.message || 'Smart video document is invalid')
   }

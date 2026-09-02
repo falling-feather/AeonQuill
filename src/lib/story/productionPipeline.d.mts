@@ -1,6 +1,7 @@
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from './storyProject.mjs'
+import type { VideoContinuityGraph } from './continuityGraph.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION: 2
+export const VIDEO_PRODUCTION_SCHEMA_VERSION: 3
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION: 1
 export const VIDEO_PRODUCTION_LIMITS: Readonly<{
   maxBriefCharacters: number
@@ -36,7 +37,7 @@ export type VideoProductionNode = {
 
 export type VideoProductionProject = {
   kind: 'aeonquill.video-production'
-  schemaVersion: 2
+  schemaVersion: 3
   id: string
   title: string
   brief: string
@@ -62,6 +63,7 @@ export type VideoProductionProject = {
   nodes: VideoProductionNode[]
   characterProfiles: Array<{
     id: string
+    storyCharacterId: string | null
     name: string
     role: string
     mode: VideoCharacterMode
@@ -72,6 +74,7 @@ export type VideoProductionProject = {
     revision: number
     updatedAt: number
   }>
+  continuityGraph: VideoContinuityGraph
   changeCards: Array<{
     id: string
     nodeId: string
@@ -98,6 +101,8 @@ export type VideoProductionCommandType =
   | 'node.start' | 'node.pause' | 'node.resume' | 'node.edit'
   | 'node.submit-review' | 'node.approve' | 'node.request-revision' | 'node.fail' | 'node.reset'
   | 'proposal.create' | 'proposal.accept' | 'proposal.reject'
+  | 'continuity.asset.bind' | 'continuity.asset.approve' | 'continuity.asset.unbind'
+  | 'continuity.wardrobe.assign' | 'continuity.review.record'
 
 export type VideoProductionCommand = {
   schemaVersion: 1
@@ -138,6 +143,8 @@ export function recommendProductionProfiles(input?: {
 }): { generationMode: VideoGenerationMode; characterMode: VideoCharacterMode; reasons: string[] }
 export function serializeVideoProductionProject(project: VideoProductionProject, options?: { pretty?: boolean }): string
 export function deserializeVideoProductionProject(serialized: string): VideoProductionProject
+export function migrateVideoProductionProject(input: unknown, options?: { now?: number; story?: unknown }): VideoProductionProject
+export function synchronizeVideoProductionProjectForStory(project: VideoProductionProject | unknown, story: unknown, options?: { now?: number }): VideoProductionProject
 export function assertVideoProductionCommand<T extends VideoProductionCommand>(command: T, project?: VideoProductionProject): T
 export function createVideoProductionCommand(
   project: VideoProductionProject,

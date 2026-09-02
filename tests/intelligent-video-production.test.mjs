@@ -186,12 +186,13 @@ test('migrates schema v1 production exports without losing node approvals', () =
   const legacy = structuredClone(current)
   legacy.schemaVersion = 1
   delete legacy.characterProfiles
+  delete legacy.continuityGraph
   delete legacy.changeCards
   delete legacy.settings.generationMode
   delete legacy.settings.characterMode
   delete legacy.settings.recommendation
   const restored = deserializeVideoProductionProject(JSON.stringify(legacy))
-  assert.equal(restored.schemaVersion, 2)
+  assert.equal(restored.schemaVersion, 3)
   assert.equal(restored.settings.generationMode, 'quality')
   assert.equal(restored.nodes[1].status, current.nodes[1].status)
   assert.equal(restored.characterProfiles.length, 1)

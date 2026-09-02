@@ -1,4 +1,17 @@
-export const VIDEO_PRODUCTION_SCHEMA_VERSION = 2
+import {
+  approveContinuityAsset,
+  assertContinuityAssetBinding,
+  assertVideoContinuityGraph,
+  assignContinuityWardrobe,
+  bindContinuityAsset,
+  continuityAssetProducerReady,
+  continuityVideoReviewReady,
+  createVideoContinuityGraph,
+  recordContinuityReview,
+  unbindContinuityAsset,
+} from './continuityGraph.mjs'
+
+export const VIDEO_PRODUCTION_SCHEMA_VERSION = 3
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION = 1
 
 export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
@@ -33,6 +46,11 @@ const COMMAND_TYPES = new Set([
   'proposal.create',
   'proposal.accept',
   'proposal.reject',
+  'continuity.asset.bind',
+  'continuity.asset.approve',
+  'continuity.asset.unbind',
+  'continuity.wardrobe.assign',
+  'continuity.review.record',
 ])
 
 const NODE_BLUEPRINTS = Object.freeze([
@@ -213,33 +231,81 @@ export function recommendProductionProfiles(input = {}) {
   return { generationMode, characterMode, reasons }
 }
 
-function createCharacterProfiles(characterMode, now, genre) {
+function createCharacterProfiles(characterMode, now, genre, story = null, previousProfiles = []) {
   const professional = characterMode === 'professional'
-  return [{
-    id: 'character-lead',
-    name: genre.includes('武侠') ? '沈砚' : '主角',
-    role: 'lead',
-    mode: characterMode,
-    status: 'draft',
-    identityLock: professional
+  const storyCharacters = Array.isArray(story?.characters) && story.characters.length
+    ? story.characters.slice(0, VIDEO_PRODUCTION_LIMITS.maxCharacters)
+    : previousProfiles.length
+      ? previousProfiles.slice(0, VIDEO_PRODUCTION_LIMITS.maxCharacters).map((profile) => ({
+          id: profile.storyCharacterId ?? null,
+          name: profile.name,
+          description: '',
+          visualPrompt: '',
+        }))
+      : [{
+          id: null,
+          name: genre.includes('武侠') ? '沈砚' : '主角',
+          description: '',
+          visualPrompt: '',
+        }]
+  return storyCharacters.map((storyCharacter, index) => {
+    const previous = previousProfiles.find((profile) => profile.storyCharacterId && profile.storyCharacterId === storyCharacter.id)
+      ?? previousProfiles.find((profile) => profile.name.trim().toLocaleLowerCase('zh-CN') === storyCharacter.name.trim().toLocaleLowerCase('zh-CN'))
+      ?? previousProfiles[index]
+    const profileId = previous?.id ?? (storyCharacter.id
+      ? `character-${stableToken(storyCharacter.id)}`
+      : index === 0 ? 'character-lead' : `character-${index + 1}`)
+    const desiredViews = !story && previous?.views?.length
+      ? previous.views.map(({ view }) => view)
+      : professional ? ['front', 'side', 'back'] : ['front']
+    const views = desiredViews.map((view) => {
+      const priorView = previous?.views?.find((item) => item.view === view)
+      return {
+        id: priorView?.id ?? `${profileId}-${view}`,
+        view,
+        status: priorView?.status ?? 'planned',
+        assetVersionId: priorView?.assetVersionId ?? null,
+      }
+    })
+    const desiredWardrobes = !story && previous?.wardrobeStates?.length
+      ? previous.wardrobeStates.map((wardrobe, wardrobeIndex) => ({ key: String(wardrobeIndex + 1), label: wardrobe.label, trigger: wardrobe.trigger }))
+      : professional
+        ? [
+            { key: 'base', label: '基础造型', trigger: '默认场景' },
+            { key: 'variant', label: '场景变体', trigger: '剧本声明换装/天气/受损时' },
+          ]
+        : [{ key: 'base', label: '基础造型', trigger: '全片复用' }]
+    const wardrobeStates = desiredWardrobes.map((wardrobe, wardrobeIndex) => {
+      const priorWardrobe = previous?.wardrobeStates?.find((item) => item.label === wardrobe.label)
+        ?? previous?.wardrobeStates?.[wardrobeIndex]
+      return {
+        id: priorWardrobe?.id ?? `${profileId}-wardrobe-${wardrobe.key}`,
+        label: wardrobe.label,
+        trigger: wardrobe.trigger,
+        status: priorWardrobe?.status ?? 'planned',
+        assetVersionId: priorWardrobe?.assetVersionId ?? null,
+      }
+    })
+    const storyIdentity = [storyCharacter.description, storyCharacter.visualPrompt].filter(Boolean).join('；')
+    const constraint = professional
       ? '脸型、发型、年龄、体态、主色与标志性道具不得跨镜头漂移。'
-      : '保留正面立绘中的主体轮廓、主色和标志物。',
-    views: (professional ? ['front', 'side', 'back'] : ['front']).map((view) => ({
-      id: `character-lead-${view}`,
-      view,
-      status: 'planned',
-      assetVersionId: null,
-    })),
-    wardrobeStates: (professional
-      ? [
-          { id: 'wardrobe-base', label: '基础造型', trigger: '默认场景' },
-          { id: 'wardrobe-variant', label: '场景变体', trigger: '剧本声明换装/天气/受损时' },
-        ]
-      : [{ id: 'wardrobe-base', label: '基础造型', trigger: '全片复用' }]
-    ).map((wardrobe) => ({ ...wardrobe, status: 'planned', assetVersionId: null })),
-    revision: 0,
-    updatedAt: now,
-  }]
+      : '保留正面立绘中的主体轮廓、主色和标志物。'
+    return {
+      id: profileId,
+      storyCharacterId: storyCharacter.id ?? null,
+      name: storyCharacter.name,
+      role: story ? (index === 0 ? 'lead' : 'supporting') : previous?.role ?? (index === 0 ? 'lead' : 'supporting'),
+      mode: characterMode,
+      status: previous?.status ?? 'draft',
+      identityLock: story
+        ? `${storyIdentity ? `${storyIdentity}；` : ''}${constraint}`.slice(0, 1_000)
+        : previous?.identityLock ?? constraint,
+      views,
+      wardrobeStates,
+      revision: previous?.revision ?? 0,
+      updatedAt: now,
+    }
+  })
 }
 
 function assertRecommendation(value, path) {
@@ -253,19 +319,26 @@ function assertRecommendation(value, path) {
 
 function assertCharacterProfile(value, path) {
   const profile = record(value, path)
-  knownFields(profile, new Set(['id', 'name', 'role', 'mode', 'status', 'identityLock', 'views', 'wardrobeStates', 'revision', 'updatedAt']), path)
+  knownFields(profile, new Set(['id', 'storyCharacterId', 'name', 'role', 'mode', 'status', 'identityLock', 'views', 'wardrobeStates', 'revision', 'updatedAt']), path)
   id(profile.id, `${path}.id`)
+  if (profile.storyCharacterId !== null) id(profile.storyCharacterId, `${path}.storyCharacterId`)
   string(profile.name, `${path}.name`, 1, 80)
   string(profile.role, `${path}.role`, 1, 40)
   if (!CHARACTER_MODES.has(profile.mode)) fail('INVALID_CHARACTER_MODE', `${path}.mode is unsupported`)
   if (!['draft', 'review', 'approved', 'revision'].includes(profile.status)) fail('INVALID_CHARACTER_STATUS', `${path}.status is unsupported`)
   string(profile.identityLock, `${path}.identityLock`, 1, 1_000)
   if (!Array.isArray(profile.views) || profile.views.length < 1 || profile.views.length > 8) fail('INVALID_CHARACTER_VIEWS', `${path}.views is invalid`)
+  const viewIds = new Set()
+  const viewTypes = new Set()
   for (const [index, viewInput] of profile.views.entries()) {
     const view = record(viewInput, `${path}.views[${index}]`)
     knownFields(view, new Set(['id', 'view', 'status', 'assetVersionId']), `${path}.views[${index}]`)
     id(view.id, `${path}.views[${index}].id`)
     if (!['front', 'side', 'back', 'expression', 'action'].includes(view.view)) fail('INVALID_CHARACTER_VIEW', `${path}.views[${index}].view is unsupported`)
+    if (viewIds.has(view.id)) fail('DUPLICATE_ID', `${path}.views contains duplicate id ${view.id}`)
+    if (viewTypes.has(view.view)) fail('DUPLICATE_CHARACTER_VIEW', `${path}.views contains duplicate view ${view.view}`)
+    viewIds.add(view.id)
+    viewTypes.add(view.view)
     if (!['planned', 'ready', 'approved'].includes(view.status)) fail('INVALID_CHARACTER_ASSET_STATUS', `${path}.views[${index}].status is unsupported`)
     if (view.assetVersionId !== null) id(view.assetVersionId, `${path}.views[${index}].assetVersionId`)
   }
@@ -273,10 +346,13 @@ function assertCharacterProfile(value, path) {
     fail('CHARACTER_CONSTRAINT_INCOMPLETE', `${path} professional mode requires front, side and back views`)
   }
   if (!Array.isArray(profile.wardrobeStates) || profile.wardrobeStates.length < 1 || profile.wardrobeStates.length > 12) fail('INVALID_WARDROBE_STATES', `${path}.wardrobeStates is invalid`)
+  const wardrobeIds = new Set()
   for (const [index, wardrobeInput] of profile.wardrobeStates.entries()) {
     const wardrobe = record(wardrobeInput, `${path}.wardrobeStates[${index}]`)
     knownFields(wardrobe, new Set(['id', 'label', 'trigger', 'status', 'assetVersionId']), `${path}.wardrobeStates[${index}]`)
     id(wardrobe.id, `${path}.wardrobeStates[${index}].id`)
+    if (wardrobeIds.has(wardrobe.id)) fail('DUPLICATE_ID', `${path}.wardrobeStates contains duplicate id ${wardrobe.id}`)
+    wardrobeIds.add(wardrobe.id)
     string(wardrobe.label, `${path}.wardrobeStates[${index}].label`, 1, 80)
     string(wardrobe.trigger, `${path}.wardrobeStates[${index}].trigger`, 1, 200)
     if (!['planned', 'ready', 'approved'].includes(wardrobe.status)) fail('INVALID_CHARACTER_ASSET_STATUS', `${path}.wardrobeStates[${index}].status is unsupported`)
@@ -429,7 +505,7 @@ function assertNode(input, path, knownIds) {
 
 export function assertVideoProductionProject(input) {
   const project = record(input, 'project')
-  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
+  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'continuityGraph', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
   if (project.kind !== PROJECT_KIND || project.schemaVersion !== VIDEO_PRODUCTION_SCHEMA_VERSION) fail('UNSUPPORTED_SCHEMA', 'Unsupported video production schema')
   id(project.id, 'project.id')
   string(project.title, 'project.title', 1, 120)
@@ -462,7 +538,34 @@ export function assertVideoProductionProject(input) {
   if (!Array.isArray(project.characterProfiles) || project.characterProfiles.length < 1 || project.characterProfiles.length > VIDEO_PRODUCTION_LIMITS.maxCharacters) fail('INVALID_CHARACTER_PROFILES', 'project.characterProfiles is invalid')
   project.characterProfiles.forEach((profile, index) => assertCharacterProfile(profile, `project.characterProfiles[${index}]`))
   if (new Set(project.characterProfiles.map(({ id: profileId }) => profileId)).size !== project.characterProfiles.length) fail('DUPLICATE_ID', 'project.characterProfiles contains duplicate ids')
+  const storyCharacterIds = project.characterProfiles.map(({ storyCharacterId }) => storyCharacterId).filter(Boolean)
+  if (new Set(storyCharacterIds).size !== storyCharacterIds.length) fail('DUPLICATE_STORY_CHARACTER', 'project.characterProfiles contains duplicate storyCharacterId values')
+  const nestedProfileIds = project.characterProfiles.flatMap((profile) => [
+    ...profile.views.map(({ id: viewId }) => viewId),
+    ...profile.wardrobeStates.map(({ id: wardrobeId }) => wardrobeId),
+  ])
+  if (new Set(nestedProfileIds).size !== nestedProfileIds.length) fail('DUPLICATE_ID', 'project.characterProfiles contains duplicate nested asset ids')
   if (project.characterProfiles.some(({ mode }) => mode !== settings.characterMode)) fail('CHARACTER_MODE_MISMATCH', 'Character profiles must match project.settings.characterMode')
+  assertVideoContinuityGraph(project.continuityGraph)
+  const profileIds = new Set(project.characterProfiles.map(({ id: profileId }) => profileId))
+  if (project.continuityGraph.characters.some(({ profileId }) => !profileIds.has(profileId))) fail('CONTINUITY_PROFILE_MISMATCH', 'Continuity characters must reference project.characterProfiles')
+  for (const character of project.continuityGraph.characters) {
+    const profile = project.characterProfiles.find(({ id: profileId }) => profileId === character.profileId)
+    for (const viewId of character.viewIds) {
+      const slot = project.continuityGraph.views.find(({ id: candidateId }) => candidateId === viewId)
+      const mirror = profile?.views.find(({ id: profileViewId }) => profileViewId === slot?.profileViewId)
+      if (!slot || !mirror || mirror.status !== slot.status || mirror.assetVersionId !== (slot.asset?.libraryVersionId ?? null)) {
+        fail('CONTINUITY_PROFILE_MISMATCH', `Continuity view ${viewId} does not match its character profile mirror`)
+      }
+    }
+    for (const wardrobeId of character.wardrobeIds) {
+      const slot = project.continuityGraph.wardrobes.find(({ id: candidateId }) => candidateId === wardrobeId)
+      const mirror = profile?.wardrobeStates.find(({ id: profileWardrobeId }) => profileWardrobeId === slot?.profileWardrobeId)
+      if (!slot || !mirror || mirror.status !== slot.status || mirror.assetVersionId !== (slot.asset?.libraryVersionId ?? null)) {
+        fail('CONTINUITY_PROFILE_MISMATCH', `Continuity wardrobe ${wardrobeId} does not match its character profile mirror`)
+      }
+    }
+  }
   if (!Array.isArray(project.changeCards) || project.changeCards.length > VIDEO_PRODUCTION_LIMITS.maxChangeCards) fail('INVALID_CHANGE_CARDS', 'project.changeCards is invalid')
   project.changeCards.forEach((card, index) => assertChangeCard(card, `project.changeCards[${index}]`, knownIds))
   if (new Set(project.changeCards.map(({ id: cardId }) => cardId)).size !== project.changeCards.length) fail('DUPLICATE_ID', 'project.changeCards contains duplicate ids')
@@ -506,6 +609,7 @@ export function createVideoProductionProject(input = {}) {
   const generationMinutesLow = shotCount * perShotLow
   const generationMinutesHigh = shotCount * perShotHigh
   const settings = { durationMinutes, genre, aspectRatio, sceneCount, shotCount, generationMode, characterMode }
+  const characterProfiles = createCharacterProfiles(characterMode, now, genre)
   const project = {
     kind: PROJECT_KIND,
     schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
@@ -531,7 +635,13 @@ export function createVideoProductionProject(input = {}) {
       stale: false,
       error: null,
     })),
-    characterProfiles: createCharacterProfiles(characterMode, now, genre),
+    characterProfiles,
+    continuityGraph: createVideoContinuityGraph({
+      characterProfiles,
+      generationMode,
+      characterMode,
+      now,
+    }),
     changeCards: [],
     globalPaused: false,
     autoAdvance: false,
@@ -560,7 +670,7 @@ function migrateVideoProductionProjectV1(value) {
   const characterMode = recommendation.characterMode
   return {
     ...value,
-    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    schemaVersion: 2,
     settings: {
       ...value.settings,
       generationMode: 'quality',
@@ -572,11 +682,53 @@ function migrateVideoProductionProjectV1(value) {
   }
 }
 
+function migrateVideoProductionProjectV2(value, options = {}) {
+  if (!isRecord(value) || value.schemaVersion !== 2 || value.kind !== PROJECT_KIND) return value
+  const now = options.now ?? value.updatedAt ?? Date.now()
+  const story = isRecord(options.story) ? options.story : null
+  const characterProfiles = createCharacterProfiles(
+    value.settings.characterMode,
+    now,
+    value.settings.genre,
+    story,
+    Array.isArray(value.characterProfiles) ? value.characterProfiles : [],
+  )
+  const migrated = {
+    ...value,
+    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    characterProfiles,
+    continuityGraph: createVideoContinuityGraph({
+      story,
+      characterProfiles,
+      generationMode: value.settings.generationMode,
+      characterMode: value.settings.characterMode,
+      now,
+    }),
+  }
+  synchronizeProfileAssetMirrors(migrated, now)
+  return migrated
+}
+
+export function migrateVideoProductionProject(input, options = {}) {
+  const migratedV2 = migrateVideoProductionProjectV1(input)
+  const migratedV3 = migrateVideoProductionProjectV2(migratedV2, options)
+  const result = clone(assertVideoProductionProject(migratedV3))
+  if (isRecord(options.story) && (
+    result.continuityGraph.storyProjectId !== options.story.id
+    || result.continuityGraph.storyRevision !== options.story.revision
+  )) {
+    return synchronizeVideoProductionProjectForStory(result, options.story, {
+      now: options.now ?? Math.max(Date.now(), result.updatedAt),
+    })
+  }
+  return result
+}
+
 export function deserializeVideoProductionProject(serialized) {
   if (typeof serialized !== 'string') fail('INVALID_SERIALIZED_PROJECT', 'Serialized production project must be a string')
   let parsed
   try { parsed = JSON.parse(serialized) } catch { fail('INVALID_JSON', 'Serialized production project is not valid JSON') }
-  return clone(assertVideoProductionProject(migrateVideoProductionProjectV1(parsed)))
+  return migrateVideoProductionProject(parsed)
 }
 
 export function createVideoProductionProjectForStory(storyInput, options = {}) {
@@ -589,7 +741,7 @@ export function createVideoProductionProjectForStory(storyInput, options = {}) {
     : 0), 0)
   const durationMinutes = Math.max(1, Math.min(VIDEO_PRODUCTION_LIMITS.maxDurationMinutes, Math.ceil(totalSeconds / 60)))
   const brief = String(source.text ?? story.title ?? '智能视频项目').slice(0, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
-  return createVideoProductionProject({
+  const production = createVideoProductionProject({
     title: String(story.title ?? '智能视频项目').slice(0, 120),
     brief,
     durationMinutes,
@@ -599,6 +751,40 @@ export function createVideoProductionProjectForStory(storyInput, options = {}) {
     characterMode: options.characterMode,
     now: options.now ?? story.createdAt ?? Date.now(),
   })
+  return synchronizeVideoProductionProjectForStory(production, story, { now: options.now ?? story.createdAt ?? Date.now() })
+}
+
+export function synchronizeVideoProductionProjectForStory(projectInput, storyInput, options = {}) {
+  const story = record(storyInput, 'story')
+  const source = record(story.source, 'story.source')
+  record(story.settings, 'story.settings')
+  if (!Array.isArray(story.characters) || !Array.isArray(story.locations) || !Array.isArray(story.scenes)) fail('INVALID_STORY_PROJECT', 'story must contain characters, locations and scenes')
+  const project = projectInput?.schemaVersion === VIDEO_PRODUCTION_SCHEMA_VERSION
+    ? clone(assertVideoProductionProject(projectInput))
+    : migrateVideoProductionProject(projectInput)
+  const now = integer(options.now ?? Date.now(), 'options.now', project.updatedAt, Number.MAX_SAFE_INTEGER)
+  const characterProfiles = createCharacterProfiles(
+    project.settings.characterMode,
+    now,
+    project.settings.genre,
+    story,
+    project.characterProfiles,
+  )
+  project.characterProfiles = characterProfiles
+  project.continuityGraph = createVideoContinuityGraph({
+    story,
+    characterProfiles,
+    generationMode: project.settings.generationMode,
+    characterMode: project.settings.characterMode,
+    now,
+    previous: project.continuityGraph,
+  })
+  project.title = String(story.title ?? project.title).slice(0, 120)
+  project.brief = String(source.text ?? project.brief).slice(0, VIDEO_PRODUCTION_LIMITS.maxBriefCharacters)
+  project.revision += 1
+  project.updatedAt = now
+  appendEvent(project, 'continuity.synchronized', null, '已将当前故事的角色、地点、镜头与首尾帧同步到连续性资产图。', now)
+  return assertVideoProductionProject(project)
 }
 
 export function createVideoProductionCommand(projectInput, type, payload = {}, options = {}) {
@@ -656,6 +842,41 @@ export function assertVideoProductionCommand(input, projectInput) {
     if (project && !project.changeCards.some((card) => card.id === payload.cardId)) fail('UNKNOWN_CHANGE_CARD', `Unknown change card ${payload.cardId}`)
     return command
   }
+  if (command.type === 'continuity.asset.bind') {
+    knownFields(payload, new Set(['targetId', 'binding']), 'command.payload')
+    id(payload.targetId, 'command.payload.targetId')
+    assertContinuityAssetBinding(payload.binding)
+    if (project && ![...project.continuityGraph.views, ...project.continuityGraph.wardrobes, ...project.continuityGraph.locations, ...project.continuityGraph.frames].some(({ id: targetId }) => targetId === payload.targetId)) {
+      fail('UNKNOWN_ASSET_TARGET', `Unknown continuity asset target ${payload.targetId}`)
+    }
+    return command
+  }
+  if (command.type === 'continuity.asset.approve' || command.type === 'continuity.asset.unbind') {
+    knownFields(payload, new Set(['targetId']), 'command.payload')
+    id(payload.targetId, 'command.payload.targetId')
+    if (project && ![...project.continuityGraph.views, ...project.continuityGraph.wardrobes, ...project.continuityGraph.locations, ...project.continuityGraph.frames].some(({ id: targetId }) => targetId === payload.targetId)) {
+      fail('UNKNOWN_ASSET_TARGET', `Unknown continuity asset target ${payload.targetId}`)
+    }
+    return command
+  }
+  if (command.type === 'continuity.wardrobe.assign') {
+    knownFields(payload, new Set(['shotId', 'characterId', 'wardrobeId']), 'command.payload')
+    id(payload.shotId, 'command.payload.shotId')
+    id(payload.characterId, 'command.payload.characterId')
+    id(payload.wardrobeId, 'command.payload.wardrobeId')
+    if (project) {
+      const shot = project.continuityGraph.shots.find(({ id: shotId }) => shotId === payload.shotId)
+      if (!shot) fail('UNKNOWN_SHOT', `Unknown continuity shot ${payload.shotId}`)
+      if (!shot.characterBindings.some(({ characterId }) => characterId === payload.characterId)) fail('SHOT_CHARACTER_NOT_BOUND', `${payload.shotId} does not use ${payload.characterId}`)
+      if (!project.continuityGraph.wardrobes.some(({ id: wardrobeId, characterId }) => wardrobeId === payload.wardrobeId && characterId === payload.characterId)) fail('WARDROBE_CHARACTER_MISMATCH', `${payload.wardrobeId} does not belong to ${payload.characterId}`)
+    }
+    return command
+  }
+  if (command.type === 'continuity.review.record') {
+    knownFields(payload, new Set(['shotId', 'reviewerId', 'scores', 'decision', 'notes']), 'command.payload')
+    recordContinuityReview(project?.continuityGraph ?? fail('PROJECT_REQUIRED', 'A project is required to validate a continuity review'), payload, { now: project.updatedAt })
+    return command
+  }
   knownFields(payload, new Set(command.type === 'node.edit'
     ? ['nodeId', 'instructions', 'outputSummary']
     : command.type === 'node.submit-review'
@@ -693,6 +914,40 @@ export function createVideoProductionProposalCommand(projectInput, nodeId, propo
 
 function requireStatus(node, statuses, action) {
   if (!statuses.includes(node.status)) fail('INVALID_TRANSITION', `${node.title} cannot ${action} from ${node.status}`, { nodeId: node.id, status: node.status })
+}
+
+function synchronizeProfileAssetMirrors(project, now) {
+  const views = new Map(project.continuityGraph.views.map((view) => [view.profileViewId, view]))
+  const wardrobes = new Map(project.continuityGraph.wardrobes.map((wardrobe) => [wardrobe.profileWardrobeId, wardrobe]))
+  for (const profile of project.characterProfiles) {
+    let changed = false
+    for (const profileView of profile.views) {
+      const slot = views.get(profileView.id)
+      if (!slot) continue
+      const assetVersionId = slot.asset?.libraryVersionId ?? null
+      if (profileView.status !== slot.status || profileView.assetVersionId !== assetVersionId) changed = true
+      profileView.status = slot.status
+      profileView.assetVersionId = assetVersionId
+    }
+    for (const profileWardrobe of profile.wardrobeStates) {
+      const slot = wardrobes.get(profileWardrobe.id)
+      if (!slot) continue
+      const assetVersionId = slot.asset?.libraryVersionId ?? null
+      if (profileWardrobe.status !== slot.status || profileWardrobe.assetVersionId !== assetVersionId) changed = true
+      profileWardrobe.status = slot.status
+      profileWardrobe.assetVersionId = assetVersionId
+    }
+    if (changed) {
+      const slots = [...profile.views, ...profile.wardrobeStates]
+      profile.status = slots.every(({ status }) => status === 'approved')
+        ? 'approved'
+        : slots.some(({ status }) => status !== 'planned')
+          ? 'review'
+          : 'draft'
+      profile.revision += 1
+      profile.updatedAt = now
+    }
+  }
 }
 
 export function applyVideoProductionCommand(projectInput, commandInput, options = {}) {
@@ -769,6 +1024,12 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
     case 'node.approve':
       requireStatus(node, ['review'], 'approve')
       if (!node.outputSummary.trim()) fail('EMPTY_OUTPUT', `${node.title} has no output to approve`)
+      if (node.id === 'asset-producer' && !continuityAssetProducerReady(next.continuityGraph)) {
+        fail('CONTINUITY_ASSETS_INCOMPLETE', '角色、服饰、地点与必需首尾帧尚未全部绑定并批准')
+      }
+      if (node.id === 'video-director' && !continuityVideoReviewReady(next.continuityGraph)) {
+        fail('CONTINUITY_REVIEW_INCOMPLETE', '仍有镜头未完成人工连续性复核，或被标记为定向重生')
+      }
       node.status = 'approved'
       node.stale = false
       appendEvent(next, 'node.approved', node.id, `${node.title}已由用户批准。`, now)
@@ -858,6 +1119,29 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       appendEvent(next, 'proposal.rejected', card.nodeId, `已拒绝变更卡“${card.title}”；正式节点未改变。`, now)
       break
     }
+    case 'continuity.asset.bind':
+      next.continuityGraph = bindContinuityAsset(next.continuityGraph, payload.targetId, payload.binding, { now })
+      synchronizeProfileAssetMirrors(next, now)
+      appendEvent(next, 'continuity.asset-bound', 'asset-producer', `已绑定连续性资产槽位 ${payload.targetId}，等待人工批准。`, now)
+      break
+    case 'continuity.asset.approve':
+      next.continuityGraph = approveContinuityAsset(next.continuityGraph, payload.targetId, { now })
+      synchronizeProfileAssetMirrors(next, now)
+      appendEvent(next, 'continuity.asset-approved', 'asset-producer', `已批准连续性资产槽位 ${payload.targetId}。`, now)
+      break
+    case 'continuity.asset.unbind':
+      next.continuityGraph = unbindContinuityAsset(next.continuityGraph, payload.targetId, { now })
+      synchronizeProfileAssetMirrors(next, now)
+      appendEvent(next, 'continuity.asset-unbound', 'asset-producer', `已移除连续性资产槽位 ${payload.targetId}；受影响镜头复核已失效。`, now)
+      break
+    case 'continuity.wardrobe.assign':
+      next.continuityGraph = assignContinuityWardrobe(next.continuityGraph, payload.shotId, payload.characterId, payload.wardrobeId, { now })
+      appendEvent(next, 'continuity.wardrobe-assigned', 'asset-producer', `镜头 ${payload.shotId} 已切换服饰状态；受影响复核已失效。`, now)
+      break
+    case 'continuity.review.record':
+      next.continuityGraph = recordContinuityReview(next.continuityGraph, payload, { now })
+      appendEvent(next, 'continuity.review-recorded', 'video-director', `镜头 ${payload.shotId} 已记录人工${payload.decision === 'accept' ? '接受' : '定向重生'}结论。`, now)
+      break
     default:
       fail('UNKNOWN_COMMAND', `Unsupported production command ${command.type}`)
   }
@@ -912,18 +1196,23 @@ export function productionProgress(projectInput) {
   const current = project.nodes.find((node) => ['running', 'paused', 'review', 'revision', 'failed'].includes(node.status))
     ?? project.nodes.find((node) => node.status === 'ready')
     ?? project.nodes.at(-1)
+  const continuityBlocker = current?.id === 'asset-producer' && current.status === 'review' && !continuityAssetProducerReady(project.continuityGraph)
+    ? '连续性资产尚未全部绑定并批准'
+    : current?.id === 'video-director' && current.status === 'review' && !continuityVideoReviewReady(project.continuityGraph)
+      ? '镜头人工复核尚未全部接受'
+      : null
   return {
     approved,
     total: project.nodes.length,
     percent: Math.round((approved / project.nodes.length) * 100),
     currentNodeId: current?.id ?? null,
-    blocker: current?.status === 'review'
+    blocker: continuityBlocker ?? (current?.status === 'review'
       ? `${current.title}待用户审批`
       : current?.status === 'failed'
         ? `${current.title}执行失败`
         : project.globalPaused
           ? '全链路已暂停'
-          : null,
+          : null),
   }
 }
 

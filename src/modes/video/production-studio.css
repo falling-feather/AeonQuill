@@ -1103,6 +1103,220 @@
   background: #6553f5;
 }
 
+.aq-continuity-assets,
+.aq-continuity-review {
+  display: grid;
+  gap: 10px;
+  margin-top: 15px;
+  padding: 12px;
+  border: 1px solid #dddaf8;
+  border-radius: 10px;
+  background: #faf9ff;
+}
+
+.aq-continuity-assets > header,
+.aq-continuity-review > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-continuity-assets > header div,
+.aq-continuity-review > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.aq-continuity-assets > header span,
+.aq-continuity-review > header span {
+  color: #373246;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.aq-continuity-assets > header small,
+.aq-continuity-review > header small,
+.aq-continuity-assets > p {
+  color: #777286;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.aq-continuity-assets > header b,
+.aq-continuity-review > header b {
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #73580e;
+  background: #fff3c9;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.aq-continuity-assets > p {
+  margin: 0;
+  padding: 8px;
+  border-radius: 7px;
+  background: #f0eefc;
+}
+
+.aq-continuity-filter,
+.aq-continuity-review > label,
+.aq-continuity-score-grid label {
+  display: grid;
+  gap: 4px;
+  color: #767180;
+  font-size: 8px;
+}
+
+.aq-continuity-filter select,
+.aq-continuity-review select,
+.aq-continuity-review input,
+.aq-continuity-review textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #dcd9e9;
+  border-radius: 7px;
+  color: #373341;
+  background: #fff;
+  font-size: 9px;
+}
+
+.aq-continuity-review textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.aq-continuity-slot-list {
+  display: grid;
+  gap: 7px;
+}
+
+.aq-continuity-slot-list > article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #e4e1ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aq-continuity-slot-list > article.is-target {
+  border-color: #6553f5;
+  box-shadow: 0 0 0 2px #6553f51a;
+}
+
+.aq-continuity-slot-list > article > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.aq-continuity-slot-list strong,
+.aq-continuity-slot-list small,
+.aq-continuity-slot-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-continuity-slot-list strong {
+  color: #3a3642;
+  font-size: 9px;
+}
+
+.aq-continuity-slot-list small,
+.aq-continuity-slot-list code {
+  color: #85808d;
+  font-size: 7px;
+}
+
+.aq-continuity-slot-list > article > span {
+  align-self: start;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #8a6b18;
+  background: #fff2cd;
+  font-size: 7px;
+}
+
+.aq-continuity-slot-list > article.is-approved > span {
+  color: #287452;
+  background: #e6f7ef;
+}
+
+.aq-continuity-slot-list footer {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aq-continuity-slot-list button,
+.aq-continuity-pagination button,
+.aq-continuity-submit {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #d7d3e5;
+  border-radius: 6px;
+  color: #625b72;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-continuity-slot-list button.is-selected,
+.aq-continuity-slot-list button.is-approve,
+.aq-continuity-submit {
+  color: #fff;
+  border-color: #6553f5;
+  background: #6553f5;
+}
+
+.aq-continuity-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #777286;
+  font-size: 8px;
+}
+
+.aq-continuity-pagination button:disabled,
+.aq-continuity-submit:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.aq-continuity-score-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.aq-continuity-review-result {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid #d8eadf;
+  border-radius: 8px;
+  color: #3e7058;
+  background: #f1f9f5;
+  font-size: 8px;
+}
+
+.aq-continuity-review-result.is-retry {
+  color: #98543c;
+  border-color: #f0d4c9;
+  background: #fff6f2;
+}
+
+.aq-continuity-review-result p {
+  margin: 0;
+}
+
 .aq-production-runtime-note {
   display: flex;
   gap: 8px;
@@ -1260,5 +1474,9 @@
 
   .aq-production-node-actions {
     grid-template-columns: 1fr;
+  }
+
+  .aq-continuity-score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
