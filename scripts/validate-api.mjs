@@ -120,11 +120,16 @@ try {
 
   const workflowCenter = await requestJson(bridge.baseUrl, '/api/workflow-center/catalog?refresh=1')
   assert.equal(workflowCenter.version, 'aeonquill-workflow-center-v2')
-  assert.equal(workflowCenter.packs.length, 5)
+  assert.equal(workflowCenter.packs.length, 6)
   const h3QualityPack = workflowCenter.packs.find(({ id }) => id === 'h3-quality-int8')
   assert.equal(h3QualityPack.minVramGb, 8)
   assert.equal(h3QualityPack.license.acceptanceRequired, true)
   assert.equal(h3QualityPack.license.redistribution, 'not-bundled-by-aeonquill')
+  const qwenEditPack = workflowCenter.packs.find(({ id }) => id === 'qwen-edit-2511-quality')
+  assert.equal(qwenEditPack.minVramGb, 8)
+  assert.equal(qwenEditPack.artifacts.length, 3)
+  assert.equal(qwenEditPack.artifacts.reduce((total, artifact) => total + artifact.bytes, 0), 30_137_560_750)
+  assert.equal(qwenEditPack.license.id, 'apache-2.0')
   assert.doesNotMatch(JSON.stringify(workflowCenter), /[A-Z]:\\\\|\\\\Users\\\\|"targetPath"/iu)
 
   const safeCustomInspection = await requestJson(bridge.baseUrl, '/api/workflow-center/custom/inspect', {

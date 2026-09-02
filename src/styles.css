@@ -2178,6 +2178,7 @@ textarea:focus-visible,
   gap: 2px;
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
   scrollbar-width: none;
 }
 
@@ -2880,7 +2881,8 @@ textarea:focus-visible,
   grid-template-columns: 82px minmax(0, 1fr);
 }
 
-.lab-select-setting select {
+.lab-select-setting select,
+.lab-select-setting input {
   width: 100%;
   height: 34px;
   padding: 0 8px;
@@ -2892,8 +2894,44 @@ textarea:focus-visible,
   font-size: 9px;
 }
 
-.lab-select-setting select:focus {
+.lab-select-setting select:focus,
+.lab-select-setting input:focus {
   border-color: var(--accent);
+}
+
+.lab-prompt-setting {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  color: #52565f;
+  font-size: 9px;
+}
+
+.lab-prompt-setting textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  padding: 9px 10px 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: 0;
+  color: #343740;
+  background: #fff;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.lab-prompt-setting textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.lab-prompt-setting small {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  color: #989ba3;
+  font-variant-numeric: tabular-nums;
 }
 
 .lab-toggle-setting {

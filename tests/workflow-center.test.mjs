@@ -108,7 +108,7 @@ function fixturePack({ url, payload, manual = false }) {
 
 test('builtin workflow catalog exposes exact install, license, and RTX 4060 requirements', () => {
   const packs = builtinWorkflowPacks()
-  assert.equal(packs.length, 5)
+  assert.equal(packs.length, 6)
   const quality = packs.find(({ id }) => id === 'h3-quality-int8')
   assert.equal(quality.minVramGb, 8)
   assert.equal(quality.runtime.torchCudaFloor, 130)
@@ -116,6 +116,12 @@ test('builtin workflow catalog exposes exact install, license, and RTX 4060 requ
   assert.equal(quality.license.redistribution, 'not-bundled-by-aeonquill')
   assert.equal(quality.artifacts.find(({ id }) => id === 'h3-fl2va-int8-convrot').sha256, 'e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a')
   assert.ok(packs.find(({ id }) => id === 'seedvr2-master720').artifacts.every(({ relativePath }) => relativePath.startsWith('models/')))
+  const qwen = packs.find(({ id }) => id === 'qwen-edit-2511-quality')
+  assert.equal(qwen.minVramGb, 8)
+  assert.equal(qwen.minSystemRamGb, 32)
+  assert.equal(qwen.license.spdx, 'Apache-2.0')
+  assert.equal(qwen.artifacts.length, 3)
+  assert.equal(qwen.artifacts.find(({ id }) => id === 'qwen-image-edit-2511-int8-convrot').sha256, '11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829')
 })
 
 test('resumes a controlled download, verifies SHA-256, atomically installs, and enables the pack', async () => {

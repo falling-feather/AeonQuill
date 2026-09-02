@@ -2,7 +2,7 @@ import type {
   ImageJobRequest,
   ImageToolManifest,
   ProcessingJob,
-  SemanticElementExtractRequest,
+  SemanticImageRequest,
   SemanticWorkflowManifest,
 } from '../types'
 import { ensureLocalSession } from './videoApi'
@@ -51,7 +51,7 @@ export async function createImageJob(request: ImageJobRequest) {
   return payload.job
 }
 
-export async function createSemanticElementJob(request: SemanticElementExtractRequest) {
+export async function createSemanticImageJob(request: SemanticImageRequest) {
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/semantic-image', {
     method: 'POST',
     headers: {
@@ -62,3 +62,5 @@ export async function createSemanticElementJob(request: SemanticElementExtractRe
   })
   return payload.job
 }
+
+export const createSemanticElementJob = createSemanticImageJob

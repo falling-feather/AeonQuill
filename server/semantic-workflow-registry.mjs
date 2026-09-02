@@ -1,8 +1,21 @@
 import { stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
+import {
+  QWEN_SEMANTIC_MODELS,
+  QWEN_SEMANTIC_WORKFLOW_VERSION,
+} from './semantic-image-workflow.mjs'
 
-export const SEMANTIC_WORKFLOW_CATALOG_VERSION = 'semantic-image-v1'
+export const SEMANTIC_WORKFLOW_CATALOG_VERSION = 'semantic-image-v2'
 export const SEMANTIC_ELEMENT_EXTRACT_OPERATION = 'semantic-element-extract'
+export const SEMANTIC_REGION_EDIT_OPERATION = 'semantic-region-edit'
+export const SEMANTIC_POINT_EDIT_OPERATION = 'semantic-point-edit'
+export const SEMANTIC_PORTRAIT_ADJUST_OPERATION = 'semantic-portrait-adjust'
+
+export const SEMANTIC_QWEN_OPERATIONS = Object.freeze(new Set([
+  SEMANTIC_REGION_EDIT_OPERATION,
+  SEMANTIC_POINT_EDIT_OPERATION,
+  SEMANTIC_PORTRAIT_ADJUST_OPERATION,
+]))
 
 const EXTENSIONS = {
   'impact-pack': ['custom_nodes/ComfyUI-Impact-Pack', 'custom_nodes/comfyui-impact-pack'],
@@ -18,6 +31,18 @@ const ARTIFACTS = {
   'sam-vit-b': {
     candidates: ['models/sams/sam_vit_b_01ec64.pth'],
     minBytes: 350_000_000,
+  },
+  'qwen-image-edit-2511-int8': {
+    candidates: [`models/diffusion_models/${QWEN_SEMANTIC_MODELS.diffusion}`],
+    minBytes: 20_000_000_000,
+  },
+  'qwen-image-text-encoder-fp8': {
+    candidates: [`models/text_encoders/${QWEN_SEMANTIC_MODELS.textEncoder}`],
+    minBytes: 9_000_000_000,
+  },
+  'qwen-image-vae': {
+    candidates: [`models/vae/${QWEN_SEMANTIC_MODELS.vae}`],
+    minBytes: 250_000_000,
   },
   'flux-kontext-model': {
     candidates: [
@@ -88,91 +113,120 @@ const DEFINITIONS = [
   },
   {
     id: 'region-edit',
-    version: 'flux-kontext-region-v0',
+    operation: SEMANTIC_REGION_EDIT_OPERATION,
+    version: QWEN_SEMANTIC_WORKFLOW_VERSION,
     label: '元素 / 区域编辑',
-    description: '使用受控 Flux Kontext 与局部合成模板修改选定区域，保持未选区域可追踪。',
-    maturity: 'experimental',
-    implemented: false,
-    executor: { kind: 'comfy-workflow', adapter: 'flux-kontext-region-v0' },
-    requiredExtensions: ['gguf-loader', 'crop-and-stitch'],
-    requiredArtifacts: ['flux-kontext-model', 'flux-t5', 'flux-clip-l', 'flux-vae'],
+    description: '使用 Qwen Image Edit 2511 与受控蒙版合成修改选定区域，未选区域直接保留原图像素。',
+    maturity: 'preview',
+    implemented: true,
+    executor: { kind: 'comfy-workflow', adapter: QWEN_SEMANTIC_WORKFLOW_VERSION },
+    requiredExtensions: [],
+    requiredArtifacts: ['qwen-image-edit-2511-int8', 'qwen-image-text-encoder-fp8', 'qwen-image-vae'],
     requiredNodes: [
       'LoadImage',
       'UNETLoader',
-      'UnetLoaderGGUF',
-      'DualCLIPLoader',
+      'ModelSamplingAuraFlow',
+      'CFGNorm',
+      'CLIPLoader',
       'VAELoader',
-      'CLIPTextEncode',
       'FluxKontextImageScale',
-      'ReferenceLatent',
-      'SamplerCustomAdvanced',
+      'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod',
+      'VAEEncode',
+      'KSampler',
       'VAEDecode',
+      'ImageToMask',
+      'ImageCompositeMasked',
       'SaveImage',
     ],
     allowedNodeTypes: [
       'LoadImage',
       'UNETLoader',
-      'UnetLoaderGGUF',
-      'DualCLIPLoader',
+      'ModelSamplingAuraFlow',
+      'CFGNorm',
+      'CLIPLoader',
       'VAELoader',
-      'CLIPTextEncode',
-      'FluxGuidance',
       'FluxKontextImageScale',
-      'ReferenceLatent',
+      'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod',
       'VAEEncode',
-      'EmptySD3LatentImage',
-      'ModelSamplingFlux',
-      'RandomNoise',
-      'KSamplerSelect',
-      'BasicScheduler',
-      'BasicGuider',
-      'SamplerCustomAdvanced',
+      'KSampler',
       'VAEDecode',
+      'ImageToMask',
+      'ImageCompositeMasked',
       'SaveImage',
     ],
-    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 12, timeoutSeconds: 1_800 },
+    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 8, timeoutSeconds: 3_600 },
     inputs: {
       sourceImage: { type: 'image', required: true },
       mask: { type: 'mask', required: true },
       instruction: { type: 'string', minLength: 2, maxLength: 2_000 },
       seed: { type: 'integer', min: 0, max: Number.MAX_SAFE_INTEGER },
+      maskChannel: { type: 'enum', values: ['alpha', 'luma'], default: 'alpha' },
     },
     outputs: ['edited-image'],
   },
   {
     id: 'point-edit',
-    version: 'sam-kontext-point-v0',
+    operation: SEMANTIC_POINT_EDIT_OPERATION,
+    version: QWEN_SEMANTIC_WORKFLOW_VERSION,
     label: '定点修改',
-    description: '把点击提示编译为蒙版，再进入受控局部编辑与合成流程。',
-    maturity: 'planned',
-    implemented: false,
-    executor: { kind: 'composite', adapter: 'sam-kontext-point-v0' },
-    requiredExtensions: ['impact-pack', 'gguf-loader', 'crop-and-stitch'],
-    requiredArtifacts: ['sam-vit-b', 'flux-kontext-model', 'flux-t5', 'flux-clip-l', 'flux-vae'],
-    requiredNodes: ['SAMLoader', 'ReferenceLatent', 'SamplerCustomAdvanced', 'SaveImage'],
-    allowedNodeTypes: ['SAMLoader', 'ReferenceLatent', 'SamplerCustomAdvanced', 'SaveImage'],
-    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 12, timeoutSeconds: 2_100 },
+    description: '把正负点击通过本机 SAM 编译为蒙版，再进入 Qwen 2511 固定局部编辑与原图合成流程。',
+    maturity: 'preview',
+    implemented: true,
+    executor: { kind: 'composite', adapter: `impact-sam+${QWEN_SEMANTIC_WORKFLOW_VERSION}` },
+    requiredExtensions: ['impact-pack'],
+    requiredArtifacts: [
+      'sam-vit-b',
+      'qwen-image-edit-2511-int8',
+      'qwen-image-text-encoder-fp8',
+      'qwen-image-vae',
+    ],
+    requiredNodes: [
+      'SAMLoader', 'LoadImage', 'FluxKontextImageScale', 'UNETLoader', 'ModelSamplingAuraFlow',
+      'CFGNorm', 'CLIPLoader', 'VAELoader', 'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod', 'VAEEncode', 'KSampler', 'VAEDecode',
+      'ImageToMask', 'ImageCompositeMasked', 'SaveImage',
+    ],
+    allowedNodeTypes: [
+      'SAMLoader', 'LoadImage', 'FluxKontextImageScale', 'UNETLoader', 'ModelSamplingAuraFlow',
+      'CFGNorm', 'CLIPLoader', 'VAELoader', 'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod', 'VAEEncode', 'KSampler', 'VAEDecode',
+      'ImageToMask', 'ImageCompositeMasked', 'SaveImage',
+    ],
+    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 8, timeoutSeconds: 3_900 },
     inputs: {
       sourceImage: { type: 'image', required: true },
       positivePoints: { type: 'normalized-points', minItems: 1, maxItems: 32 },
       negativePoints: { type: 'normalized-points', minItems: 0, maxItems: 32 },
       instruction: { type: 'string', minLength: 2, maxLength: 2_000 },
+      threshold: { type: 'number', min: 0.5, max: 0.99, default: 0.9 },
+      seed: { type: 'integer', min: 0, max: Number.MAX_SAFE_INTEGER },
     },
     outputs: ['edited-image', 'alpha-mask'],
   },
   {
     id: 'portrait-adjust',
-    version: 'impact-faceid-v0',
+    operation: SEMANTIC_PORTRAIT_ADJUST_OPERATION,
+    version: QWEN_SEMANTIC_WORKFLOW_VERSION,
     label: '人像调整',
-    description: '面向人脸局部细化、表情与身份约束的实验工作流；模型许可和真实人像基准完成前不开放执行。',
-    maturity: 'planned',
-    implemented: false,
-    executor: { kind: 'comfy-workflow', adapter: 'impact-faceid-v0' },
-    requiredExtensions: ['impact-pack', 'ipadapter'],
-    requiredArtifacts: ['portrait-detector', 'portrait-ipadapter', 'portrait-clip-vision'],
-    requiredNodes: ['FaceDetailer', 'SAMLoader', 'IPAdapterAdvanced'],
-    allowedNodeTypes: ['FaceDetailer', 'SAMLoader', 'IPAdapterAdvanced', 'LoadImage', 'SaveImage'],
-    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 12, timeoutSeconds: 1_800 },
+    description: '使用 Qwen Image Edit 2511 的人物一致性能力进行表情、服饰与光线调整，并写入身份约束来源。',
+    maturity: 'experimental',
+    implemented: true,
+    executor: { kind: 'comfy-workflow', adapter: QWEN_SEMANTIC_WORKFLOW_VERSION },
+    requiredExtensions: [],
+    requiredArtifacts: ['qwen-image-edit-2511-int8', 'qwen-image-text-encoder-fp8', 'qwen-image-vae'],
+    requiredNodes: [
+      'LoadImage', 'FluxKontextImageScale', 'UNETLoader', 'ModelSamplingAuraFlow', 'CFGNorm',
+      'CLIPLoader', 'VAELoader', 'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod', 'VAEEncode', 'KSampler', 'VAEDecode', 'SaveImage',
+    ],
+    allowedNodeTypes: [
+      'LoadImage', 'FluxKontextImageScale', 'UNETLoader', 'ModelSamplingAuraFlow', 'CFGNorm',
+      'CLIPLoader', 'VAELoader', 'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod', 'VAEEncode', 'KSampler', 'VAEDecode', 'SaveImage',
+    ],
+    resources: { class: 'gpu', minVramGb: 8, recommendedVramGb: 8, timeoutSeconds: 3_600 },
     inputs: {
       sourceImage: { type: 'image', required: true },
       instruction: { type: 'string', minLength: 2, maxLength: 1_000 },
@@ -349,46 +403,177 @@ function normalizedPoints(value, label) {
   })
 }
 
-export function validateElementExtractRequest(body) {
-  assertOnlyKeys(body, ['workflowId', 'sourceImageDataUrl', 'sourceElementId', 'params'], 'request')
-  if (body.workflowId !== 'element-extract') {
-    throw Object.assign(new Error('Only the registered element-extract workflow is executable'), {
-      status: 400,
-      code: 'SEMANTIC_WORKFLOW_NOT_EXECUTABLE',
-    })
+const PROJECT_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
+const ASSET_ID = /^[a-f0-9]{64}$/u
+const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,/iu
+
+function semanticError(code, message, status = 400) {
+  throw Object.assign(new Error(message), { status, code })
+}
+
+function normalizeProjectId(value, required) {
+  if (value === undefined && !required) return undefined
+  if (typeof value !== 'string' || !PROJECT_ID.test(value)) {
+    semanticError('INVALID_SEMANTIC_PROJECT', 'Semantic workflow requires a valid project id')
   }
-  const params = body.params ?? {}
-  assertOnlyKeys(params, ['positivePoints', 'negativePoints', 'threshold'], 'params')
+  return value
+}
+
+function normalizeSource(body, prefix, { required = true } = {}) {
+  const dataField = `${prefix}ImageDataUrl`
+  const assetField = `${prefix}AssetId`
+  const dataUrl = body[dataField]
+  const assetId = body[assetField]
+  const count = Number(dataUrl !== undefined) + Number(assetId !== undefined)
+  if ((required && count !== 1) || (!required && count > 1)) {
+    semanticError(
+      'INVALID_SEMANTIC_INPUT',
+      `${prefix} image must use exactly one managed asset id or supported data URL`,
+    )
+  }
+  if (!count) return { kind: 'none' }
+  if (dataUrl !== undefined) {
+    if (typeof dataUrl !== 'string' || !IMAGE_DATA_URL.test(dataUrl)) {
+      semanticError('INVALID_SEMANTIC_INPUT', `${dataField} must be a PNG, JPEG or WebP data URL`)
+    }
+    return { kind: 'upload' }
+  }
+  if (typeof assetId !== 'string' || !ASSET_ID.test(assetId)) {
+    semanticError('INVALID_SEMANTIC_INPUT', `${assetField} must be a lowercase SHA-256 asset id`)
+  }
+  return { kind: 'asset', assetId }
+}
+
+function normalizeInstruction(value, maximum = 2_000) {
+  const instruction = typeof value === 'string' ? value.trim() : ''
+  if (instruction.length < 2 || instruction.length > maximum) {
+    semanticError('INVALID_SEMANTIC_INSTRUCTION', `instruction must contain 2-${maximum} characters`)
+  }
+  return instruction
+}
+
+function normalizeSeed(value) {
+  const seed = value === undefined ? 0 : Number(value)
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > Number.MAX_SAFE_INTEGER) {
+    semanticError('INVALID_SEMANTIC_SEED', 'seed must be a safe non-negative integer')
+  }
+  return seed
+}
+
+function normalizeThreshold(value) {
+  const threshold = value === undefined ? 0.9 : Number(value)
+  if (!Number.isFinite(threshold) || threshold < 0.5 || threshold > 0.99) {
+    semanticError('INVALID_SEMANTIC_THRESHOLD', 'threshold must be from 0.5 to 0.99')
+  }
+  return threshold
+}
+
+function normalizePointsParams(params, { instruction = false, seed = false } = {}) {
   const positivePoints = normalizedPoints(params.positivePoints, 'positivePoints')
   const negativePoints = normalizedPoints(params.negativePoints, 'negativePoints')
   if (!positivePoints.length) {
-    throw Object.assign(new Error('element-extract requires at least one positive point'), {
-      status: 400,
-      code: 'INVALID_SEMANTIC_POINTS',
-    })
+    semanticError('INVALID_SEMANTIC_POINTS', 'Semantic point workflow requires at least one positive point')
   }
   if (positivePoints.length + negativePoints.length > 32) {
-    throw Object.assign(new Error('element-extract accepts at most 32 points in total'), {
-      status: 400,
-      code: 'INVALID_SEMANTIC_POINTS',
-    })
-  }
-  const threshold = params.threshold === undefined ? 0.9 : Number(params.threshold)
-  if (!Number.isFinite(threshold) || threshold < 0.5 || threshold > 0.99) {
-    throw Object.assign(new Error('threshold must be from 0.5 to 0.99'), {
-      status: 400,
-      code: 'INVALID_SEMANTIC_THRESHOLD',
-    })
+    semanticError('INVALID_SEMANTIC_POINTS', 'Semantic point workflow accepts at most 32 points in total')
   }
   return {
-    operation: SEMANTIC_ELEMENT_EXTRACT_OPERATION,
-    workflowId: 'element-extract',
-    workflowVersion: 'impact-sam-v1',
-    params: { positivePoints, negativePoints, threshold },
+    positivePoints,
+    negativePoints,
+    threshold: normalizeThreshold(params.threshold),
+    ...(instruction ? { instruction: normalizeInstruction(params.instruction) } : {}),
+    ...(seed ? { seed: normalizeSeed(params.seed) } : {}),
+  }
+}
+
+function commonRequest(body, workflowId, operation, { projectRequired = true, maskRequired = false } = {}) {
+  const projectId = normalizeProjectId(body.projectId, projectRequired)
+  const source = normalizeSource(body, 'source')
+  const mask = normalizeSource(body, 'mask', { required: maskRequired })
+  if ((source.kind === 'asset' || mask.kind === 'asset') && !projectId) {
+    semanticError('INVALID_SEMANTIC_PROJECT', 'Managed semantic assets require project context')
+  }
+  const title = body.title === undefined ? undefined : String(body.title).trim()
+  if (title !== undefined && (!title || title.length > 120)) {
+    semanticError('INVALID_SEMANTIC_TITLE', 'Semantic output title must contain 1-120 characters')
+  }
+  return {
+    operation,
+    workflowId,
+    workflowVersion: workflowId === 'element-extract' ? 'impact-sam-v1' : QWEN_SEMANTIC_WORKFLOW_VERSION,
+    ...(projectId ? { projectId } : {}),
+    ...(source.assetId ? { sourceAssetId: source.assetId } : {}),
+    ...(mask.assetId ? { maskAssetId: mask.assetId } : {}),
+    ...(title ? { title } : {}),
     sourceElementId: typeof body.sourceElementId === 'string'
       ? body.sourceElementId.slice(0, 200)
       : undefined,
   }
+}
+
+export function validateSemanticImageRequest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    semanticError('INVALID_SEMANTIC_REQUEST', 'Semantic request must be an object')
+  }
+  const workflowId = body.workflowId
+  if (!DEFINITIONS.some((definition) => definition.id === workflowId && definition.implemented)) {
+    semanticError('SEMANTIC_WORKFLOW_NOT_EXECUTABLE', 'Semantic workflow is not registered for execution')
+  }
+  const commonKeys = ['workflowId', 'projectId', 'sourceImageDataUrl', 'sourceAssetId', 'sourceElementId', 'title', 'params']
+  const params = body.params ?? {}
+  if (workflowId === 'element-extract') {
+    assertOnlyKeys(body, commonKeys, 'request')
+    assertOnlyKeys(params, ['positivePoints', 'negativePoints', 'threshold'], 'params')
+    return {
+      ...commonRequest(body, workflowId, SEMANTIC_ELEMENT_EXTRACT_OPERATION, { projectRequired: false }),
+      params: normalizePointsParams(params),
+    }
+  }
+  if (workflowId === 'region-edit') {
+    assertOnlyKeys(body, [...commonKeys, 'maskImageDataUrl', 'maskAssetId'], 'request')
+    assertOnlyKeys(params, ['instruction', 'seed', 'maskChannel'], 'params')
+    const maskChannel = params.maskChannel === undefined ? 'alpha' : params.maskChannel
+    if (!['alpha', 'luma'].includes(maskChannel)) {
+      semanticError('INVALID_SEMANTIC_MASK', 'maskChannel must be alpha or luma')
+    }
+    return {
+      ...commonRequest(body, workflowId, SEMANTIC_REGION_EDIT_OPERATION, { maskRequired: true }),
+      params: {
+        instruction: normalizeInstruction(params.instruction),
+        seed: normalizeSeed(params.seed),
+        maskChannel,
+      },
+    }
+  }
+  if (workflowId === 'point-edit') {
+    assertOnlyKeys(body, commonKeys, 'request')
+    assertOnlyKeys(params, ['positivePoints', 'negativePoints', 'threshold', 'instruction', 'seed'], 'params')
+    return {
+      ...commonRequest(body, workflowId, SEMANTIC_POINT_EDIT_OPERATION),
+      params: normalizePointsParams(params, { instruction: true, seed: true }),
+    }
+  }
+  assertOnlyKeys(body, commonKeys, 'request')
+  assertOnlyKeys(params, ['instruction', 'identityStrength', 'seed'], 'params')
+  const identityStrength = params.identityStrength === undefined ? 0.8 : Number(params.identityStrength)
+  if (!Number.isFinite(identityStrength) || identityStrength < 0 || identityStrength > 1) {
+    semanticError('INVALID_SEMANTIC_IDENTITY_STRENGTH', 'identityStrength must be from 0 to 1')
+  }
+  return {
+    ...commonRequest(body, workflowId, SEMANTIC_PORTRAIT_ADJUST_OPERATION),
+    params: {
+      instruction: normalizeInstruction(params.instruction, 1_000),
+      identityStrength,
+      seed: normalizeSeed(params.seed),
+    },
+  }
+}
+
+export function validateElementExtractRequest(body) {
+  if (body?.workflowId !== 'element-extract') {
+    semanticError('SEMANTIC_WORKFLOW_NOT_EXECUTABLE', 'Only element-extract is accepted by this compatibility validator')
+  }
+  return validateSemanticImageRequest(body)
 }
 
 export function semanticWorkflowDefinitions() {

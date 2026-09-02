@@ -15,7 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   createImageJob,
-  createSemanticElementJob,
+  createSemanticImageJob,
   fetchImageTools,
   fetchSemanticWorkflows,
   normalizeImageSource,
@@ -71,6 +71,7 @@ export type ImageLabResult =
 type ImageLabProps = {
   element: CanvasElement
   initialMode: ImageLabMode
+  projectId?: string
   onClose: () => void
   onApply: (result: ImageLabResult) => void
   onJobUpdate: (job: ProcessingJob) => void
@@ -86,6 +87,9 @@ const modeDefinitions: Array<{
   { id: 'pixelate', label: '像素化', icon: Grid3X3 },
   { id: 'remove-background', label: '去背景', icon: Eraser },
   { id: 'element-extract', label: '元素提取', icon: ScanSearch },
+  { id: 'region-edit', label: '区域编辑', icon: Paintbrush },
+  { id: 'point-edit', label: '定点修改', icon: ScanSearch },
+  { id: 'portrait-adjust', label: '人像调整', icon: Sparkles },
   { id: 'region-adjust', label: '区域调整', icon: Paintbrush },
   { id: 'mask-refine', label: '蒙版修边', icon: Paintbrush },
   { id: 'upscale', label: '放大', icon: ImageUp },
@@ -122,6 +126,21 @@ const modeCopy: Record<ImageLabMode, {
     jobLabel: 'SAM 元素提取',
     previewLabel: '点击选择元素',
     chains: ['点击提示与坐标校验', 'SAM 语义分割', '透明元素与蒙版入库'],
+  },
+  'region-edit': {
+    jobLabel: 'Qwen 区域语义编辑',
+    previewLabel: '蒙版与编辑范围',
+    chains: ['校验原图与蒙版', 'Qwen 2511 质量采样', '蒙版合成与不可变入库'],
+  },
+  'point-edit': {
+    jobLabel: 'Qwen 定点修改',
+    previewLabel: '点击选择修改对象',
+    chains: ['SAM 点击转蒙版', 'Qwen 2511 质量采样', '选区合成与不可变入库'],
+  },
+  'portrait-adjust': {
+    jobLabel: 'Qwen 人像调整',
+    previewLabel: '身份约束输出',
+    chains: ['编译身份约束', 'Qwen 2511 质量采样', '人像派生版本入库'],
   },
   'region-adjust': {
     jobLabel: '语义区域调整',
@@ -253,6 +272,7 @@ function ToggleSetting({
 export function ImageLab({
   element,
   initialMode,
+  projectId,
   onClose,
   onApply,
   onJobUpdate,
@@ -305,6 +325,13 @@ export function ImageLab({
     negativePoints: SemanticPoint[]
   }>({ positivePoints: [], negativePoints: [] })
   const [semanticThreshold, setSemanticThreshold] = useState(90)
+  const [semanticInstructions, setSemanticInstructions] = useState({
+    'region-edit': '',
+    'point-edit': '',
+    'portrait-adjust': '',
+  })
+  const [semanticSeed, setSemanticSeed] = useState(0)
+  const [identityStrength, setIdentityStrength] = useState(90)
   const [capabilityLoading, setCapabilityLoading] = useState(true)
   const [capabilityError, setCapabilityError] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -316,8 +343,10 @@ export function ImageLab({
   const [error, setError] = useState<string | null>(null)
 
   const isRegionAdjust = mode === 'region-adjust'
-  const hasRegionMask = isRegionAdjust && hasAlphaMaskSource(element)
-  const source = isRegionAdjust
+  const isRegionSemantic = mode === 'region-edit'
+  const usesRegionMask = isRegionAdjust || isRegionSemantic
+  const hasRegionMask = usesRegionMask && hasAlphaMaskSource(element)
+  const source = usesRegionMask
     ? (hasRegionMask ? (element.sourceSrc ?? '') : (element.src ?? ''))
     : (element.src ?? '')
   const maskSource = hasRegionMask ? (element.src ?? '') : ''
@@ -326,9 +355,16 @@ export function ImageLab({
     () => new Map(toolManifest?.operations.map((capability) => [capability.id, capability]) ?? []),
     [toolManifest],
   )
+  const semanticWorkflowId = mode === 'element-extract'
+    ? 'element-extract'
+    : mode === 'region-edit' || mode === 'point-edit' || mode === 'portrait-adjust'
+      ? mode
+      : null
   const semanticWorkflow = useMemo(
-    () => semanticManifest?.workflows.find((workflow) => workflow.id === 'element-extract'),
-    [semanticManifest],
+    () => semanticWorkflowId
+      ? semanticManifest?.workflows.find((workflow) => workflow.id === semanticWorkflowId)
+      : undefined,
+    [semanticManifest, semanticWorkflowId],
   )
   const generativeRegionWorkflow = useMemo(
     () => semanticManifest?.workflows.find((workflow) => workflow.id === 'region-edit'),
@@ -340,14 +376,18 @@ export function ImageLab({
       && semanticWorkflow.installed
       && ['ready', 'runtime-stopped'].includes(semanticWorkflow.status)
     return {
-      id: 'semantic-element-extract',
+      id: semanticWorkflow.operation ?? 'semantic-element-extract',
       label: semanticWorkflow.label,
-      category: 'segmentation',
-      provider: 'comfy-impact-sam',
+      category: semanticWorkflow.id === 'element-extract' ? 'segmentation' : 'masked-edit',
+      provider: semanticWorkflow.id === 'element-extract' ? 'comfy-impact-sam' : 'comfy-qwen-image-edit-2511-int8',
       deterministic: false,
       available: runnableOnDemand,
       unavailableReason: semanticWorkflow.message,
-      models: semanticWorkflow.missingArtifacts.length ? [] : ['sam-vit-b'],
+      models: semanticWorkflow.missingArtifacts.length
+        ? []
+        : semanticWorkflow.id === 'element-extract'
+          ? ['sam-vit-b']
+          : ['qwen-image-edit-2511-int8'],
       params: semanticWorkflow.inputs,
     }
   }, [semanticWorkflow])
@@ -355,23 +395,32 @@ export function ImageLab({
     ? upscaleProcessor
     : mode === 'element-extract'
       ? 'semantic-element-extract'
+      : mode === 'region-edit'
+        ? 'semantic-region-edit'
+        : mode === 'point-edit'
+          ? 'semantic-point-edit'
+          : mode === 'portrait-adjust'
+            ? 'semantic-portrait-adjust'
       : mode === 'region-adjust'
         ? 'masked-adjust'
     : mode === 'pixelate' || mode === 'remove-background' || mode === 'sharpen' || mode === 'alpha-cleanup'
       ? mode
       : null
-  const activeCapability = remoteOperation === 'semantic-element-extract'
+  const activeCapability = semanticWorkflowId
     ? semanticCapability
     : remoteOperation
       ? capabilities.get(remoteOperation)
       : undefined
   const hasLocalPreview = localPreviewModes.has(mode)
   const isMaskEditor = mode === 'mask-refine'
-  const isSemanticEditor = mode === 'element-extract'
+  const isSemanticPointEditor = mode === 'element-extract' || mode === 'point-edit'
+  const isQwenSemantic = mode === 'region-edit' || mode === 'point-edit' || mode === 'portrait-adjust'
+  const semanticInstruction = isQwenSemantic ? semanticInstructions[mode] : ''
   const canRunRemote = Boolean(
     activeCapability?.available
-    && (!isSemanticEditor || semanticPoints.positivePoints.length > 0)
-    && (!isRegionAdjust || hasRegionMask),
+    && (!isSemanticPointEditor || semanticPoints.positivePoints.length > 0)
+    && (!usesRegionMask || hasRegionMask)
+    && (!isQwenSemantic || (Boolean(projectId) && semanticInstruction.trim().length >= 2)),
   )
 
   const handleMaskChange = useCallback((draft: MaskDraft | null) => {
@@ -411,7 +460,7 @@ export function ImageLab({
       setExecutionMode('local')
       return
     }
-    if (mode === 'element-extract' || mode === 'region-adjust') {
+    if (semanticWorkflowId || mode === 'region-adjust') {
       setExecutionMode('server')
       return
     }
@@ -420,7 +469,7 @@ export function ImageLab({
     } else if (hasLocalPreview) {
       setExecutionMode('local')
     }
-  }, [activeCapability?.available, hasLocalPreview, mode, remoteOperation])
+  }, [activeCapability?.available, hasLocalPreview, mode, remoteOperation, semanticWorkflowId])
 
   useEffect(() => {
     setSemanticPoints({ positivePoints: [], negativePoints: [] })
@@ -565,12 +614,13 @@ export function ImageLab({
                   }
       setProgress(24)
       const sourceImageDataUrl = await normalizeImageSource(source)
-      const maskImageDataUrl = remoteOperation === 'masked-adjust'
+      const maskImageDataUrl = remoteOperation === 'masked-adjust' || remoteOperation === 'semantic-region-edit'
         ? await normalizeImageSource(maskSource)
         : undefined
       setProgress(52)
-      const job = remoteOperation === 'semantic-element-extract'
-        ? await createSemanticElementJob({
+      let job: ProcessingJob
+      if (remoteOperation === 'semantic-element-extract') {
+        job = await createSemanticImageJob({
             workflowId: 'element-extract',
             sourceImageDataUrl,
             sourceElementId: element.id,
@@ -580,19 +630,66 @@ export function ImageLab({
               threshold: semanticThreshold / 100,
             },
           })
-        : await createImageJob({
+      } else if (remoteOperation === 'semantic-region-edit') {
+        if (!projectId || !maskImageDataUrl) throw new Error('区域编辑需要可写项目与 Alpha 蒙版来源')
+        job = await createSemanticImageJob({
+          workflowId: 'region-edit',
+          projectId,
+          sourceImageDataUrl,
+          maskImageDataUrl,
+          sourceElementId: element.id,
+          title: `${element.name} · 区域编辑`,
+          params: {
+            instruction: semanticInstructions['region-edit'],
+            seed: semanticSeed,
+            maskChannel: 'alpha',
+          },
+        })
+      } else if (remoteOperation === 'semantic-point-edit') {
+        if (!projectId) throw new Error('定点修改需要一个可写项目')
+        job = await createSemanticImageJob({
+          workflowId: 'point-edit',
+          projectId,
+          sourceImageDataUrl,
+          sourceElementId: element.id,
+          title: `${element.name} · 定点修改`,
+          params: {
+            positivePoints: semanticPoints.positivePoints,
+            negativePoints: semanticPoints.negativePoints,
+            threshold: semanticThreshold / 100,
+            instruction: semanticInstructions['point-edit'],
+            seed: semanticSeed,
+          },
+        })
+      } else if (remoteOperation === 'semantic-portrait-adjust') {
+        if (!projectId) throw new Error('人像调整需要一个可写项目')
+        job = await createSemanticImageJob({
+          workflowId: 'portrait-adjust',
+          projectId,
+          sourceImageDataUrl,
+          sourceElementId: element.id,
+          title: `${element.name} · 人像调整`,
+          params: {
+            instruction: semanticInstructions['portrait-adjust'],
+            identityStrength: identityStrength / 100,
+            seed: semanticSeed,
+          },
+        })
+      } else {
+        job = await createImageJob({
             operation: remoteOperation,
             sourceImageDataUrl,
             maskImageDataUrl,
             sourceElementId: element.id,
             params,
           })
+      }
       onJobUpdate(job)
       setProgress(100)
       onClose()
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '图像任务提交失败'
-      setError(mode === 'region-adjust'
+      setError(mode === 'region-adjust' || mode === 'region-edit'
         ? `${message}。请先完成元素提取或蒙版修边，并选择带来源的派生图。`
         : `${message}。可刷新能力状态，或切换到浏览器草稿。`)
       setProgress(0)
@@ -745,7 +842,7 @@ export function ImageLab({
                     disabled={isGenerating}
                     onChange={handleMaskChange}
                   />
-                ) : isSemanticEditor ? (
+                ) : isSemanticPointEditor ? (
                   <SemanticPointEditor
                     source={source}
                     label={element.name}
@@ -754,7 +851,7 @@ export function ImageLab({
                     disabled={isGenerating}
                     onChange={setSemanticPoints}
                   />
-                ) : isRegionAdjust && source && maskSource ? (
+                ) : usesRegionMask && source && maskSource ? (
                   <div className="region-mask-preview" aria-label="语义蒙版作用范围预览">
                     <img src={source} alt={`${element.name}来源图`} />
                     <img className="region-mask-preview__mask" src={maskSource} alt="选中的语义区域" />
@@ -1081,6 +1178,144 @@ export function ImageLab({
                 </div>
               ) : null}
 
+              {mode === 'region-edit' ? (
+                <div className="lab-setting-group">
+                  <div className="lab-info-callout">
+                    <Paintbrush size={16} />
+                    <p>
+                      Qwen Image Edit 2511 只生成候选编辑图，最后由固定蒙版把选区覆盖回原图；选区外直接保留原像素。
+                    </p>
+                  </div>
+                  {!hasRegionMask ? (
+                    <p className="semantic-point-required" role="alert">
+                      请先运行“元素提取”“去背景”或“蒙版修边”，再对生成的 Alpha 派生图执行区域编辑。
+                    </p>
+                  ) : null}
+                  {!projectId ? (
+                    <p className="semantic-point-required" role="alert">当前画布尚未绑定可写项目，不能登记不可变语义版本。</p>
+                  ) : null}
+                  <label className="lab-prompt-setting">
+                    <span>编辑指令</span>
+                    <textarea
+                      rows={4}
+                      maxLength={2000}
+                      value={semanticInstructions['region-edit']}
+                      placeholder="例如：把选中的纸伞改成朱红色，保持光线、透视与水墨质感"
+                      onChange={(event) => setSemanticInstructions((current) => ({
+                        ...current,
+                        'region-edit': event.target.value,
+                      }))}
+                    />
+                    <small>{semanticInstructions['region-edit'].trim().length}/2000</small>
+                  </label>
+                  <label className="lab-select-setting">
+                    <span>固定随机种子</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2147483647}
+                      value={semanticSeed}
+                      onChange={(event) => setSemanticSeed(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              {mode === 'point-edit' ? (
+                <div className="lab-setting-group">
+                  <div className="lab-info-callout">
+                    <ScanSearch size={16} />
+                    <p>
+                      先用绿色点选中要修改的对象、红色点排除背景；本机 SAM 生成蒙版后再进入 Qwen 固定编辑模板。
+                    </p>
+                  </div>
+                  <div className="semantic-recipe-summary">
+                    <span>选择点</span>
+                    <strong>{semanticPoints.positivePoints.length}</strong>
+                    <span>排除点</span>
+                    <strong>{semanticPoints.negativePoints.length}</strong>
+                  </div>
+                  <RangeSetting
+                    label="SAM 置信阈值"
+                    value={semanticThreshold}
+                    min={50}
+                    max={99}
+                    onChange={setSemanticThreshold}
+                  />
+                  <label className="lab-prompt-setting">
+                    <span>修改指令</span>
+                    <textarea
+                      rows={4}
+                      maxLength={2000}
+                      value={semanticInstructions['point-edit']}
+                      placeholder="例如：只把选中的灯笼改成暖金色，保持位置与材质"
+                      onChange={(event) => setSemanticInstructions((current) => ({
+                        ...current,
+                        'point-edit': event.target.value,
+                      }))}
+                    />
+                    <small>{semanticInstructions['point-edit'].trim().length}/2000</small>
+                  </label>
+                  <label className="lab-select-setting">
+                    <span>固定随机种子</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2147483647}
+                      value={semanticSeed}
+                      onChange={(event) => setSemanticSeed(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
+                    />
+                  </label>
+                  {semanticPoints.positivePoints.length === 0 ? (
+                    <p className="semantic-point-required">请先在预览图中点击要修改的对象。</p>
+                  ) : null}
+                  {!projectId ? <p className="semantic-point-required">当前画布尚未绑定可写项目。</p> : null}
+                </div>
+              ) : null}
+
+              {mode === 'portrait-adjust' ? (
+                <div className="lab-setting-group">
+                  <div className="lab-info-callout">
+                    <Sparkles size={16} />
+                    <p>
+                      人像模式会把身份、年龄、肤色与五官稳定性写入结构化提示词；输出仍是独立版本，不覆盖原图。
+                    </p>
+                  </div>
+                  <label className="lab-prompt-setting">
+                    <span>人像调整指令</span>
+                    <textarea
+                      rows={4}
+                      maxLength={1000}
+                      value={semanticInstructions['portrait-adjust']}
+                      placeholder="例如：调整为自然微笑，衣领换成深青色，保持人物身份和原构图"
+                      onChange={(event) => setSemanticInstructions((current) => ({
+                        ...current,
+                        'portrait-adjust': event.target.value,
+                      }))}
+                    />
+                    <small>{semanticInstructions['portrait-adjust'].trim().length}/1000</small>
+                  </label>
+                  <RangeSetting
+                    label="身份保持强度"
+                    value={identityStrength}
+                    min={0}
+                    max={100}
+                    onChange={setIdentityStrength}
+                  />
+                  <label className="lab-select-setting">
+                    <span>固定随机种子</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2147483647}
+                      value={semanticSeed}
+                      onChange={(event) => setSemanticSeed(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
+                    />
+                  </label>
+                  {!projectId ? <p className="semantic-point-required">当前画布尚未绑定可写项目。</p> : null}
+                </div>
+              ) : null}
+
               {mode === 'region-adjust' ? (
                 <div className="lab-setting-group">
                   <div className="lab-info-callout">
@@ -1126,8 +1361,8 @@ export function ImageLab({
                   <div className="lab-info-callout is-muted">
                     <Info size={16} />
                     <p>
-                      生成式局部重绘：{generativeRegionWorkflow?.message ?? '尚未取得本机能力状态'}。
-                      本周期不会在模板或模型未就绪时伪开放该功能。
+                      需要改变语义内容时可切换到“区域编辑”。当前生成式能力：
+                      {generativeRegionWorkflow?.message ?? '尚未取得本机能力状态'}。
                     </p>
                   </div>
                 </div>

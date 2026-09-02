@@ -3,9 +3,16 @@ import test from 'node:test'
 import {
   evaluateSemanticWorkflowCatalog,
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
+  SEMANTIC_POINT_EDIT_OPERATION,
+  SEMANTIC_PORTRAIT_ADJUST_OPERATION,
+  SEMANTIC_REGION_EDIT_OPERATION,
   semanticWorkflowDefinitions,
   validateElementExtractRequest,
+  validateSemanticImageRequest,
 } from '../server/semantic-workflow-registry.mjs'
+
+const sourceImageDataUrl = 'data:image/png;base64,AAAA'
+const maskImageDataUrl = 'data:image/png;base64,AQID'
 
 test('semantic workflow catalog exposes four stable, unique workflows', () => {
   const definitions = semanticWorkflowDefinitions()
@@ -65,22 +72,22 @@ test('semantic catalog reports missing dependencies and node mismatches without 
   assert.deepEqual(nodeMismatch.missingNodes, ['SAMLoader'])
 })
 
-test('non-executable workflows remain unavailable even when dependencies are present', () => {
+test('all four workflows become ready when their exact dependencies and nodes are present', () => {
   const allDefinitions = semanticWorkflowDefinitions()
   const extensions = new Set(allDefinitions.flatMap((item) => item.requiredExtensions))
   const artifacts = new Set(allDefinitions.flatMap((item) => item.requiredArtifacts))
   const objectInfo = Object.fromEntries(allDefinitions.flatMap((item) => item.requiredNodes).map((id) => [id, {}]))
   const catalog = evaluateSemanticWorkflowCatalog({ extensions, artifacts, objectInfo, runtime: { connected: true } })
-  for (const workflow of catalog.workflows.filter((item) => item.id !== 'element-extract')) {
-    assert.equal(workflow.available, false)
-    assert.equal(workflow.status, 'template-pending')
+  for (const workflow of catalog.workflows) {
+    assert.equal(workflow.available, true, workflow.id)
+    assert.equal(workflow.status, 'ready')
   }
 })
 
 test('element extraction request is normalized into a strict stored request', () => {
   const request = validateElementExtractRequest({
     workflowId: 'element-extract',
-    sourceImageDataUrl: 'data:image/png;base64,AAAA',
+    sourceImageDataUrl,
     sourceElementId: 'source-1',
     params: {
       positivePoints: [{ x: 0.25, y: 0.75 }],
@@ -95,16 +102,17 @@ test('element extraction request is normalized into a strict stored request', ()
 
 test('element extraction rejects unknown fields, missing positives, bad coordinates, and thresholds', () => {
   assert.throws(
-    () => validateElementExtractRequest({ workflowId: 'element-extract', params: {}, surprise: true }),
+    () => validateElementExtractRequest({ workflowId: 'element-extract', sourceImageDataUrl, params: {}, surprise: true }),
     /unsupported field/,
   )
   assert.throws(
-    () => validateElementExtractRequest({ workflowId: 'element-extract', params: {} }),
-    /at least one positive point/,
+    () => validateElementExtractRequest({ workflowId: 'element-extract', sourceImageDataUrl, params: {} }),
+    /at least one positive point/u,
   )
   assert.throws(
     () => validateElementExtractRequest({
       workflowId: 'element-extract',
+      sourceImageDataUrl,
       params: { positivePoints: [{ x: 1.1, y: 0.5 }] },
     }),
     /normalized coordinates/,
@@ -112,8 +120,80 @@ test('element extraction rejects unknown fields, missing positives, bad coordina
   assert.throws(
     () => validateElementExtractRequest({
       workflowId: 'element-extract',
+      sourceImageDataUrl,
       params: { positivePoints: [{ x: 0.5, y: 0.5 }], threshold: 0.1 },
     }),
     /threshold/,
+  )
+})
+
+test('region, point and portrait requests normalize into strict stored contracts without data URLs', () => {
+  const region = validateSemanticImageRequest({
+    workflowId: 'region-edit',
+    projectId: 'project-semantic',
+    sourceImageDataUrl,
+    maskImageDataUrl,
+    sourceElementId: 'source-1',
+    title: '蓝色服饰版本',
+    params: { instruction: '把衣服改为深蓝色', seed: 12, maskChannel: 'alpha' },
+  })
+  assert.equal(region.operation, SEMANTIC_REGION_EDIT_OPERATION)
+  assert.equal(region.params.seed, 12)
+  assert.equal('sourceImageDataUrl' in region, false)
+  assert.equal('maskImageDataUrl' in region, false)
+
+  const point = validateSemanticImageRequest({
+    workflowId: 'point-edit',
+    projectId: 'project-semantic',
+    sourceAssetId: 'a'.repeat(64),
+    params: {
+      instruction: '把手中的花改为灯笼',
+      positivePoints: [{ x: 0.5, y: 0.5 }],
+      negativePoints: [],
+    },
+  })
+  assert.equal(point.operation, SEMANTIC_POINT_EDIT_OPERATION)
+  assert.equal(point.sourceAssetId, 'a'.repeat(64))
+  assert.equal(point.params.threshold, 0.9)
+
+  const portrait = validateSemanticImageRequest({
+    workflowId: 'portrait-adjust',
+    projectId: 'project-semantic',
+    sourceImageDataUrl,
+    params: { instruction: '让人物自然微笑', identityStrength: 0.9 },
+  })
+  assert.equal(portrait.operation, SEMANTIC_PORTRAIT_ADJUST_OPERATION)
+  assert.equal(portrait.params.identityStrength, 0.9)
+})
+
+test('generative semantic requests reject invalid masks, parameters and ambiguous sources', () => {
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'region-edit', projectId: 'project-semantic', sourceImageDataUrl,
+      params: { instruction: '修改颜色' },
+    }),
+    (error) => error.code === 'INVALID_SEMANTIC_INPUT',
+  )
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'region-edit', projectId: 'project-semantic', sourceImageDataUrl,
+      sourceAssetId: 'a'.repeat(64), maskImageDataUrl,
+      params: { instruction: '修改颜色' },
+    }),
+    (error) => error.code === 'INVALID_SEMANTIC_INPUT',
+  )
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'portrait-adjust', projectId: 'project-semantic', sourceImageDataUrl,
+      params: { instruction: '修改', identityStrength: 1.1 },
+    }),
+    (error) => error.code === 'INVALID_SEMANTIC_IDENTITY_STRENGTH',
+  )
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'point-edit', projectId: 'project-semantic', sourceImageDataUrl,
+      params: { instruction: '修改', positivePoints: [{ x: 0.5, y: 0.5 }], seed: -1 },
+    }),
+    (error) => error.code === 'INVALID_SEMANTIC_SEED',
   )
 })

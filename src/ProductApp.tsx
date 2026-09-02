@@ -1911,6 +1911,7 @@ export default function ProductApp() {
         <BalancedWorkbench
           key={requestedProjectId}
           projectId={requestedProjectId}
+          workspaceProjectId={activeWorkspaceProjectId}
           projectTitle={activeWorkspaceProject?.title}
           initialDocument={projectProbe.project?.id === requestedProjectId ? projectProbe.project.document : undefined}
           onBack={goHome}

@@ -46,9 +46,14 @@ import { copyOutputDelivery } from './output-delivery.mjs'
 import {
   probeSemanticWorkflowCatalog,
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
+  SEMANTIC_QWEN_OPERATIONS,
+  SEMANTIC_POINT_EDIT_OPERATION,
+  SEMANTIC_PORTRAIT_ADJUST_OPERATION,
+  SEMANTIC_REGION_EDIT_OPERATION,
   SEMANTIC_WORKFLOW_CATALOG_VERSION,
-  validateElementExtractRequest,
+  validateSemanticImageRequest,
 } from './semantic-workflow-registry.mjs'
+import { SemanticImageExecutor } from './semantic-image-executor.mjs'
 import {
   createRestrictedChildEnvironment,
   LocalBridgeSecurity,
@@ -218,7 +223,9 @@ const gpuImageOperations = new Set([
   'remove-background',
   'upscale-realesrgan',
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
+  ...SEMANTIC_QWEN_OPERATIONS,
 ])
+const semanticImageOperations = new Set([SEMANTIC_ELEMENT_EXTRACT_OPERATION, ...SEMANTIC_QWEN_OPERATIONS])
 const scheduler = new JobScheduler({
   store,
   resourceLimits: { cpu: imageJobConcurrency, gpu: 1, orchestration: 1 },
@@ -927,6 +934,20 @@ const imageOperationLabels = {
   'remove-background': 'AI 去背景',
   'upscale-realesrgan': 'Real-ESRGAN 超分',
   [SEMANTIC_ELEMENT_EXTRACT_OPERATION]: 'SAM 元素提取',
+  [SEMANTIC_REGION_EDIT_OPERATION]: 'Qwen 区域编辑',
+  [SEMANTIC_POINT_EDIT_OPERATION]: 'Qwen 定点修改',
+  [SEMANTIC_PORTRAIT_ADJUST_OPERATION]: 'Qwen 人像调整',
+}
+
+function imageTimeoutMs(operation) {
+  if (SEMANTIC_QWEN_OPERATIONS.has(operation)) return 70 * 60 * 1_000
+  if (gpuImageOperations.has(operation)) return 25 * 60 * 1_000
+  return 10 * 60 * 1_000
+}
+
+function estimateImageMilliseconds(operation) {
+  if (SEMANTIC_QWEN_OPERATIONS.has(operation)) return 20 * 60 * 1_000
+  return gpuImageOperations.has(operation) ? 5 * 60_000 : 60_000
 }
 
 function newImageJob(request, inputPath, options = {}) {
@@ -936,7 +957,7 @@ function newImageJob(request, inputPath, options = {}) {
   const scheduling = createScheduling({
     resourceClass,
     priority: options.priority ?? (resourceClass === 'gpu' ? 60 : 70),
-    timeoutMs: resourceClass === 'gpu' ? 25 * 60 * 1_000 : 10 * 60 * 1_000,
+    timeoutMs: imageTimeoutMs(request.operation),
     idempotencyKey: options.idempotencyKey,
     attempt: options.attempt || 1,
     maxAttempts: 3,
@@ -961,7 +982,7 @@ function newImageJob(request, inputPath, options = {}) {
     requestHash: options.requestHash,
     retryOf: options.retryOf,
     scheduling,
-    costEvents: [createEstimateCostEvent(id, resourceClass, resourceClass === 'gpu' ? 5 * 60_000 : 60_000, now)],
+    costEvents: [createEstimateCostEvent(id, resourceClass, estimateImageMilliseconds(request.operation), now)],
     request,
     sourceElementId: request.sourceElementId,
     inputPath,
@@ -1285,6 +1306,9 @@ async function runImageJob(jobId, { signal }) {
   if (!job) return
   if (job.request.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION) {
     return runSemanticElementExtractJob(jobId, { signal })
+  }
+  if (SEMANTIC_QWEN_OPERATIONS.has(job.request.operation)) {
+    return semanticImageExecutor.run(jobId, { signal })
   }
   const outputFilename = `${job.id}-${job.request.operation}.png`
   const outputPath = join(assetDirectory, outputFilename)
@@ -2587,11 +2611,54 @@ async function createImageJob(body, retrySource, options = {}) {
   }
 }
 
+function semanticWorkspaceProject(projectId) {
+  const project = workspaceStore.getCatalog().catalog.projects.find((candidate) => candidate.id === projectId)
+  if (!project || project.status !== 'active') {
+    throw Object.assign(new Error('语义编辑所属项目不存在或当前不可写'), {
+      status: 404,
+      code: 'WORKSPACE_PROJECT_NOT_FOUND',
+    })
+  }
+  return project
+}
+
+function semanticAssetVisibleToProject(project, assetId) {
+  const visibleLibraryAsset = projectStore.listLibraryAssets({ scope: 'project', projectId: project.id })
+    .some((item) => item.version.assetId === assetId)
+  if (visibleLibraryAsset) return true
+  return project.documents.some((document) => projectStore.listProjectAssets(document.id)
+    .some((asset) => asset.id === assetId))
+}
+
+async function loadSemanticManagedAsset(project, assetId, label) {
+  if (!semanticAssetVisibleToProject(project, assetId)) {
+    throw Object.assign(new Error(`${label}不属于当前项目或未被当前项目引用`), {
+      status: 403,
+      code: 'SEMANTIC_ASSET_FORBIDDEN',
+    })
+  }
+  const asset = projectStore.getAsset(assetId)
+  if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType)) {
+    throw Object.assign(new Error(`${label}不是受支持的项目图片`), {
+      status: 409,
+      code: 'INVALID_SEMANTIC_INPUT',
+    })
+  }
+  if (!asset.bytes || asset.bytes > 20 * 1024 * 1024) {
+    throw Object.assign(new Error(`${label}为空或超过 20MB`), { status: 413, code: 'SEMANTIC_INPUT_TOO_LARGE' })
+  }
+  const bytes = await readFile(projectStore.assetPath(asset))
+  if (bytes.length !== asset.bytes || createHash('sha256').update(bytes).digest('hex') !== asset.id) {
+    throw Object.assign(new Error(`${label}内容校验失败`), { status: 409, code: 'SEMANTIC_ASSET_INTEGRITY' })
+  }
+  return { bytes, extension: asset.extension, mimeType: asset.mimeType }
+}
+
 async function createSemanticImageJob(body, retrySource, options = {}) {
   const request = retrySource
     ? structuredClone(retrySource.request)
-    : validateElementExtractRequest(body)
-  if (request.operation !== SEMANTIC_ELEMENT_EXTRACT_OPERATION) {
+    : validateSemanticImageRequest(body)
+  if (!semanticImageOperations.has(request.operation)) {
     throw Object.assign(new Error('Stored semantic image task is not executable'), {
       status: 409,
       code: 'SEMANTIC_WORKFLOW_NOT_EXECUTABLE',
@@ -2612,29 +2679,65 @@ async function createSemanticImageJob(body, retrySource, options = {}) {
   let inputPath = retrySource?.inputPath
     ? assertManagedPrivatePath(retrySource.inputPath, inputDirectory)
     : undefined
-  const decoded = inputPath ? null : decodeImageAssetDataUrl(body.sourceImageDataUrl)
-  await assertStorageCapacity(runtimeDirectory, Math.max(128 * 1024 * 1024, (decoded?.bytes.length || 0) * 12))
+  let maskPath = retrySource?.maskPath
+    ? assertManagedPrivatePath(retrySource.maskPath, inputDirectory)
+    : undefined
+  const project = request.projectId ? semanticWorkspaceProject(request.projectId) : undefined
+  if (SEMANTIC_QWEN_OPERATIONS.has(request.operation) && !project) {
+    throw Object.assign(new Error('Qwen 语义编辑需要一个可写工作区项目'), {
+      status: 400,
+      code: 'INVALID_SEMANTIC_PROJECT',
+    })
+  }
+  const sourceInput = inputPath
+    ? null
+    : request.sourceAssetId
+      ? await loadSemanticManagedAsset(project, request.sourceAssetId, '来源图片')
+      : decodeImageAssetDataUrl(body.sourceImageDataUrl)
+  const maskInput = maskPath || request.workflowId !== 'region-edit'
+    ? null
+    : request.maskAssetId
+      ? await loadSemanticManagedAsset(project, request.maskAssetId, '区域蒙版')
+      : decodeImageAssetDataUrl(body.maskImageDataUrl)
+  if (sourceInput) request.sourceContentHash = createHash('sha256').update(sourceInput.bytes).digest('hex')
+  if (maskInput) request.maskContentHash = createHash('sha256').update(maskInput.bytes).digest('hex')
+  await assertStorageCapacity(runtimeDirectory, Math.max(
+    128 * 1024 * 1024,
+    ((sourceInput?.bytes.length || 0) + (maskInput?.bytes.length || 0)) * 12,
+  ))
   const job = newImageJob(request, inputPath, {
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority ?? 55,
     attempt,
     retryOf: retrySource?.id,
+    maskPath,
   })
   const createdInputPaths = []
-  if (!inputPath) {
-    inputPath = join(inputDirectory, `${job.id}.${decoded.extension}`)
-    await writeFile(inputPath, decoded.bytes, { flag: 'wx' })
-    createdInputPaths.push(inputPath)
-    job.inputPath = inputPath
-  }
-  const added = await store.addIdempotent(job)
-  if (!added.created) {
+  try {
+    if (!inputPath) {
+      inputPath = join(inputDirectory, `${job.id}.${sourceInput.extension}`)
+      await writeFile(inputPath, sourceInput.bytes, { flag: 'wx' })
+      createdInputPaths.push(inputPath)
+      job.inputPath = inputPath
+    }
+    if (!maskPath && maskInput) {
+      maskPath = join(inputDirectory, `${job.id}-mask.${maskInput.extension}`)
+      await writeFile(maskPath, maskInput.bytes, { flag: 'wx' })
+      createdInputPaths.push(maskPath)
+      job.maskPath = maskPath
+    }
+    const added = await store.addIdempotent(job)
+    if (!added.created) {
+      for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
+      return { job: store.publicJob(added.job), reused: true }
+    }
+    await scheduler.enqueue(job.id)
+    return { job: store.publicJob(store.get(job.id)), reused: false }
+  } catch (error) {
     for (const filePath of createdInputPaths) await unlink(filePath).catch(() => {})
-    return { job: store.publicJob(added.job), reused: true }
+    throw error
   }
-  await scheduler.enqueue(job.id)
-  return { job: store.publicJob(store.get(job.id)), reused: false }
 }
 
 function newProviderVideoJob(request, options = {}) {
@@ -2776,6 +2879,21 @@ const customWorkflowExecutor = new CustomWorkflowExecutor({
   scheduleRuntimeIdleStop,
 })
 
+const semanticImageExecutor = new SemanticImageExecutor({
+  store,
+  projectStore,
+  comfy,
+  runtimeManager,
+  inspectSemanticWorkflows,
+  imageProcessor,
+  runProcess,
+  ffmpegPath,
+  inputDirectory,
+  managedComfyInputRoot: managedComfyLaunch.directories.input,
+  deliverOutput: deliverConfiguredOutput,
+  scheduleRuntimeIdleStop,
+})
+
 async function prepareRecoveredJobs() {
   for (const job of store.list()) {
     if (job.error?.code === 'BRIDGE_RESTARTED') {
@@ -2810,14 +2928,14 @@ async function prepareRecoveredJobs() {
       scheduling: createScheduling({
         resourceClass,
         priority: job.kind === 'video' ? 50 : resourceClass === 'gpu' ? 60 : 70,
-        timeoutMs: job.kind === 'video' ? 2 * 60 * 60 * 1_000 : resourceClass === 'gpu' ? 25 * 60_000 : 10 * 60_000,
+        timeoutMs: job.kind === 'video' ? 2 * 60 * 60 * 1_000 : imageTimeoutMs(job.request?.operation),
         idempotencyKey: `legacy-${job.id}`,
         queuedAt: job.createdAt || Date.now(),
       }),
       costEvents: job.costEvents || [createEstimateCostEvent(
         job.id,
         resourceClass,
-        job.kind === 'video' ? estimateVideoMilliseconds(job.request) : resourceClass === 'gpu' ? 5 * 60_000 : 60_000,
+        job.kind === 'video' ? estimateVideoMilliseconds(job.request) : estimateImageMilliseconds(job.request?.operation),
         job.createdAt || Date.now(),
       )],
     })
@@ -3832,7 +3950,7 @@ const server = createServer(async (request, response) => {
           : resolvePriority(request.headers['x-miaohui-priority'], source.scheduling?.priority || 50),
       }
       const result = source.kind === 'image'
-        ? source.request?.operation === SEMANTIC_ELEMENT_EXTRACT_OPERATION
+        ? semanticImageOperations.has(source.request?.operation)
           ? await createSemanticImageJob({}, source, options)
           : await createImageJob({}, source, options)
         : source.kind === CUSTOM_WORKFLOW_JOB_KIND

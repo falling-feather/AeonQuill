@@ -121,6 +121,9 @@ const processingLabels: Record<ImageLabMode, string> = {
   crop: '画幅裁剪',
   'remove-background': '背景移除草稿',
   'element-extract': 'SAM 元素提取',
+  'region-edit': 'Qwen 区域编辑',
+  'point-edit': 'Qwen 定点修改',
+  'portrait-adjust': 'Qwen 人像调整',
   'region-adjust': '语义区域调整',
   'mask-refine': '蒙版修边',
   pixelate: '像素化草稿',
@@ -138,11 +141,15 @@ const imageOperationLabels: Record<ImageOperationId, string> = {
   'remove-background': 'AI 去背景',
   'upscale-realesrgan': 'Real-ESRGAN 超分',
   'semantic-element-extract': 'SAM 元素提取',
+  'semantic-region-edit': 'Qwen 区域编辑',
+  'semantic-point-edit': 'Qwen 定点修改',
+  'semantic-portrait-adjust': 'Qwen 人像调整',
 }
 
 export type BalancedWorkbenchProps = {
   onBack?: () => void
   projectId?: string
+  workspaceProjectId?: string
   projectTitle?: string
   initialDocument?: CanvasDocument
   onDocumentChange?: (document: CanvasDocument) => void
@@ -153,6 +160,7 @@ export type BalancedWorkbenchProps = {
 function App({
   onBack,
   projectId = 'local-project',
+  workspaceProjectId,
   projectTitle = '光阴砚本地项目',
   initialDocument,
   onDocumentChange,
@@ -1545,6 +1553,7 @@ function App({
         <ImageLab
           element={editingImage}
           initialMode={imageLab.mode}
+          projectId={workspaceProjectId}
           onClose={() => setImageLab(null)}
           onApply={applyImageLabResult}
           onJobUpdate={updateJob}

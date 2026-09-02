@@ -15,6 +15,9 @@ export type ImageToolId =
   | 'crop'
   | 'remove-background'
   | 'element-extract'
+  | 'region-edit'
+  | 'point-edit'
+  | 'portrait-adjust'
   | 'region-adjust'
   | 'mask-refine'
   | 'pixelate'
@@ -102,6 +105,9 @@ export type ImageOperationId =
   | 'remove-background'
   | 'upscale-realesrgan'
   | 'semantic-element-extract'
+  | 'semantic-region-edit'
+  | 'semantic-point-edit'
+  | 'semantic-portrait-adjust'
 
 export type ImageToolCapability = {
   id: ImageOperationId
@@ -184,6 +190,72 @@ export type SemanticElementExtractRequest = {
     negativePoints: SemanticPoint[]
     threshold: number
   }
+}
+
+export type SemanticRegionEditRequest = {
+  workflowId: 'region-edit'
+  projectId: string
+  sourceImageDataUrl: string
+  maskImageDataUrl: string
+  sourceElementId?: string
+  title?: string
+  params: {
+    instruction: string
+    seed: number
+    maskChannel: 'alpha' | 'luma'
+  }
+}
+
+export type SemanticPointEditRequest = {
+  workflowId: 'point-edit'
+  projectId: string
+  sourceImageDataUrl: string
+  sourceElementId?: string
+  title?: string
+  params: {
+    positivePoints: SemanticPoint[]
+    negativePoints: SemanticPoint[]
+    threshold: number
+    instruction: string
+    seed: number
+  }
+}
+
+export type SemanticPortraitAdjustRequest = {
+  workflowId: 'portrait-adjust'
+  projectId: string
+  sourceImageDataUrl: string
+  sourceElementId?: string
+  title?: string
+  params: {
+    instruction: string
+    identityStrength: number
+    seed: number
+  }
+}
+
+export type SemanticImageRequest =
+  | SemanticElementExtractRequest
+  | SemanticRegionEditRequest
+  | SemanticPointEditRequest
+  | SemanticPortraitAdjustRequest
+
+export type StoredSemanticImageJobRequest = {
+  operation:
+    | 'semantic-element-extract'
+    | 'semantic-region-edit'
+    | 'semantic-point-edit'
+    | 'semantic-portrait-adjust'
+  workflowId: SemanticImageRequest['workflowId']
+  workflowVersion: string
+  projectId?: string
+  sourceAssetId?: string
+  sourceContentHash?: string
+  maskAssetId?: string
+  maskContentHash?: string
+  title?: string
+  sourceElementId?: string
+  params: Record<string, unknown>
 }
 
 export type ImageJobRequest = {
@@ -523,6 +595,23 @@ export type ProcessingJob = {
       }
     | {
         version: string
+        promptVersion: string
+        workflowId: 'region-edit' | 'point-edit' | 'portrait-adjust'
+        model: string
+        textEncoder: string
+        vae: string
+        steps: number
+        cfg: number
+        sampler: string
+        scheduler: string
+        seed: number
+        masked: boolean
+        outputNodeId: string
+        identityStrength?: number
+        instructionHash: string
+      }
+    | {
+        version: string
         customWorkflowId: string
         customWorkflowTitle: string
         workflowHash: string
@@ -535,6 +624,7 @@ export type ProcessingJob = {
   request?:
     | (Omit<VideoJobRequest, 'sourceImageDataUrl' | 'lastFrameImageDataUrl'> & { hasLastFrame?: boolean })
     | StoredImageJobRequest
+    | StoredSemanticImageJobRequest
     | CustomWorkflowJobRequest
     | FinalCutJobRequest
     | VideoChainJobRequest
@@ -554,6 +644,7 @@ export type ProcessingJob = {
   maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
   libraryAsset?: Record<string, unknown>
+  maskLibraryAsset?: Record<string, unknown>
   providerUsage?: {
     estimatedCostUsd: number
     actualCostUsd: number | null

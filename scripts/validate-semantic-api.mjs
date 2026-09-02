@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { createProjectCatalog, createWorkspaceProject } from '../src/lib/project/projectCatalog.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const sourcePath = fileURLToPath(new URL('../src/assets/sample-summer-character.png', import.meta.url))
+const qaRoot = resolve(projectRoot, '.runtime')
 const keepRuntime = process.env.AEONQUILL_KEEP_SEMANTIC_SMOKE === '1'
 
 function delay(duration) {
@@ -49,15 +51,16 @@ async function terminateProcessTree(child) {
 }
 
 function assertSafeTemporaryDirectory(directory) {
-  const tempRoot = `${resolve(tmpdir())}${process.platform === 'win32' ? '\\' : '/'}`.toLowerCase()
+  const tempRoot = `${qaRoot}${sep}`.toLowerCase()
   const target = resolve(directory).toLowerCase()
-  if (!target.startsWith(tempRoot) || !basename(directory).startsWith('aeonquill-semantic-')) {
+  if (!target.startsWith(tempRoot) || !basename(directory).startsWith('semantic-api-')) {
     throw new Error(`Refusing to clean unexpected semantic smoke directory: ${directory}`)
   }
 }
 
 async function main() {
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), 'aeonquill-semantic-'))
+  await mkdir(qaRoot, { recursive: true })
+  const runtimeDirectory = await mkdtemp(join(qaRoot, 'semantic-api-'))
   const port = await availablePort()
   const baseUrl = `http://127.0.0.1:${port}`
   const stdout = []
@@ -102,9 +105,71 @@ async function main() {
     const elementExtract = catalog.workflows.find((workflow) => workflow.id === 'element-extract')
     assert.equal(elementExtract?.implemented, true)
     assert.equal(elementExtract?.installed, true, JSON.stringify(elementExtract))
-    console.log(`[semantic-smoke] catalog=${elementExtract.status}`)
+    for (const workflowId of ['region-edit', 'point-edit', 'portrait-adjust']) {
+      const workflow = catalog.workflows.find((candidate) => candidate.id === workflowId)
+      assert.equal(workflow?.implemented, true, JSON.stringify(workflow))
+      assert.equal(typeof workflow?.available, 'boolean')
+    }
+    console.log(`[semantic-smoke] catalog=${elementExtract.status}; registered=4/4`)
 
     const sourceBytes = await readFile(sourcePath)
+    let workspace = createWorkspaceProject(createProjectCatalog(), {
+      title: '语义编辑授权项目 A', initialModeId: 'balanced', color: 'violet',
+    }, { projectId: 'project-semantic-a', documentId: 'document-semantic-a', now: 1_000 })
+    workspace = createWorkspaceProject(workspace.catalog, {
+      title: '语义编辑授权项目 B', initialModeId: 'balanced', color: 'cyan',
+    }, { projectId: 'project-semantic-b', documentId: 'document-semantic-b', now: 2_000 })
+    const workspaceResponse = await request('/api/workspace/catalog', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog: workspace.catalog, baseRevision: 0, source: 'semantic-api-qa' }),
+    })
+    assert.equal(workspaceResponse.status, 200, await workspaceResponse.text())
+
+    const foreignAssetResponse = await request('/api/library/assets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'project',
+        projectId: 'project-semantic-b',
+        title: '跨项目拒绝样本',
+        tags: ['qa', 'semantic'],
+        collectionIds: [],
+        dataUrl: `data:image/png;base64,${sourceBytes.toString('base64')}`,
+      }),
+    })
+    const foreignAsset = await foreignAssetResponse.json()
+    assert.equal(foreignAssetResponse.status, 201, JSON.stringify(foreignAsset))
+
+    const crossProjectResponse = await request('/api/jobs/semantic-image', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workflowId: 'portrait-adjust',
+        projectId: 'project-semantic-a',
+        sourceAssetId: foreignAsset.asset.version.assetId,
+        params: { instruction: '调整为自然微笑', identityStrength: 0.9, seed: 0 },
+      }),
+    })
+    const crossProject = await crossProjectResponse.json()
+    assert.equal(crossProjectResponse.status, 403, JSON.stringify(crossProject))
+    assert.equal(crossProject.error.code, 'SEMANTIC_ASSET_FORBIDDEN')
+
+    const missingMaskResponse = await request('/api/jobs/semantic-image', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workflowId: 'region-edit',
+        projectId: 'project-semantic-a',
+        sourceImageDataUrl: `data:image/png;base64,${sourceBytes.toString('base64')}`,
+        params: { instruction: '只把衣服改成深青色', maskChannel: 'alpha', seed: 0 },
+      }),
+    })
+    const missingMask = await missingMaskResponse.json()
+    assert.equal(missingMaskResponse.status, 400, JSON.stringify(missingMask))
+    assert.equal(missingMask.error.code, 'INVALID_SEMANTIC_INPUT')
+    console.log('[semantic-smoke] fail-closed=cross-project+missing-mask')
+
     const createResponse = await request('/api/jobs/semantic-image', {
       method: 'POST',
       headers: {
