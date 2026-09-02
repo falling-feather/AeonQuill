@@ -18,6 +18,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ProcessingJob } from '../../types'
 import {
   VideoProductionError,
   advanceVideoProduction,
@@ -40,6 +41,8 @@ import {
 import { continuityGraphSummary } from '../../lib/story/continuityGraph.mjs'
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib/story/storyProject.mjs'
 import type { LibraryAssetInsertion } from '../../lib/libraryApi'
+import { flushWorkspaceModeDocument } from '../../lib/projectApi'
+import { cancelVideoJob, createSoundRenderJob, retryVideoJob } from '../../lib/videoApi'
 import {
   clearTextAgentAdapter,
   configureTextAgentAdapter,
@@ -64,11 +67,14 @@ type ProductionStudioProps = {
   active: boolean
   runtimeLabel: string
   workspaceProjectId?: string
+  workspaceDocumentId?: string
   project: VideoProductionProject
   onProjectChange: (project: VideoProductionProject) => void
   onBridgeToStory: (source: ApprovedProductionStorySource) => void
   libraryAsset?: LibraryAssetInsertion
   onLibraryAssetConsumed?: (nonce: number) => void
+  jobs: ProcessingJob[]
+  onJobTracked: (job: ProcessingJob) => void
 }
 
 type ContinuitySlotView = {
@@ -127,7 +133,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -149,6 +155,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
   const sequenceRef = useRef(1)
   const projectRef = useRef(project)
   const consumedLibraryAssetRef = useRef<number | null>(null)
+  const consumedSoundBindingsRef = useRef(new Set<string>())
+  const [soundJobBusy, setSoundJobBusy] = useState<'prepare-speech' | 'render-mix' | 'cancel' | 'retry' | null>(null)
   const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
   const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
   const [adapterNotice, setAdapterNotice] = useState('密钥只驻留本次 sidecar 内存，关闭应用即清除。')
@@ -224,6 +232,12 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
     () => project.changeCards.filter((card) => card.nodeId === selectedNode.id).slice().reverse(),
     [project.changeCards, selectedNode.id],
   )
+  const soundJobs = useMemo(() => jobs.filter((job) => (
+    job.kind === 'sound-render'
+    && job.request
+    && 'documentId' in job.request
+    && job.request.documentId === workspaceDocumentId
+  )), [jobs, workspaceDocumentId])
 
   useEffect(() => {
     projectRef.current = project
@@ -272,17 +286,121 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
     successMessage?: string,
   ) => {
     try {
-      const command = createVideoProductionCommand(project, type, payload, {
+      const current = projectRef.current
+      const command = createVideoProductionCommand(current, type, payload, {
         id: `production-ui-${sequenceRef.current++}`,
         actor: 'user',
       })
-      const next = applyVideoProductionCommand(project, command, { now: Math.max(Date.now(), project.updatedAt) })
+      const next = applyVideoProductionCommand(current, command, { now: Math.max(Date.now(), current.updatedAt) })
+      projectRef.current = next
       onProjectChange(next)
       setNotice(successMessage ?? '制片状态已更新。')
       return next
     } catch (error) {
       setNotice(messageOf(error))
       return null
+    }
+  }
+
+  useEffect(() => {
+    let next = projectRef.current
+    let applied = 0
+    for (const job of soundJobs) {
+      for (const generated of job.soundRenderMetadata?.generatedBindings ?? []) {
+        const bindingKey = `${job.id}:${generated.cueId}:${generated.contentHash}`
+        if (consumedSoundBindingsRef.current.has(bindingKey)) continue
+        const cue = next.soundTimeline.audioCues.find(({ id }) => id === generated.cueId)
+        if (!cue || cue.fingerprint !== generated.cueFingerprint || cue.asset !== null) {
+          consumedSoundBindingsRef.current.add(bindingKey)
+          continue
+        }
+        try {
+          const command = createVideoProductionCommand(next, 'sound.asset.bind', {
+            cueId: cue.id,
+            binding: {
+              libraryItemId: generated.libraryItemId,
+              libraryVersionId: generated.libraryVersionId,
+              contentHash: generated.contentHash,
+              mimeType: generated.mimeType,
+              scope: generated.scope,
+              boundAt: generated.boundAt,
+            },
+          }, {
+            id: `production-sound-${sequenceRef.current++}`,
+            actor: 'orchestrator',
+          })
+          next = applyVideoProductionCommand(next, command, { now: Math.max(Date.now(), next.updatedAt) })
+          consumedSoundBindingsRef.current.add(bindingKey)
+          applied += 1
+        } catch (error) {
+          setNotice(messageOf(error))
+        }
+      }
+    }
+    if (applied) {
+      projectRef.current = next
+      onProjectChange(next)
+      setNotice(`已把 ${applied} 条 TTS 产物回填到声音时间线；请逐条试听并人工批准。`)
+    }
+  }, [onProjectChange, soundJobs])
+
+  const submitSoundJob = async (action: 'prepare-speech' | 'render-mix', options: { format?: 'mp3' | 'wav'; speechBudgetUsd?: number } = {}) => {
+    if (!workspaceProjectId || !workspaceDocumentId) {
+      setNotice('当前智能视频尚未写入 SQLite 项目，不能创建受管声音任务。')
+      return
+    }
+    setSoundJobBusy(action)
+    try {
+      await flushWorkspaceModeDocument(workspaceDocumentId)
+      const current = projectRef.current
+      const identity = {
+        action,
+        projectId: workspaceProjectId,
+        documentId: workspaceDocumentId,
+        productionRevision: current.revision,
+        soundTimelineRevision: current.soundTimeline.revision,
+        title: `${current.title} · ${action === 'prepare-speech' ? '批量配音' : '混音字幕'}`.slice(0, 120),
+      } as const
+      const job = action === 'prepare-speech'
+        ? await createSoundRenderJob({
+            ...identity,
+            action,
+            format: options.format ?? 'mp3',
+            speechBudgetUsd: options.speechBudgetUsd ?? 5,
+          }, { priority: 38 })
+        : await createSoundRenderJob({ ...identity, action }, { priority: 42 })
+      onJobTracked(job)
+      setNotice(action === 'prepare-speech'
+        ? '批量配音已进入统一 Job；每条成品会自动回填，但仍需你试听批准。'
+        : '混音与字幕已进入统一 CPU Job；完成后可作为成片输入。')
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      setSoundJobBusy(null)
+    }
+  }
+
+  const cancelSoundJob = async (jobId: string) => {
+    setSoundJobBusy('cancel')
+    try {
+      onJobTracked(await cancelVideoJob(jobId))
+      setNotice('声音任务已取消；已写入的不可变配音资源仍保留。')
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      setSoundJobBusy(null)
+    }
+  }
+
+  const retrySoundJob = async (jobId: string) => {
+    setSoundJobBusy('retry')
+    try {
+      onJobTracked(await retryVideoJob(jobId))
+      setNotice('声音任务已重新排队；若时间线已变化，服务端会拒绝旧输入。')
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      setSoundJobBusy(null)
     }
   }
 
@@ -700,6 +818,13 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, pro
             assetTargetId={soundTargetId}
             onChooseAsset={chooseSoundAsset}
             onCommand={(type, payload = {}, successMessage) => { execute(type, payload, successMessage) }}
+            jobs={soundJobs}
+            executionAvailable={Boolean(workspaceProjectId && workspaceDocumentId)}
+            busy={soundJobBusy}
+            onPrepareSpeech={(format, speechBudgetUsd) => { void submitSoundJob('prepare-speech', { format, speechBudgetUsd }) }}
+            onRenderMix={() => { void submitSoundJob('render-mix') }}
+            onCancelJob={(jobId) => { void cancelSoundJob(jobId) }}
+            onRetryJob={(jobId) => { void retrySoundJob(jobId) }}
           />
         ) : null}
 

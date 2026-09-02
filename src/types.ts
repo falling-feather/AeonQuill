@@ -379,12 +379,32 @@ export type VideoJobRequest = {
 export type FinalCutJobRequest = {
   sourceJobIds: string[]
   projectId?: string
+  soundRenderJobId?: string
   title: string
   transitionSeconds: number
   width: 1280
   height: 720
   fps: 24 | 25 | 30
 }
+
+type SoundRenderJobIdentity = {
+  projectId: string
+  documentId: string
+  productionRevision: number
+  soundTimelineRevision: number
+  title: string
+}
+
+export type SoundRenderJobRequest = SoundRenderJobIdentity & (
+  | {
+      action: 'prepare-speech'
+      format: 'mp3' | 'wav'
+      speechBudgetUsd: number
+    }
+  | {
+      action: 'render-mix'
+    }
+)
 
 export type VideoChainShotRequest = Omit<
   VideoJobRequest,
@@ -534,8 +554,8 @@ export type StorageCleanupResult = {
 
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'final-cut' | 'video-chain' | 'storage-cleanup'
-  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'final-cut' | 'video-chain' | 'storage-lifecycle'
+  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'sound-render' | 'final-cut' | 'video-chain' | 'storage-cleanup'
+  tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'sound-render' | 'final-cut' | 'video-chain' | 'storage-lifecycle'
   label: string
   status: ProcessingJobStatus
   phase?: VideoJobPhase
@@ -636,6 +656,7 @@ export type ProcessingJob = {
     | StoredImageJobRequest
     | StoredSemanticImageJobRequest
     | CustomWorkflowJobRequest
+    | SoundRenderJobRequest
     | FinalCutJobRequest
     | VideoChainJobRequest
     | StorageCleanupRequest
@@ -659,6 +680,43 @@ export type ProcessingJob = {
     estimatedCostUsd: number
     actualCostUsd: number | null
     elapsedMs: number
+  }
+  soundRenderMetadata?: {
+    action: 'prepare-speech' | 'render-mix'
+    timelineDigest?: string
+    timelineDurationMs?: number
+    requestedCueCount?: number
+    generatedBindings: Array<{
+      cueId: string
+      cueFingerprint: string
+      libraryItemId: string
+      libraryVersionId: string
+      contentHash: string
+      mimeType: 'audio/mpeg' | 'audio/wav'
+      scope: 'project'
+      boundAt: number
+      title: string
+      adapter: { providerLabel: string; model: string; profile: string; persistence: 'memory-only' }
+      usage: { estimatedCostUsd: number; actualCostUsd: number | null; elapsedMs: number }
+      remoteRequestId: string | null
+    }>
+    estimatedCostUsd?: number
+    actualCostUsd?: number | null
+    durationMs?: number
+    cueCount?: number
+    subtitleCount?: number
+    inputProbes?: Array<{ duration: number; audioCodec: string; sampleRate: number; channels: number }>
+    outputProbe?: { duration: number; audioCodec: string; sampleRate: number; channels: number }
+    mix?: { targetLufs: number; truePeakDbtp: number; dialogueDuckingDb: number; sampleRate: 48000; channels: 2 }
+    sourceAssets?: Array<{ cueId: string; contentHash: string; mimeType: string }>
+    subtitles?: Record<'srt' | 'vtt' | 'ass', {
+      filename: string
+      url: string
+      mimeType: string
+      bytes: number
+      sha256: string
+      delivery?: { status: 'copied' | 'failed'; filename?: string; directoryLabel?: string; message?: string }
+    }>
   }
   finalCutMetadata?: {
     version: string
@@ -688,6 +746,9 @@ export type ProcessingJob = {
       sampleRate: number | null
       channels: number | null
     }
+    soundMix?: boolean
+    subtitles?: boolean
+    soundRenderJobId?: string
   }
   childJobIds?: string[]
   activeChildJobId?: string

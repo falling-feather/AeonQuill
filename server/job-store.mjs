@@ -135,6 +135,9 @@ export class JobStore {
       lastFramePath: _lastFramePath,
       outputPath: _outputPath,
       temporaryOutputPath: _temporaryOutputPath,
+      subtitleSrtPath: _subtitleSrtPath,
+      subtitleVttPath: _subtitleVttPath,
+      subtitleAssPath: _subtitleAssPath,
       abortController: _abortController,
       ...safe
     } = job

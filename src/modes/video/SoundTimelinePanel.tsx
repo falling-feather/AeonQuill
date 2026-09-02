@@ -2,15 +2,21 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Download,
   FileAudio2,
+  Loader2,
   Music2,
+  RotateCcw,
   Save,
   SlidersHorizontal,
+  Square,
   Subtitles,
   UserRoundCog,
   Volume2,
+  WandSparkles,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import type { ProcessingJob } from '../../types'
 import type {
   SoundAudioCue,
   SoundSubtitleCue,
@@ -25,6 +31,13 @@ type SoundTimelinePanelProps = {
   assetTargetId: string | null
   onChooseAsset: (cueId: string) => void
   onCommand: (type: VideoProductionCommandType, payload?: Record<string, unknown>, successMessage?: string) => void
+  jobs: ProcessingJob[]
+  executionAvailable: boolean
+  busy: 'prepare-speech' | 'render-mix' | 'cancel' | 'retry' | null
+  onPrepareSpeech: (format: 'mp3' | 'wav', speechBudgetUsd: number) => void
+  onRenderMix: () => void
+  onCancelJob: (jobId: string) => void
+  onRetryJob: (jobId: string) => void
 }
 
 type SoundTab = 'voices' | 'audio' | 'subtitles' | 'mix'
@@ -210,9 +223,26 @@ function MixEditor({ timeline, onCommand }: { timeline: SoundTimeline; onCommand
   )
 }
 
-export function SoundTimelinePanel({ project, assetTargetId, onChooseAsset, onCommand }: SoundTimelinePanelProps) {
+export function SoundTimelinePanel({
+  project,
+  assetTargetId,
+  onChooseAsset,
+  onCommand,
+  jobs,
+  executionAvailable,
+  busy,
+  onPrepareSpeech,
+  onRenderMix,
+  onCancelJob,
+  onRetryJob,
+}: SoundTimelinePanelProps) {
   const timeline = project.soundTimeline
   const summary = useMemo(() => soundTimelineSummary(timeline), [timeline])
+  const missingSpeech = useMemo(() => timeline.audioCues.filter((cue) => (
+    ['dialogue', 'narration'].includes(cue.kind) && cue.asset === null
+  )).length, [timeline.audioCues])
+  const [speechFormat, setSpeechFormat] = useState<'mp3' | 'wav'>('mp3')
+  const [speechBudget, setSpeechBudget] = useState('5')
   const [tab, setTab] = useState<SoundTab>('audio')
   const [filter, setFilter] = useState<CueFilter>('all')
   const [page, setPage] = useState(0)
@@ -224,6 +254,9 @@ export function SoundTimelinePanel({ project, assetTargetId, onChooseAsset, onCo
   const pagedCues = filteredCues.slice(page * 8, page * 8 + 8)
   const subtitlePageCount = Math.max(1, Math.ceil(timeline.subtitleCues.length / 8))
   const pagedSubtitles = timeline.subtitleCues.slice(subtitlePage * 8, subtitlePage * 8 + 8)
+  const recentJobs = jobs.slice().sort((left, right) => right.createdAt - left.createdAt).slice(0, 4)
+  const activeJob = recentJobs.find(({ status }) => status === 'queued' || status === 'running')
+  const numericSpeechBudget = Number(speechBudget)
 
   useEffect(() => {
     if (page >= pageCount) setPage(Math.max(0, pageCount - 1))
@@ -245,6 +278,64 @@ export function SoundTimelinePanel({ project, assetTargetId, onChooseAsset, onCo
         <span><UserRoundCog size={13} />声线 {summary.approvedVoices}/{summary.voices}</span>
         <span><Music2 size={13} />音频槽 {summary.audioCues}</span>
       </div>
+      <section className="aq-sound-execution" aria-label="声音执行控制">
+        <header>
+          <div><strong>受控声音执行</strong><small>外部配音 → 人工试听批准 → 本地混音/字幕 → 成片任务</small></div>
+          <span>{activeJob ? `${activeJob.progress}% · ${activeJob.status === 'queued' ? '排队' : '执行中'}` : '当前空闲'}</span>
+        </header>
+        <div className="aq-sound-execution-actions">
+          <label><span>配音格式</span><select value={speechFormat} onChange={(event) => setSpeechFormat(event.target.value as 'mp3' | 'wav')}><option value="mp3">MP3</option><option value="wav">WAV</option></select></label>
+          <label><span>总预算 USD</span><input type="number" min={0} max={1000} step={0.1} value={speechBudget} onChange={(event) => setSpeechBudget(event.target.value)} /></label>
+          <button
+            type="button"
+            disabled={!executionAvailable || Boolean(activeJob) || busy !== null || missingSpeech === 0 || !Number.isFinite(numericSpeechBudget) || numericSpeechBudget < 0 || numericSpeechBudget > 1_000}
+            onClick={() => onPrepareSpeech(speechFormat, numericSpeechBudget)}
+          >
+            {busy === 'prepare-speech' ? <Loader2 size={14} className="is-spinning" /> : <WandSparkles size={14} />}
+            生成 {missingSpeech} 条缺失对白
+          </button>
+          <button
+            type="button"
+            className="is-primary"
+            disabled={!executionAvailable || Boolean(activeJob) || busy !== null || !summary.ready}
+            onClick={onRenderMix}
+          >
+            {busy === 'render-mix' ? <Loader2 size={14} className="is-spinning" /> : <Volume2 size={14} />}
+            渲染混音与字幕
+          </button>
+        </div>
+        {!executionAvailable ? <p className="is-warning">请先在项目中心创建并保存智能视频项目，声音 Job 不接受临时会话或任意路径。</p> : null}
+        {missingSpeech === 0 ? <p>全部对白已有音频版本；仍需逐条试听批准，系统不会自动代签。</p> : <p>只生成尚未绑定的对白/旁白；已经存在的音乐、环境声和音效不会被覆盖。</p>}
+        {recentJobs.length ? (
+          <div className="aq-sound-job-list">
+            {recentJobs.map((job) => {
+              const metadata = job.soundRenderMetadata
+              const preparesSpeech = metadata?.action === 'prepare-speech'
+              return (
+                <article key={job.id} className={`is-${job.status}`}>
+                  <header><strong>{preparesSpeech ? '批量配音' : '混音与字幕'}</strong><span>{job.progress}%</span></header>
+                  <code>{job.id}</code>
+                  <p>{job.detail}</p>
+                  <div className="aq-sound-job-progress"><i style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
+                  {preparesSpeech && metadata ? <small>已回填 {metadata.generatedBindings.length}/{metadata.requestedCueCount ?? 0} 条 · 预计 ${Number(metadata.estimatedCostUsd ?? 0).toFixed(4)}</small> : null}
+                  {!preparesSpeech && metadata?.subtitles ? (
+                    <div className="aq-sound-job-links">
+                      {job.outputUrl ? <a href={job.outputUrl} target="_blank" rel="noreferrer"><Volume2 size={13} />试听 WAV</a> : null}
+                      <a href={metadata.subtitles.srt.url} download><Download size={13} />SRT</a>
+                      <a href={metadata.subtitles.vtt.url} download><Download size={13} />VTT</a>
+                    </div>
+                  ) : null}
+                  {job.error ? <small className="is-error">{job.error.code} · {job.error.message}</small> : null}
+                  <footer>
+                    {['queued', 'running'].includes(job.status) ? <button type="button" disabled={busy !== null} onClick={() => onCancelJob(job.id)}><Square size={12} />取消</button> : null}
+                    {['failed', 'cancelled'].includes(job.status) ? <button type="button" disabled={busy !== null} onClick={() => onRetryJob(job.id)}><RotateCcw size={12} />重试原输入</button> : null}
+                  </footer>
+                </article>
+              )
+            })}
+          </div>
+        ) : null}
+      </section>
       <nav aria-label="声音工作区">
         {([
           ['voices', '声线', UserRoundCog],
@@ -281,7 +372,7 @@ export function SoundTimelinePanel({ project, assetTargetId, onChooseAsset, onCo
       ) : null}
 
       {tab === 'mix' ? <MixEditor key={`${timeline.subtitleStyle.revision}:${timeline.mix.revision}`} timeline={timeline} onCommand={onCommand} /> : null}
-      <p className="aq-sound-truth">当前版本只保存受控声线、音频版本、时间码、字幕和混音规格；不会假装已经完成 TTS、自动对齐或最终烧录。下一执行版本将消费同一份已批准时间线。</p>
+      <p className="aq-sound-truth">TTS 成品会以不可变项目资源回填，但必须人工试听批准；混音只消费已批准版本，输出 48kHz 双声道 WAV、SRT、VTT 与供成片器烧录的 ASS。任何时间线变更都会使旧提交因修订号不一致而失败关闭。</p>
     </section>
   )
 }

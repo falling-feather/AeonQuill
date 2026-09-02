@@ -88,6 +88,17 @@ import {
   validateFinalCutRequest,
   VIDEO_FINALIZER_VERSION,
 } from './video-finalizer.mjs'
+import {
+  SOUND_RENDERER_VERSION,
+  assertResolvedSoundAsset,
+  compileSoundMixPlan,
+  compileSpeechSynthesisPlan,
+  renderAssSubtitles,
+  renderSoundMix,
+  renderSrtSubtitles,
+  renderVttSubtitles,
+  validateSoundRenderRequest,
+} from './sound-renderer.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION, WorkflowCenterService } from './workflow-center.mjs'
 import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
@@ -99,6 +110,7 @@ import {
   compileH3Prompt,
   H3_SCENARIO_PRESETS,
 } from '../src/lib/video/h3PromptAgent.mjs'
+import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
 
 const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
@@ -877,6 +889,46 @@ function newFinalCutJob(request, options = {}) {
     request,
     sourceElementId: request.projectId,
     logs: [{ at: now, level: 'info', message: `成片任务已创建，共 ${request.sourceJobIds.length} 个受管镜头` }],
+  }
+}
+
+function newSoundRenderJob(request, options = {}) {
+  const id = `sound-render-${randomUUID()}`
+  const now = Date.now()
+  const preparesSpeech = request.action === 'prepare-speech'
+  const resourceClass = preparesSpeech ? 'orchestration' : 'cpu'
+  const scheduling = createScheduling({
+    resourceClass,
+    priority: options.priority ?? (preparesSpeech ? 38 : 42),
+    timeoutMs: preparesSpeech ? 60 * 60 * 1_000 : 30 * 60 * 1_000,
+    idempotencyKey: options.idempotencyKey,
+    attempt: options.attempt || 1,
+    maxAttempts: 3,
+    queuedAt: now,
+  })
+  return {
+    id,
+    kind: 'sound-render',
+    tool: 'sound-render',
+    label: preparesSpeech ? '声音导演 · 批量配音' : '声音导演 · 混音字幕',
+    status: 'queued',
+    phase: 'queued',
+    progress: 0,
+    detail: preparesSpeech ? '等待受控 TTS 执行器' : '等待本地 FFmpeg 混音执行器',
+    createdAt: now,
+    updatedAt: now,
+    workflowVersion: SOUND_RENDERER_VERSION,
+    requestHash: options.requestHash,
+    retryOf: options.retryOf,
+    scheduling,
+    costEvents: [createEstimateCostEvent(id, resourceClass, preparesSpeech ? 5 * 60_000 : 2 * 60_000, now)],
+    request,
+    sourceElementId: request.projectId,
+    soundRenderMetadata: {
+      action: request.action,
+      generatedBindings: [],
+    },
+    logs: [{ at: now, level: 'info', message: preparesSpeech ? '批量配音任务已创建' : '混音与字幕任务已创建' }],
   }
 }
 
@@ -1856,6 +1908,324 @@ async function runVideoJob(jobId, { signal }) {
   }
 }
 
+function authoritativeSoundProduction(request, { requireProductionRevision = true } = {}) {
+  const stored = workspaceStore.getModeDocument(request.documentId)
+  if (!stored || stored.modeId !== 'smart-video' || stored.projectId !== request.projectId) {
+    throw Object.assign(new Error('声音任务所属的智能视频项目不存在或身份不匹配'), {
+      code: 'SOUND_WORKSPACE_NOT_FOUND',
+      status: 404,
+    })
+  }
+  let payload
+  try {
+    payload = JSON.parse(stored.value)
+  } catch {
+    throw Object.assign(new Error('智能视频项目正文无法解析'), {
+      code: 'SOUND_WORKSPACE_INVALID',
+      status: 409,
+    })
+  }
+  const production = assertVideoProductionProject(payload?.production)
+  if ((requireProductionRevision && production.revision !== request.productionRevision)
+    || production.soundTimeline.revision !== request.soundTimelineRevision) {
+    throw Object.assign(new Error('声音时间线已变化；请等待项目保存后重新检查并提交'), {
+      code: 'SOUND_TIMELINE_STALE',
+      status: 409,
+      details: {
+        expectedProductionRevision: request.productionRevision,
+        actualProductionRevision: production.revision,
+        expectedSoundTimelineRevision: request.soundTimelineRevision,
+        actualSoundTimelineRevision: production.soundTimeline.revision,
+      },
+    })
+  }
+  if (production.soundTimeline.storyProjectId !== request.documentId) {
+    throw Object.assign(new Error('声音时间线与智能视频文档身份不一致'), {
+      code: 'SOUND_TIMELINE_IDENTITY_MISMATCH',
+      status: 409,
+    })
+  }
+  return { stored, production, timeline: production.soundTimeline }
+}
+
+function resolveSoundMixAssets(projectId, plan) {
+  return plan.cues.map((cue) => {
+    const binding = cue.asset
+    const item = projectStore.getLibraryAsset(binding.libraryItemId, {
+      projectId,
+      requireProjectReference: binding.scope === 'global-reference',
+    })
+    if (!item) {
+      throw Object.assign(new Error(`声音资源不存在：${binding.libraryItemId}`), {
+        code: 'SOUND_ASSET_NOT_FOUND',
+        status: 409,
+      })
+    }
+    if ((binding.scope === 'project' && item.relationship !== 'project-owned')
+      || (binding.scope === 'global-reference' && item.relationship !== 'global-reference')) {
+      throw Object.assign(new Error(`声音资源作用域不匹配：${binding.libraryItemId}`), {
+        code: 'SOUND_ASSET_SCOPE_MISMATCH',
+        status: 409,
+      })
+    }
+    const version = projectStore.libraryVersion(binding.libraryVersionId)
+    const asset = version ? projectStore.getAsset(version.assetId) : null
+    if (!version || version.itemId !== binding.libraryItemId || !asset) {
+      throw Object.assign(new Error(`声音资源版本不存在：${binding.libraryVersionId}`), {
+        code: 'SOUND_ASSET_VERSION_NOT_FOUND',
+        status: 409,
+      })
+    }
+    assertResolvedSoundAsset(binding, {
+      libraryItemId: version.itemId,
+      libraryVersionId: version.id,
+      contentHash: asset.sha256,
+      mimeType: asset.mimeType,
+    })
+    return {
+      cueId: cue.cueId,
+      path: projectStore.assetPath(asset),
+      bytes: Number(asset.bytes),
+      contentHash: asset.sha256,
+      mimeType: asset.mimeType,
+    }
+  })
+}
+
+function soundTextArtifact(filename, mimeType, contents) {
+  const bytes = Buffer.from(contents, 'utf8')
+  return {
+    filename,
+    mimeType,
+    bytes: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    url: `/api/assets/${encodeURIComponent(filename)}`,
+    contents: bytes,
+  }
+}
+
+async function runSpeechPreparationJob(jobId, job, timeline, signal) {
+  const plan = compileSpeechSynthesisPlan(timeline)
+  const status = generationAdapters.status().speech
+  if (!status.configured) {
+    throw Object.assign(new Error('本次 sidecar 会话没有 TTS 密钥；请先在生成适配器中配置语音服务'), {
+      code: 'GENERATION_ADAPTER_NOT_CONFIGURED',
+      status: 409,
+    })
+  }
+  const estimatedTotalUsd = Number((status.costRateUsd * plan.characterCount / 1_000).toFixed(6))
+  const ceilingUsd = Math.min(status.maxCostUsd, job.request.speechBudgetUsd)
+  if (estimatedTotalUsd > ceilingUsd + 1e-9) {
+    throw Object.assign(new Error(`批量配音预计费用 $${estimatedTotalUsd.toFixed(4)} 超过总预算 $${ceilingUsd.toFixed(4)}`), {
+      code: 'GENERATION_ADAPTER_COST_LIMIT',
+      status: 409,
+      details: { estimatedCostUsd: estimatedTotalUsd, ceilingUsd },
+    })
+  }
+  await store.update(jobId, {
+    phase: 'preparing',
+    progress: plan.cueCount ? 3 : 96,
+    detail: plan.cueCount ? `已锁定 ${plan.cueCount} 条缺失对白，准备逐条生成` : '当前没有缺失对白，无需调用 TTS',
+    soundRenderMetadata: {
+      ...job.soundRenderMetadata,
+      action: 'prepare-speech',
+      timelineDigest: plan.timelineDigest,
+      timelineDurationMs: plan.durationMs,
+      requestedCueCount: plan.cueCount,
+      generatedBindings: job.soundRenderMetadata?.generatedBindings || [],
+      estimatedCostUsd: estimatedTotalUsd,
+    },
+  })
+  const generatedBindings = [...(job.soundRenderMetadata?.generatedBindings || [])]
+  let actualCostUsd = 0
+  let actualCostKnown = true
+  for (let index = 0; index < plan.cues.length; index += 1) {
+    if (signal.aborted) throw signal.reason || Object.assign(new Error('Task was cancelled'), { name: 'AbortError' })
+    const cue = plan.cues[index]
+    if (cue.providerLabel !== status.providerLabel) {
+      throw Object.assign(new Error(`“${cue.speakerLabel}”批准的服务标签与当前 TTS 适配器不一致`), {
+        code: 'SOUND_VOICE_PROVIDER_MISMATCH',
+        status: 409,
+        details: { cueId: cue.cueId, expected: cue.providerLabel, configured: status.providerLabel },
+      })
+    }
+    await store.update(jobId, {
+      phase: 'processing',
+      progress: 5 + Math.round((index / Math.max(1, plan.cueCount)) * 82),
+      detail: `正在生成 ${index + 1}/${plan.cueCount} · ${cue.speakerLabel}`,
+    })
+    const result = await generationAdapters.synthesizeSpeech({
+      text: cue.text,
+      voice: cue.voiceId,
+      format: job.request.format,
+      speed: cue.speed,
+      budgetUsd: ceilingUsd,
+    }, { signal })
+    if (signal.aborted) throw signal.reason || Object.assign(new Error('Task was cancelled'), { name: 'AbortError' })
+    const asset = await persistGenerationAsset('speech', {
+      projectId: job.request.projectId,
+      title: `${job.request.title} · ${cue.speakerLabel} ${index + 1}`.slice(0, 120),
+    }, result)
+    const generated = {
+      cueId: cue.cueId,
+      cueFingerprint: cue.cueFingerprint,
+      libraryItemId: asset.id,
+      libraryVersionId: asset.version.id,
+      contentHash: asset.version.assetId,
+      mimeType: asset.version.mimeType,
+      scope: 'project',
+      boundAt: Date.now(),
+      title: asset.title,
+      adapter: result.adapter,
+      usage: result.usage,
+      remoteRequestId: result.remoteRequestId,
+    }
+    generatedBindings.push(generated)
+    if (result.usage.actualCostUsd === null) actualCostKnown = false
+    else actualCostUsd += result.usage.actualCostUsd
+    await store.update(jobId, {
+      progress: 5 + Math.round(((index + 1) / Math.max(1, plan.cueCount)) * 82),
+      detail: `已生成 ${index + 1}/${plan.cueCount} 条对白并写入项目资源库`,
+      soundRenderMetadata: {
+        action: 'prepare-speech',
+        timelineDigest: plan.timelineDigest,
+        timelineDurationMs: plan.durationMs,
+        requestedCueCount: plan.cueCount,
+        generatedBindings,
+        estimatedCostUsd: estimatedTotalUsd,
+        actualCostUsd: actualCostKnown ? Number(actualCostUsd.toFixed(6)) : null,
+      },
+    })
+  }
+  await store.log(jobId, 'success', plan.cueCount
+    ? `批量配音完成：${generatedBindings.length} 条不可变音频已进入项目资源库，仍需人工试听批准`
+    : '声音时间线没有缺失对白，未调用外部服务')
+  await store.update(jobId, {
+    status: 'completed',
+    phase: 'completed',
+    progress: 100,
+    detail: plan.cueCount ? '缺失对白已生成并回填，等待人工试听批准' : '没有缺失对白',
+    soundRenderMetadata: {
+      action: 'prepare-speech',
+      timelineDigest: plan.timelineDigest,
+      timelineDurationMs: plan.durationMs,
+      requestedCueCount: plan.cueCount,
+      generatedBindings,
+      estimatedCostUsd: estimatedTotalUsd,
+      actualCostUsd: actualCostKnown ? Number(actualCostUsd.toFixed(6)) : null,
+    },
+    completedAt: Date.now(),
+  })
+}
+
+async function runSoundMixJob(jobId, job, timeline, signal) {
+  const plan = compileSoundMixPlan(timeline)
+  const resolved = resolveSoundMixAssets(job.request.projectId, plan)
+  const outputFilename = `${job.id}-mix.wav`
+  const outputPath = join(assetDirectory, outputFilename)
+  const temporaryOutputPath = join(assetDirectory, `${job.id}.part.wav`)
+  const srt = soundTextArtifact(`${job.id}.srt`, 'application/x-subrip; charset=utf-8', renderSrtSubtitles(plan))
+  const vtt = soundTextArtifact(`${job.id}.vtt`, 'text/vtt; charset=utf-8', renderVttSubtitles(plan))
+  const ass = soundTextArtifact(`${job.id}.ass`, 'text/x-ssa; charset=utf-8', renderAssSubtitles(plan))
+  const artifactPaths = [srt, vtt, ass].map((artifact) => join(assetDirectory, artifact.filename))
+  let completed = false
+  try {
+    await store.update(jobId, {
+      phase: 'preparing',
+      progress: 4,
+      detail: '验证已批准音频版本与声音时间线',
+      outputPath,
+      temporaryOutputPath,
+      subtitleSrtPath: artifactPaths[0],
+      subtitleVttPath: artifactPaths[1],
+      subtitleAssPath: artifactPaths[2],
+      soundRenderMetadata: {
+        action: 'render-mix',
+        timelineDigest: plan.timelineDigest,
+        timelineDurationMs: plan.durationMs,
+        cueCount: plan.cues.length,
+        subtitleCount: plan.subtitles.length,
+        generatedBindings: [],
+      },
+    })
+    await Promise.all(resolved.map(async ({ path, bytes }) => {
+      const media = await stat(path)
+      if (media.size !== bytes) {
+        throw Object.assign(new Error('声音资源字节数与项目登记不一致'), {
+          code: 'SOUND_ASSET_BYTES_MISMATCH',
+          status: 409,
+        })
+      }
+    }))
+    await Promise.all([
+      writeFile(artifactPaths[0], srt.contents, { flag: 'wx' }),
+      writeFile(artifactPaths[1], vtt.contents, { flag: 'wx' }),
+      writeFile(artifactPaths[2], ass.contents, { flag: 'wx' }),
+    ])
+    await store.log(jobId, 'success', `已锁定 ${resolved.length} 个音频版本并生成 SRT/VTT/ASS 字幕侧车`)
+    const renderMetadata = await renderSoundMix({
+      ffmpegPath,
+      ffprobePath,
+      inputPaths: resolved.map(({ path }) => path),
+      outputPath: temporaryOutputPath,
+      plan,
+      signal,
+      onProgress(update) {
+        const detail = update.phase === 'validating' ? '探测已批准音频媒体规格' : '正在执行 48kHz 双声道时间线混音'
+        void store.update(jobId, { phase: update.phase, progress: update.progress, detail })
+      },
+    })
+    await rename(temporaryOutputPath, outputPath)
+    await store.update(jobId, { phase: 'saving', progress: 97, detail: '写入混音资产、字幕摘要与交付副本', temporaryOutputPath: undefined })
+    const outputVersion = await describeOutputVersion(job, outputPath, 'audio/wav')
+    const [delivery, srtDelivery, vttDelivery] = await Promise.all([
+      deliverConfiguredOutput(jobId, outputPath, outputFilename),
+      deliverConfiguredOutput(jobId, artifactPaths[0], srt.filename),
+      deliverConfiguredOutput(jobId, artifactPaths[1], vtt.filename),
+    ])
+    const subtitles = {
+      srt: { filename: srt.filename, url: srt.url, mimeType: srt.mimeType, bytes: srt.bytes, sha256: srt.sha256, delivery: srtDelivery },
+      vtt: { filename: vtt.filename, url: vtt.url, mimeType: vtt.mimeType, bytes: vtt.bytes, sha256: vtt.sha256, delivery: vttDelivery },
+      ass: { filename: ass.filename, url: ass.url, mimeType: ass.mimeType, bytes: ass.bytes, sha256: ass.sha256 },
+    }
+    await store.log(jobId, 'success', `混音质检通过：${renderMetadata.outputProbe.duration.toFixed(2)} 秒 / 48kHz / 双声道`)
+    await store.update(jobId, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      detail: '批准时间线的混音与字幕已完成，可直接交给成片任务',
+      outputUrl: `/api/assets/${encodeURIComponent(outputFilename)}`,
+      output: { filename: outputFilename, subfolder: '', type: 'output' },
+      outputVersion,
+      soundRenderMetadata: {
+        action: 'render-mix',
+        ...renderMetadata,
+        generatedBindings: [],
+        sourceAssets: resolved.map(({ cueId, contentHash, mimeType }) => ({ cueId, contentHash, mimeType })),
+        subtitles,
+      },
+      delivery,
+      completedAt: Date.now(),
+      temporaryOutputPath: undefined,
+    })
+    completed = true
+  } finally {
+    if (!completed) {
+      await unlink(temporaryOutputPath).catch(() => {})
+      await unlink(outputPath).catch(() => {})
+      for (const path of artifactPaths) await unlink(path).catch(() => {})
+    }
+  }
+}
+
+async function runSoundRenderJob(jobId, { signal }) {
+  const job = store.get(jobId)
+  if (!job) return
+  const { timeline } = authoritativeSoundProduction(job.request)
+  if (job.request.action === 'prepare-speech') await runSpeechPreparationJob(jobId, job, timeline, signal)
+  else await runSoundMixJob(jobId, job, timeline, signal)
+}
+
 function finalCutSourceJobs(request) {
   return request.sourceJobIds.map((sourceJobId) => {
     const source = store.get(sourceJobId)
@@ -1878,6 +2248,46 @@ function finalCutSourceJobs(request) {
   })
 }
 
+function finalCutSoundJob(request) {
+  if (!request.soundRenderJobId) return null
+  const sound = store.get(request.soundRenderJobId)
+  if (!sound) {
+    throw Object.assign(new Error(`成片声音任务不存在：${request.soundRenderJobId}`), {
+      code: 'FINAL_CUT_SOUND_NOT_FOUND',
+      status: 409,
+    })
+  }
+  if (sound.kind !== 'sound-render'
+    || sound.request?.action !== 'render-mix'
+    || sound.status !== 'completed'
+    || !sound.outputPath
+    || !sound.subtitleAssPath) {
+    throw Object.assign(new Error(`成片声音任务尚未完成或不可用：${request.soundRenderJobId}`), {
+      code: 'FINAL_CUT_SOUND_NOT_READY',
+      status: 409,
+    })
+  }
+  if (sound.request.projectId !== request.projectId) {
+    throw Object.assign(new Error('成片声音任务属于另一个项目'), {
+      code: 'FINAL_CUT_SOUND_PROJECT_MISMATCH',
+      status: 409,
+    })
+  }
+  const { timeline } = authoritativeSoundProduction(sound.request, { requireProductionRevision: false })
+  const currentPlan = compileSoundMixPlan(timeline)
+  if (sound.soundRenderMetadata?.timelineDigest !== currentPlan.timelineDigest) {
+    throw Object.assign(new Error('成片声音任务不再对应当前批准时间线'), {
+      code: 'FINAL_CUT_SOUND_STALE',
+      status: 409,
+    })
+  }
+  return {
+    job: sound,
+    mixPath: assertManagedPrivatePath(sound.outputPath, assetDirectory),
+    subtitlePath: assertManagedPrivatePath(sound.subtitleAssPath, assetDirectory),
+  }
+}
+
 async function runFinalCutJob(jobId, { signal }) {
   const job = store.get(jobId)
   if (!job) return
@@ -1895,8 +2305,13 @@ async function runFinalCutJob(jobId, { signal }) {
       temporaryOutputPath,
     })
     const sources = finalCutSourceJobs(job.request)
-    await Promise.all(sources.map(({ path }) => stat(path)))
+    const sound = finalCutSoundJob(job.request)
+    await Promise.all([
+      ...sources.map(({ path }) => stat(path)),
+      ...(sound ? [stat(sound.mixPath), stat(sound.subtitlePath)] : []),
+    ])
     await store.log(jobId, 'success', `已锁定 ${sources.length} 个不可变视频源版本`)
+    if (sound) await store.log(jobId, 'success', `已锁定声音任务 ${sound.job.id} 的混音与 ASS 字幕`)
     await store.update(jobId, {
       phase: 'encoding',
       progress: 8,
@@ -1908,6 +2323,8 @@ async function runFinalCutJob(jobId, { signal }) {
       inputPaths: sources.map(({ path }) => path),
       outputPath: temporaryOutputPath,
       request: job.request,
+      soundMixPath: sound?.mixPath,
+      subtitlePath: sound?.subtitlePath,
       signal,
       onProgress(update) {
         const detail = update.phase === 'probing' ? '探测并统一镜头媒体规格' : '正在进行 720P 转场、响度与成片编码'
@@ -1935,6 +2352,7 @@ async function runFinalCutJob(jobId, { signal }) {
       finalCutMetadata: {
         ...finalCutMetadata,
         sourceJobIds: job.request.sourceJobIds,
+        soundRenderJobId: sound?.job.id,
       },
       delivery,
       completedAt: Date.now(),
@@ -2501,6 +2919,7 @@ async function createCustomWorkflowJob(body, retrySource, options = {}) {
 async function createFinalCutJob(body, retrySource, options = {}) {
   const request = retrySource ? validateFinalCutRequest(retrySource.request) : validateFinalCutRequest(body)
   finalCutSourceJobs(request)
+  finalCutSoundJob(request)
   const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
   const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
   const requestHashValue = retrySource
@@ -2510,6 +2929,44 @@ async function createFinalCutJob(body, retrySource, options = {}) {
   if (existing) return { job: store.publicJob(existing), reused: true }
   await assertStorageCapacity(runtimeDirectory, 768 * 1024 * 1024)
   const job = newFinalCutJob(request, {
+    idempotencyKey,
+    requestHash: requestHashValue,
+    priority: options.priority,
+    attempt,
+    retryOf: retrySource?.id,
+  })
+  const added = await store.addIdempotent(job)
+  if (!added.created) return { job: store.publicJob(added.job), reused: true }
+  await scheduler.enqueue(job.id)
+  return { job: store.publicJob(store.get(job.id)), reused: false }
+}
+
+async function createSoundRenderJob(body, retrySource, options = {}) {
+  const request = retrySource
+    ? validateSoundRenderRequest(retrySource.request)
+    : validateSoundRenderRequest(body)
+  const { timeline } = authoritativeSoundProduction(request)
+  const plan = request.action === 'prepare-speech'
+    ? compileSpeechSynthesisPlan(timeline)
+    : compileSoundMixPlan(timeline)
+  if (request.action === 'prepare-speech' && !generationAdapters.status().speech.configured) {
+    throw Object.assign(new Error('本次 sidecar 会话没有 TTS 密钥；请先在生成适配器中配置语音服务'), {
+      code: 'GENERATION_ADAPTER_NOT_CONFIGURED',
+      status: 409,
+    })
+  }
+  const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
+  const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  const requestHashValue = retrySource
+    ? hashRequest('sound-render-retry', { sourceJobId: retrySource.id, sourceRequestHash: retrySource.requestHash, attempt })
+    : hashRequest('sound-render', { request, timelineDigest: plan.timelineDigest })
+  const existing = existingIdempotentJob('sound-render', idempotencyKey, requestHashValue)
+  if (existing) return { job: store.publicJob(existing), reused: true }
+  const estimatedBytes = request.action === 'prepare-speech'
+    ? Math.max(64 * 1024 * 1024, plan.cueCount * 12 * 1024 * 1024)
+    : Math.max(128 * 1024 * 1024, Math.ceil(plan.durationMs / 1_000) * 192_000 + 64 * 1024 * 1024)
+  await assertStorageCapacity(runtimeDirectory, estimatedBytes)
+  const job = newSoundRenderJob(request, {
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -2947,6 +3404,7 @@ scheduler
   .register('video', runVideoJob)
   .register(CUSTOM_WORKFLOW_JOB_KIND, (jobId, context) => customWorkflowExecutor.run(jobId, context))
   .register('provider-video', runProviderVideoJob)
+  .register('sound-render', runSoundRenderJob)
   .register('final-cut', runFinalCutJob)
   .register('video-chain', runVideoChainJob)
   .register('storage-cleanup', runStorageCleanupJob)
@@ -2971,11 +3429,14 @@ const mimeTypes = {
   '.mp4': 'video/mp4',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
+  '.srt': 'application/x-subrip; charset=utf-8',
+  '.vtt': 'text/vtt; charset=utf-8',
+  '.ass': 'text/x-ssa; charset=utf-8',
 }
 
 async function serveVideoAsset(request, response, filename) {
   const filePath = resolveSafeChildPath(assetDirectory, filename, {
-    extensions: new Set(['.png', '.jpg', '.jpeg', '.webp', '.mp4']),
+    extensions: new Set(['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.mp3', '.wav', '.srt', '.vtt', '.ass']),
   })
   let fileStats
   try {
@@ -3897,6 +4358,16 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, result.reused ? 200 : 202, result)
     }
+    if (request.method === 'POST' && pathname === '/api/jobs/sound-render') {
+      const body = await readJsonBody(request, 32 * 1024)
+      const result = await createSoundRenderJob(body, undefined, {
+        idempotencyKey: request.headers['idempotency-key'],
+        priority: request.headers['x-miaohui-priority'] === undefined
+          ? undefined
+          : resolvePriority(request.headers['x-miaohui-priority'], body.action === 'prepare-speech' ? 38 : 42),
+      })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
     if (request.method === 'POST' && pathname === '/api/jobs/final-cut') {
       const body = await readJsonBody(request, 32 * 1024)
       const result = await createFinalCutJob(body, undefined, {
@@ -3957,6 +4428,8 @@ const server = createServer(async (request, response) => {
           ? await createCustomWorkflowJob({}, source, options)
         : source.kind === 'provider-video'
           ? await createProviderVideoJob({}, source, options)
+          : source.kind === 'sound-render'
+            ? await createSoundRenderJob({}, source, options)
           : source.kind === 'final-cut'
             ? await createFinalCutJob({}, source, options)
             : source.kind === 'video-chain'

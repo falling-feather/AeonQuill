@@ -7,8 +7,31 @@ import { chromium } from 'playwright'
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
 const fixturePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg==', 'base64')
-const fixtureMp3 = Buffer.concat([Buffer.from('ID3', 'ascii'), Buffer.alloc(32, 1)])
 const fixtureMp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom', 'ascii'), Buffer.alloc(32, 2)])
+function fixtureWav(durationSeconds = 0.35, sampleRate = 48_000) {
+  const samples = Math.round(durationSeconds * sampleRate)
+  const dataBytes = samples * 2 * 2
+  const buffer = Buffer.alloc(44 + dataBytes)
+  buffer.write('RIFF', 0, 'ascii')
+  buffer.writeUInt32LE(36 + dataBytes, 4)
+  buffer.write('WAVEfmt ', 8, 'ascii')
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(2, 22)
+  buffer.writeUInt32LE(sampleRate, 24)
+  buffer.writeUInt32LE(sampleRate * 4, 28)
+  buffer.writeUInt16LE(4, 32)
+  buffer.writeUInt16LE(16, 34)
+  buffer.write('data', 36, 'ascii')
+  buffer.writeUInt32LE(dataBytes, 40)
+  for (let index = 0; index < samples; index += 1) {
+    const value = Math.round(Math.sin((index / sampleRate) * Math.PI * 2 * 440) * 2_500)
+    buffer.writeInt16LE(value, 44 + index * 4)
+    buffer.writeInt16LE(value, 46 + index * 4)
+  }
+  return buffer
+}
+const fixtureSpeech = fixtureWav()
 let fixtureVideoPolls = 0
 const fixtureRequests = []
 const provider = createServer(async (request, response) => {
@@ -21,8 +44,8 @@ const provider = createServer(async (request, response) => {
     return response.end(JSON.stringify({ id: 'qa-image', data: [{ b64_json: fixturePng.toString('base64'), mime_type: 'image/png' }], usage: { cost_usd: 0.01 } }))
   }
   if (request.method === 'POST' && request.url === '/v1/audio/speech') {
-    response.writeHead(200, { 'content-type': 'audio/mpeg', 'x-usage-cost-usd': '0.01' })
-    return response.end(fixtureMp3)
+    response.writeHead(200, { 'content-type': 'audio/wav', 'x-usage-cost-usd': '0.01' })
+    return response.end(fixtureSpeech)
   }
   if (request.method === 'POST' && request.url === '/v1/videos') {
     response.writeHead(200, { 'content-type': 'application/json' })
@@ -158,19 +181,45 @@ try {
   await studio.getByText('声音字幕', { exact: true }).first().click()
   const soundTimeline = studio.getByRole('region', { name: '声音字幕时间线' })
   await soundTimeline.waitFor({ state: 'visible' })
-  await soundTimeline.getByRole('button', { name: '选择音频', exact: true }).first().click()
-  await page.getByRole('button', { name: /打开.*资源库/u }).first().click()
-  const libraryDialog = page.getByRole('dialog', { name: '资源库' })
-  await libraryDialog.getByRole('tab', { name: '项目资源', exact: true }).click()
-  await libraryDialog.locator('.aq-library-grid button').filter({ hasText: audioAsset.title }).click()
-  await libraryDialog.getByRole('button', { name: '用于智能视频', exact: true }).click()
-  await libraryDialog.waitFor({ state: 'hidden' })
-  await soundTimeline.getByText(/sha256:/u).waitFor({ state: 'visible', timeout: 10_000 })
-  await soundTimeline.getByRole('button', { name: '批准', exact: true }).click()
-  await soundTimeline.getByText('已批准', { exact: true }).waitFor({ state: 'visible' })
+  await soundTimeline.getByRole('button', { name: '声线', exact: true }).click()
+  const voiceCards = soundTimeline.locator('.aq-sound-voice-card')
+  const voiceCount = await voiceCards.count()
+  assert(voiceCount > 0)
+  for (let index = 0; index < voiceCount; index += 1) {
+    const card = voiceCards.nth(index)
+    await card.getByText('服务标签').locator('..').getByRole('textbox').fill('OpenAI-compatible')
+    await card.getByText('Voice ID').locator('..').getByRole('textbox').fill(`qa-voice-${index + 1}`)
+    await card.getByRole('button', { name: '保存声线', exact: true }).click()
+    await card.getByRole('button', { name: '批准', exact: true }).click()
+  }
+  await soundTimeline.getByRole('button', { name: '音频', exact: true }).click()
+  const prepareButton = soundTimeline.getByRole('button', { name: /生成 \d+ 条缺失对白/u })
+  assert.equal(await prepareButton.isEnabled(), true)
+  await prepareButton.click()
+  await soundTimeline.getByText(/缺失对白已生成并回填/u).waitFor({ state: 'visible', timeout: 15_000 })
+  await soundTimeline.getByText(/sha256:/u).first().waitFor({ state: 'visible', timeout: 10_000 })
+  while (await soundTimeline.getByRole('button', { name: '批准', exact: true }).count()) {
+    await soundTimeline.getByRole('button', { name: '批准', exact: true }).first().click()
+  }
+  await soundTimeline.getByRole('button', { name: '字幕', exact: true }).click()
+  await soundTimeline.getByRole('button', { name: '批准全部字幕', exact: true }).click()
   await soundTimeline.getByRole('button', { name: '样式/混音', exact: true }).click()
   await soundTimeline.getByRole('button', { name: '批准样式', exact: true }).click()
   await soundTimeline.getByRole('button', { name: '批准混音', exact: true }).click()
+  await soundTimeline.getByText('声音门已就绪', { exact: true }).waitFor({ state: 'visible' })
+  await soundTimeline.getByRole('button', { name: '渲染混音与字幕', exact: true }).click()
+  await soundTimeline.getByRole('link', { name: '试听 WAV', exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
+  await soundTimeline.getByRole('link', { name: 'SRT', exact: true }).waitFor({ state: 'visible' })
+  await soundTimeline.getByRole('link', { name: 'VTT', exact: true }).waitFor({ state: 'visible' })
+
+  const soundJobs = await page.evaluate(async () => {
+    const response = await fetch('/api/jobs', { credentials: 'same-origin' })
+    const payload = await response.json()
+    return payload.jobs.filter((job) => job.kind === 'sound-render')
+  })
+  assert.deepEqual(soundJobs.map(({ status }) => status), ['completed', 'completed'])
+  assert.equal(JSON.stringify(soundJobs).includes(bridge.runtimeDirectory), false)
+  assert.equal(JSON.stringify(soundJobs).includes('subtitleAssPath'), false)
 
   await page.waitForTimeout(700)
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -181,8 +230,9 @@ try {
   await restoredStudio.getByText('剧本设计 · 本地受控建议', { exact: true }).waitFor({ state: 'visible' })
   await restoredStudio.getByText('声音字幕', { exact: true }).first().click()
   const restoredSoundTimeline = restoredStudio.getByRole('region', { name: '声音字幕时间线' })
-  await restoredSoundTimeline.getByText(/sha256:/u).waitFor({ state: 'visible' })
+  await restoredSoundTimeline.getByText(/sha256:/u).first().waitFor({ state: 'visible' })
   await restoredSoundTimeline.getByText('已批准', { exact: true }).first().waitFor({ state: 'visible' })
+  await restoredSoundTimeline.getByRole('link', { name: '试听 WAV', exact: true }).waitFor({ state: 'visible' })
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-desktop.png'), fullPage: true })
 
   await page.setViewportSize({ width: 390, height: 844 })
@@ -191,7 +241,7 @@ try {
   assert.equal(await page.locator('.aq-video-workbench').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-mobile.png'), fullPage: true })
   assert.deepEqual(issues, [])
-  console.log('✓ Production profiles, review-only agents, memory-only BYOK, sound timeline resource binding, reload persistence, and responsive layout passed')
+  console.log('✓ Production profiles, review-only agents, batch BYOK TTS, approved timeline mix/subtitles, reload persistence, and responsive layout passed')
 } catch (error) {
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-failure.png'), fullPage: true }).catch(() => undefined)
   console.error(JSON.stringify({ url: page.url(), issues, body: (await page.locator('body').innerText().catch(() => '')).slice(0, 8000), artifactDirectory }, null, 2))

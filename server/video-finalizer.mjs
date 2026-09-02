@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process'
+import { basename, dirname } from 'node:path'
 import { createRestrictedChildEnvironment } from './security.mjs'
 
-export const VIDEO_FINALIZER_VERSION = 'aeonquill-final-cut-v1'
+export const VIDEO_FINALIZER_VERSION = 'aeonquill-final-cut-v2'
 
 const JOB_ID_PATTERN = /^(?:video|provider-video)-[a-zA-Z0-9-]{8,120}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
+const SOUND_JOB_ID_PATTERN = /^sound-render-[a-zA-Z0-9-]{8,120}$/u
 const ALLOWED_KEYS = new Set([
-  'sourceJobIds', 'projectId', 'title', 'transitionSeconds', 'width', 'height', 'fps',
+  'sourceJobIds', 'projectId', 'title', 'transitionSeconds', 'width', 'height', 'fps', 'soundRenderJobId',
 ])
 
 export class VideoFinalizerError extends Error {
@@ -71,15 +73,40 @@ export function validateFinalCutRequest(input) {
   if (!Number.isSafeInteger(fps) || ![24, 25, 30].includes(fps)) {
     fail('INVALID_FINAL_CUT_REQUEST', 'fps must be 24, 25, or 30')
   }
-  return { sourceJobIds, projectId, title, transitionSeconds, width, height, fps }
+  const soundRenderJobId = input.soundRenderJobId === undefined || input.soundRenderJobId === null || input.soundRenderJobId === ''
+    ? undefined
+    : String(input.soundRenderJobId)
+  if (soundRenderJobId && !SOUND_JOB_ID_PATTERN.test(soundRenderJobId)) {
+    fail('INVALID_FINAL_CUT_REQUEST', 'soundRenderJobId is not a managed sound-render job id')
+  }
+  if (soundRenderJobId && !projectId) {
+    fail('INVALID_FINAL_CUT_REQUEST', 'projectId is required when soundRenderJobId is provided')
+  }
+  return {
+    sourceJobIds,
+    projectId,
+    title,
+    transitionSeconds,
+    width,
+    height,
+    fps,
+    ...(soundRenderJobId ? { soundRenderJobId } : {}),
+  }
 }
 
 function fixed(value) {
   return Number(value).toFixed(3)
 }
 
-export function buildFinalCutFilter({ probes, width, height, fps, transitionSeconds }) {
+export function buildFinalCutFilter({ probes, width, height, fps, transitionSeconds, externalAudioInputIndex = null, subtitleFilename = null }) {
   if (!Array.isArray(probes) || probes.length < 2) fail('INVALID_FINAL_CUT_INPUT', 'At least two media probes are required')
+  if (externalAudioInputIndex !== null && (!Number.isSafeInteger(externalAudioInputIndex) || externalAudioInputIndex < probes.length)) {
+    fail('INVALID_FINAL_CUT_INPUT', 'externalAudioInputIndex is invalid')
+  }
+  if (subtitleFilename !== null && (typeof subtitleFilename !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,239}\.ass$/u.test(subtitleFilename))) {
+    fail('INVALID_FINAL_CUT_INPUT', 'subtitleFilename is invalid')
+  }
+  const externalAudio = externalAudioInputIndex !== null
   const filters = []
   const silenceInputByClip = new Map()
   let nextInput = probes.length
@@ -89,6 +116,9 @@ export function buildFinalCutFilter({ probes, width, height, fps, transitionSeco
       `[${index}:v:0]scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,` +
       `crop=${width}:${height},fps=${fps},trim=duration=${fixed(duration)},settb=AVTB,setpts=PTS-STARTPTS[v${index}]`,
     )
+    if (externalAudio) {
+      return
+    }
     if (probe.hasAudio) {
       filters.push(
         `[${index}:a:0]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
@@ -105,7 +135,7 @@ export function buildFinalCutFilter({ probes, width, height, fps, transitionSeco
   })
 
   let videoLabel = 'v0'
-  let audioLabel = 'a0'
+  let audioLabel = externalAudio ? null : 'a0'
   let timelineDuration = Number(probes[0].duration)
   for (let index = 1; index < probes.length; index += 1) {
     const transition = Math.min(transitionSeconds, timelineDuration / 3, Number(probes[index].duration) / 3)
@@ -115,19 +145,35 @@ export function buildFinalCutFilter({ probes, width, height, fps, transitionSeco
     filters.push(
       `[${videoLabel}][v${index}]xfade=transition=fade:duration=${fixed(transition)}:offset=${fixed(offset)}[${nextVideo}]`,
     )
-    filters.push(
-      `[${audioLabel}][a${index}]acrossfade=d=${fixed(transition)}:c1=tri:c2=tri[${nextAudio}]`,
-    )
+    if (!externalAudio) {
+      filters.push(
+        `[${audioLabel}][a${index}]acrossfade=d=${fixed(transition)}:c1=tri:c2=tri[${nextAudio}]`,
+      )
+    }
     videoLabel = nextVideo
-    audioLabel = nextAudio
+    if (!externalAudio) audioLabel = nextAudio
     timelineDuration += Number(probes[index].duration) - transition
   }
+  if (subtitleFilename) {
+    filters.push(`[${videoLabel}]ass=filename='${subtitleFilename}'[vsub]`)
+    videoLabel = 'vsub'
+  }
   filters.push(`[${videoLabel}]format=yuv420p[vout]`)
-  filters.push(`[${audioLabel}]loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.891251[aout]`)
+  if (externalAudio) {
+    filters.push(
+      `[${externalAudioInputIndex}:a:0]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
+      `atrim=duration=${fixed(timelineDuration)},apad=whole_dur=${fixed(timelineDuration)},` +
+      `atrim=duration=${fixed(timelineDuration)},asetpts=PTS-STARTPTS[aout]`,
+    )
+  } else {
+    filters.push(`[${audioLabel}]loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.891251[aout]`)
+  }
   return {
     filter: filters.join(';'),
     duration: timelineDuration,
     silenceInputByClip,
+    externalAudio,
+    subtitles: Boolean(subtitleFilename),
   }
 }
 
@@ -144,13 +190,14 @@ function terminate(child) {
   }
 }
 
-function runCommand(executable, args, { signal, timeoutMs = 60 * 60 * 1_000, onStdout } = {}) {
+function runCommand(executable, args, { signal, timeoutMs = 60 * 60 * 1_000, onStdout, cwd } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     if (signal?.aborted) return rejectPromise(signal.reason || Object.assign(new Error('Task was cancelled'), { name: 'AbortError' }))
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: createRestrictedChildEnvironment(),
+      ...(cwd ? { cwd } : {}),
     })
     const stdout = []
     let stderr = ''
@@ -226,6 +273,8 @@ export async function renderFinalCut({
   inputPaths,
   outputPath,
   request,
+  soundMixPath,
+  subtitlePath,
   signal,
   onProgress,
 }) {
@@ -234,18 +283,23 @@ export async function renderFinalCut({
     probes.push(await probeVideoAsset(ffprobePath, inputPaths[index], signal))
     onProgress?.({ phase: 'probing', progress: 8 + Math.round(((index + 1) / inputPaths.length) * 12) })
   }
+  const soundInputIndex = soundMixPath ? inputPaths.length : null
+  const subtitleFilename = subtitlePath ? basename(subtitlePath) : null
   const graph = buildFinalCutFilter({
     probes,
     width: request.width,
     height: request.height,
     fps: request.fps,
     transitionSeconds: request.transitionSeconds,
+    externalAudioInputIndex: soundInputIndex,
+    subtitleFilename,
   })
   const args = ['-y', '-hide_banner', '-loglevel', 'error']
   inputPaths.forEach((inputPath) => args.push('-i', inputPath))
   for (const [clipIndex] of graph.silenceInputByClip) {
     args.push('-f', 'lavfi', '-t', fixed(probes[clipIndex].duration), '-i', 'anullsrc=r=48000:cl=stereo')
   }
+  if (soundMixPath) args.push('-i', soundMixPath)
   args.push(
     '-filter_complex', graph.filter,
     '-map', '[vout]', '-map', '[aout]',
@@ -270,6 +324,7 @@ export async function renderFinalCut({
         })
       }
     },
+    cwd: dirname(outputPath),
   })
   const outputProbe = await probeVideoAsset(ffprobePath, outputPath, signal)
   if (outputProbe.width !== request.width || outputProbe.height !== request.height) {
@@ -292,5 +347,7 @@ export async function renderFinalCut({
     expectedDuration: graph.duration,
     sourceProbes: probes,
     outputProbe,
+    soundMix: Boolean(soundMixPath),
+    subtitles: Boolean(subtitlePath),
   }
 }

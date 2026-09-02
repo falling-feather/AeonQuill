@@ -432,6 +432,19 @@ export function SmartVideoWorkbench({
     () => submittedJobs.filter((job) => job.kind === 'final-cut'),
     [submittedJobs],
   )
+  const completedSoundMixJob = useMemo(() => jobs
+    .filter((job) => (
+      job.kind === 'sound-render'
+      && job.status === 'completed'
+      && job.request
+      && 'documentId' in job.request
+      && job.request.documentId === (projectId ?? result.project.id)
+      && 'soundTimelineRevision' in job.request
+      && job.request.soundTimelineRevision === result.production.soundTimeline.revision
+      && job.soundRenderMetadata?.action === 'render-mix'
+      && job.outputUrl
+    ))
+    .sort((left, right) => right.createdAt - left.createdAt)[0], [jobs, projectId, result.production.soundTimeline.revision, result.project.id])
 
   const invalidateExecution = () => {
     setChecklist(null)
@@ -780,6 +793,7 @@ export function SmartVideoWorkbench({
       const job = await createFinalCutJob({
         sourceJobIds: completedShotJobs.map(({ id }) => id),
         projectId: workspaceProjectId ?? projectId,
+        ...(completedSoundMixJob ? { soundRenderJobId: completedSoundMixJob.id } : {}),
         title: `${projectTitle ?? result.project.title} · 720P 成片`,
         transitionSeconds: 0.24,
         width: 1280,
@@ -889,11 +903,14 @@ export function SmartVideoWorkbench({
           active={activeWorkspace === 'production'}
           runtimeLabel={liveRuntimeLabel}
           workspaceProjectId={workspaceProjectId}
+          workspaceDocumentId={projectId ?? result.project.id}
           project={result.production}
           onProjectChange={updateProductionProject}
           onBridgeToStory={bridgeProductionSource}
           libraryAsset={libraryAsset}
           onLibraryAssetConsumed={onLibraryAssetConsumed}
+          jobs={jobs}
+          onJobTracked={(job) => setJobs((existing) => upsertJob(existing, job))}
         />
         {activeWorkspace !== 'production' ? (
           <>
@@ -1411,7 +1428,7 @@ export function SmartVideoWorkbench({
                     onClick={submitFinalCut}
                   >
                     {actionBusy === 'final-cut' ? <Loader2 size={14} className="is-spinning" /> : <Clapperboard size={14} />}
-                    合成 {completedShotJobs.length} 镜 720P 成片
+                    合成 {completedShotJobs.length} 镜 720P 成片{completedSoundMixJob ? ' · 已接声音' : ''}
                   </button>
                 </div>
                 <div>

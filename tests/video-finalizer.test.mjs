@@ -19,7 +19,7 @@ test('final cut request is a bounded managed-job contract', () => {
     projectId: 'wuxia-trial-20260827',
     title: '雪夜问剑',
   })
-  assert.equal(VIDEO_FINALIZER_VERSION, 'aeonquill-final-cut-v1')
+  assert.equal(VIDEO_FINALIZER_VERSION, 'aeonquill-final-cut-v2')
   assert.deepEqual(request, {
     sourceJobIds,
     projectId: 'wuxia-trial-20260827',
@@ -29,6 +29,35 @@ test('final cut request is a bounded managed-job contract', () => {
     height: 720,
     fps: 24,
   })
+})
+
+test('final cut accepts one completed sound-render identity and compiles external mix plus managed subtitles', () => {
+  const soundRenderJobId = 'sound-render-44444444-4444-4444-8444-444444444444'
+  const request = validateFinalCutRequest({
+    sourceJobIds: sourceJobIds.slice(0, 2),
+    projectId: 'wuxia-trial-20260827',
+    title: '雪夜问剑',
+    soundRenderJobId,
+  })
+  assert.equal(request.soundRenderJobId, soundRenderJobId)
+  const graph = buildFinalCutFilter({
+    probes: [
+      { duration: 5, hasAudio: true },
+      { duration: 5, hasAudio: true },
+    ],
+    width: 1280,
+    height: 720,
+    fps: 24,
+    transitionSeconds: 0.24,
+    externalAudioInputIndex: 2,
+    subtitleFilename: `${soundRenderJobId}.ass`,
+  })
+  assert.equal(graph.externalAudio, true)
+  assert.equal(graph.subtitles, true)
+  assert.equal(graph.silenceInputByClip.size, 0)
+  assert.match(graph.filter, /\[2:a:0\].*apad=whole_dur=9\.760.*\[aout\]/u)
+  assert.match(graph.filter, /ass=filename='sound-render-.*\.ass'/u)
+  assert.doesNotMatch(graph.filter, /acrossfade/u)
 })
 
 test('final cut rejects arbitrary paths, duplicate jobs, and unknown fields', () => {
@@ -43,6 +72,13 @@ test('final cut rejects arbitrary paths, duplicate jobs, and unknown fields', ()
   assert.throws(
     () => validateFinalCutRequest({ sourceJobIds: sourceJobIds.slice(0, 2), workflowJson: {} }),
     (error) => error.code === 'INVALID_FINAL_CUT_REQUEST',
+  )
+  assert.throws(
+    () => validateFinalCutRequest({
+      sourceJobIds: sourceJobIds.slice(0, 2),
+      soundRenderJobId: 'sound-render-44444444-4444-4444-8444-444444444444',
+    }),
+    /projectId is required/u,
   )
 })
 

@@ -94,6 +94,9 @@ test('public jobs strip private paths and process handles', async (t) => {
     maskPath: 'C:\\private\\mask.png',
     lastFramePath: 'C:\\private\\last.png',
     outputPath: 'C:\\private\\output.png',
+    subtitleSrtPath: 'C:\\private\\captions.srt',
+    subtitleVttPath: 'C:\\private\\captions.vtt',
+    subtitleAssPath: 'C:\\private\\captions.ass',
     abortController,
   }
   await store.add(job)
@@ -103,6 +106,9 @@ test('public jobs strip private paths and process handles', async (t) => {
   assert.equal(publicJob.maskPath, undefined)
   assert.equal(publicJob.lastFramePath, undefined)
   assert.equal(publicJob.outputPath, undefined)
+  assert.equal(publicJob.subtitleSrtPath, undefined)
+  assert.equal(publicJob.subtitleVttPath, undefined)
+  assert.equal(publicJob.subtitleAssPath, undefined)
   assert.equal(publicJob.abortController, undefined)
 
   const persisted = JSON.parse(await readFile(store.filePath, 'utf8'))

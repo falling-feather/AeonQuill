@@ -23,6 +23,7 @@
     "validate:storage-lifecycle-ui": "npm run build && node scripts/validate-storage-lifecycle-ui.mjs",
     "validate:custom-workflow:live": "node scripts/validate-custom-workflow-live.mjs",
     "validate:production-agent": "npm run build && node scripts/validate-production-agent-ui.mjs",
+    "validate:sound-renderer": "node scripts/validate-sound-renderer.mjs",
     "validate:p7": "npm run validate && node scripts/validate-p7-integration.mjs",
     "benchmark:canvas": "node scripts/benchmark-canvas.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",

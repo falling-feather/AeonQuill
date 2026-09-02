@@ -246,6 +246,11 @@ export function saveWorkspaceModeDocument(input: {
   return request
 }
 
+export async function flushWorkspaceModeDocument(documentId: string) {
+  const pending = workspaceDocumentWrites.get(documentId)
+  if (pending) await pending
+}
+
 export async function listWorkspaceRecoveryPoints(projectId: string) {
   const payload = await api<{ recoveryPoints: WorkspaceRecoveryPoint[] }>(
     `/api/workspace/projects/${encodeURIComponent(projectId)}/recovery-points`,

@@ -6,6 +6,7 @@ import type {
   RuntimeDiagnostics,
   RuntimeRegistryMigrationPreview,
   RuntimeStatus,
+  SoundRenderJobRequest,
   StorageCleanupRequest,
   StoragePolicy,
   StorageScan,
@@ -216,6 +217,21 @@ export async function createFinalCutJob(request: FinalCutJobRequest, options: Cr
   }
   if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/final-cut', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  })
+  return payload.job
+}
+
+export async function createSoundRenderJob(request: SoundRenderJobRequest, options: CreateVideoJobOptions = {}) {
+  const idempotencyKey = options.idempotencyKey ?? `sound-render-${crypto.randomUUID()}`
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'idempotency-key': idempotencyKey,
+  }
+  if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
+  const payload = await api<{ job: ProcessingJob }>('/api/jobs/sound-render', {
     method: 'POST',
     headers,
     body: JSON.stringify(request),
