@@ -15,8 +15,6 @@ $targetRelease = Join-Path $projectRoot 'desktop\tauri\src-tauri\target\release'
 $builtApplication = Join-Path $targetRelease 'aeonquill-desktop.exe'
 $bundledSidecar = Join-Path $targetRelease 'aeonquill-bridge.exe'
 $installer = Join-Path $targetRelease ("bundle\nsis\AEONQUILL_{0}_x64-setup.exe" -f $productVersion)
-$signingRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-SIGNING-TEMP'
-$signingConfig = Join-Path $signingRoot 'tauri-self-signing.json'
 $buildTempRoot = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'AEONQUILL-BUILD-TEMP'
 $certificateThumbprint = $null
 $previousConfig = $env:AEONQUILL_TAURI_CONFIG
@@ -243,7 +241,7 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.26'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.27'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
 
@@ -274,38 +272,35 @@ try {
   & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $sourceSidecar
   if ($LASTEXITCODE -ne 0) { throw "Sidecar 签名失败：$LASTEXITCODE" }
 
-  New-Item -ItemType Directory -Force -Path $signingRoot | Out-Null
-  $config = [ordered]@{
-    bundle = [ordered]@{
-      windows = [ordered]@{
-        certificateThumbprint = $certificateThumbprint
-        digestAlgorithm = 'sha256'
-        timestampUrl = $null
-      }
-    }
-  }
-  [IO.File]::WriteAllText(
-    $signingConfig,
-    (($config | ConvertTo-Json -Depth 6) + [Environment]::NewLine),
-    (New-Object Text.UTF8Encoding($false))
-  )
-  $env:AEONQUILL_TAURI_CONFIG = $signingConfig
+  # Do not expose a certificate to Tauri's internal bundler. On this Windows
+  # host its signed NSIS branch can fail before rendering installer.nsi with an
+  # opaque EOF. Instead, build once without a bundle, sign the exact PE files
+  # that must be embedded, bundle those already-signed files, then sign the
+  # outer installer. This also prevents the bundle-only phase from rebuilding
+  # and silently replacing the signed application.
+  Remove-Item Env:\AEONQUILL_TAURI_CONFIG -ErrorAction SilentlyContinue
+  Write-Host '正在构建未分包的 Tauri release…'
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\tauri-toolchain.ps1') release
+  if ($LASTEXITCODE -ne 0) { throw "Tauri release 构建失败：$LASTEXITCODE" }
 
-  Write-Host '正在构建并签名 Tauri 应用与 NSIS 安装器…'
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\tauri-toolchain.ps1') bundle
-  if ($LASTEXITCODE -ne 0) { throw "Tauri 签名构建失败：$LASTEXITCODE" }
+  foreach ($artifact in @(
+    @{ Path = $builtApplication; Label = '主程序' },
+    @{ Path = $bundledSidecar; Label = '分包 sidecar' }
+  )) {
+    & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $artifact.Path
+    if ($LASTEXITCODE -ne 0) { throw "$($artifact.Label)签名失败：$LASTEXITCODE" }
+    Assert-SelfSignedArtifact -Path $artifact.Path -ExpectedSigner $SignerName | Out-Null
+  }
 
-  try {
-    $builtSigner = [Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($builtApplication)
-    $builtSignerCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($builtSigner)
-  } catch {
-    $builtSignerCertificate = $null
+  Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+  Write-Host '正在将已签署主程序与 sidecar 封入 NSIS…'
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\tauri-toolchain.ps1') bundle-existing
+  if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS 分包失败：$LASTEXITCODE" }
+  if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+    throw "Tauri NSIS 分包未生成预期安装器：$installer"
   }
-  if ($null -eq $builtSignerCertificate -or -not $builtSignerCertificate.Subject.Contains($SignerName)) {
-    Write-Host 'Tauri 构建目录主程序需要在 NSIS 收尾后补签…'
-    & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $builtApplication
-    if ($LASTEXITCODE -ne 0) { throw "主程序补签失败：$LASTEXITCODE" }
-  }
+  & $signTool sign /sha1 $certificateThumbprint /fd SHA256 /v $installer
+  if ($LASTEXITCODE -ne 0) { throw "安装器签名失败：$LASTEXITCODE" }
 
   $reports = @(
     Assert-SelfSignedArtifact -Path $builtApplication -ExpectedSigner $SignerName
@@ -346,10 +341,6 @@ try {
     } else {
       Set-Item ("Env:\{0}" -f $entry.Name) ([string]$entry.Value)
     }
-  }
-  Remove-Item -LiteralPath $signingConfig -Force -ErrorAction SilentlyContinue
-  if ((Test-Path -LiteralPath $signingRoot) -and @((Get-ChildItem -LiteralPath $signingRoot -Force)).Count -eq 0) {
-    Remove-Item -LiteralPath $signingRoot -Force -ErrorAction SilentlyContinue
   }
   if (-not [string]::IsNullOrWhiteSpace($certificateThumbprint)) {
     Remove-TemporaryCertificate -Thumbprint $certificateThumbprint

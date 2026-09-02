@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('check', 'debug', 'release', 'bundle')]
+  [ValidateSet('check', 'debug', 'release', 'bundle', 'bundle-existing')]
   [string]$Mode = 'check'
 )
 
@@ -68,7 +68,11 @@ if ($Mode -eq 'check') {
 
 Push-Location (Join-Path $aeonquillProjectRoot 'desktop\tauri')
 try {
-  $aeonquillTauriArguments = @('build', '--ci')
+  if ($Mode -eq 'bundle-existing') {
+    $aeonquillTauriArguments = @('bundle', '--ci', '--bundles', 'nsis')
+  } else {
+    $aeonquillTauriArguments = @('build', '--ci')
+  }
   if (-not [string]::IsNullOrWhiteSpace($env:AEONQUILL_TAURI_CONFIG)) {
     $aeonquillSigningConfig = (Resolve-Path -LiteralPath $env:AEONQUILL_TAURI_CONFIG).Path
     $aeonquillTauriArguments += @('--config', $aeonquillSigningConfig)

@@ -21,14 +21,14 @@ test('build identity binds product, functional track, source commit and runtime 
     environment: {
       AEONQUILL_BUILD_COMMIT: sourceCommit,
       AEONQUILL_PRODUCT_VERSION: '0.7.1',
-      AEONQUILL_FUNCTIONAL_TRACK: 'V0.7.26',
+      AEONQUILL_FUNCTIONAL_TRACK: 'V0.7.27',
       AEONQUILL_BUILD_IDENTITY_VERSION: 'aeonquill-build-identity-v1',
       AEONQUILL_RUNTIME_REGISTRY_VERSION: 'aeonquill-runtime-registry-v1',
     },
   })
 
   assert.equal(identity.productVersion, '0.7.1')
-  assert.equal(identity.functionalTrack, 'V0.7.26')
+  assert.equal(identity.functionalTrack, 'V0.7.27')
   assert.equal(identity.sourceCommit, sourceCommit)
   assert.equal(identity.sourceCommitShort, sourceCommit.slice(0, 8))
   assert.equal(identity.runtimePackageId, runtimePackageId)
@@ -36,7 +36,7 @@ test('build identity binds product, functional track, source commit and runtime 
   assert.deepEqual(executionIdentity(identity), {
     identityHash: identity.identityHash,
     productVersion: '0.7.1',
-    functionalTrack: 'V0.7.26',
+    functionalTrack: 'V0.7.27',
     sourceCommit,
     runtimePackageId,
     runtimeRegistryVersion: 'aeonquill-runtime-registry-v1',
@@ -66,7 +66,7 @@ test('new jobs persist the execution identity that created them', async (t) => {
   const stamp = {
     identityHash: 'a'.repeat(64),
     productVersion: '0.7.1',
-    functionalTrack: 'V0.7.26',
+    functionalTrack: 'V0.7.27',
     sourceCommit,
     runtimePackageId: null,
     runtimeRegistryVersion: 'aeonquill-runtime-registry-v1',

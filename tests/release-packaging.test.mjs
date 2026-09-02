@@ -31,7 +31,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
   assert.equal(metadata.version, '0.7.1')
-  assert.equal(metadata.functionalTrack, 'V0.7.26')
+  assert.equal(metadata.functionalTrack, 'V0.7.27')
   assert.equal(metadata.buildIdentityVersion, 'aeonquill-build-identity-v1')
   assert.equal(metadata.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
@@ -49,7 +49,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.match(cargoSource, /^tauri-plugin-single-instance = "2"$/m)
   assert.match(mainSource, /aeonquill_desktop_lib::run\(\)/)
   assert.match(tauriSource, /\.sidecar\("aeonquill-bridge"\)/)
-  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.26"/)
+  assert.match(tauriSource, /const FUNCTIONAL_TRACK: &str = "V0\.7\.27"/)
   assert.match(tauriSource, /option_env!\("AEONQUILL_BUILD_COMMIT"\)/)
   assert.match(tauriSource, /\.title\("光阴砚 AEONQUILL"\)/)
   assert.match(tauriSource, /close_window\.close\(\)/)
@@ -252,6 +252,28 @@ test('signed desktop build reuses only a trusted Microsoft WebView2 offline inst
   assert.doesNotMatch(toolchainSource, /Get-FileHash/)
   assert.match(toolchainSource, /379A53C258AE20595DAAFA0C68EEAF5E8FE6DE93C054D4A4857BC84BCE74475E/)
   assert.match(toolchainSource, /tauri-cli 2\.11\.4/)
+})
+
+test('signed desktop build signs payloads before an isolated bundle-only phase', async () => {
+  const [source, toolchainSource] = await Promise.all([
+    readFile(join(projectRoot, 'scripts', 'package-signed-desktop.ps1'), 'utf8'),
+    readFile(join(projectRoot, 'scripts', 'tauri-toolchain.ps1'), 'utf8'),
+  ])
+  const releaseAt = source.indexOf("tauri-toolchain.ps1') release")
+  const applicationSignAt = source.indexOf("@{ Path = $builtApplication")
+  const staleInstallerRemovalAt = source.indexOf('Remove-Item -LiteralPath $installer')
+  const bundleAt = source.indexOf("tauri-toolchain.ps1') bundle-existing")
+  const installerSignAt = source.lastIndexOf('& $signTool sign')
+  assert.ok(releaseAt >= 0)
+  assert.ok(applicationSignAt > releaseAt)
+  assert.ok(staleInstallerRemovalAt > applicationSignAt)
+  assert.ok(bundleAt > staleInstallerRemovalAt)
+  assert.ok(installerSignAt > bundleAt)
+  assert.match(source, /Remove-Item Env:\\AEONQUILL_TAURI_CONFIG/)
+  assert.doesNotMatch(source, /tauri-self-signing\.json/)
+  assert.doesNotMatch(source, /certificateThumbprint\s*=\s*\$certificateThumbprint/)
+  assert.match(toolchainSource, /bundle-existing/)
+  assert.match(toolchainSource, /@\('bundle', '--ci', '--bundles', 'nsis'\)/)
 })
 
 test('new user-visible jobs and diagnostics use AEONQUILL while legacy protocols remain readable', async () => {
