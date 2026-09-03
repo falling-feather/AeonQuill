@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import { deserializePixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
+import { collectJobReferenceIds } from './job-archive.mjs'
 import {
   assertProjectCatalog,
   createProjectCatalog,
@@ -41,6 +42,15 @@ function collectStorageReferences(source, projectAssetIds, jobAssetFilenames) {
     } catch {
       // Invalid encoded references are ignored; they cannot resolve to a managed asset.
     }
+  }
+}
+
+function collectSerializedJobReferences(source, references) {
+  if (typeof source !== 'string' || !source) return
+  try {
+    collectJobReferenceIds(JSON.parse(source), references)
+  } catch {
+    // Stored workspace JSON is validated on write; an unreadable row must not invent references.
   }
 }
 
@@ -555,6 +565,21 @@ export class WorkspaceStore {
       jobAssetFilenames: [...jobAssetFilenames].sort(),
       sources,
     }
+  }
+
+  jobReferences() {
+    this.assertOpen()
+    const references = new Set()
+    const catalog = this.database.prepare('SELECT value_json AS value FROM workspace_meta WHERE key = ?').get('project-catalog')
+    if (catalog?.value) collectSerializedJobReferences(catalog.value, references)
+    for (const row of this.database.prepare('SELECT value_json AS value FROM mode_documents').all()) {
+      collectSerializedJobReferences(row.value, references)
+    }
+    for (const row of this.database.prepare('SELECT project_json AS projectJson, body_json AS bodyJson FROM recovery_points').all()) {
+      collectSerializedJobReferences(row.projectJson, references)
+      collectSerializedJobReferences(row.bodyJson, references)
+    }
+    return [...references].sort()
   }
 
   restoreRecoveryPoint(recoveryId, options = {}) {

@@ -1,5 +1,6 @@
 import type {
   FinalCutJobRequest,
+  JobArchiveSummary,
   ProcessingJob,
   RuntimeConfigurationRequest,
   RuntimeConfigurationResult,
@@ -21,9 +22,9 @@ export const VIDEO_DIMENSIONS = {
 } as const
 
 export type JobEvent =
-  | { type: 'jobs.snapshot'; jobs: ProcessingJob[] }
+  | { type: 'jobs.snapshot'; jobs: ProcessingJob[]; archive?: JobArchiveSummary }
   | { type: 'job.updated'; job: ProcessingJob }
-  | { type: 'jobs.cleared'; ids: string[] }
+  | { type: 'jobs.cleared'; ids: string[]; archive?: JobArchiveSummary }
   | { type: 'runtime.updated'; runtime: RuntimeStatus }
 
 let sessionReady: Promise<void> | null = null
@@ -180,8 +181,18 @@ export async function updateRuntimePolicy(
 }
 
 export async function fetchVideoJobs() {
-  const payload = await api<{ jobs: ProcessingJob[] }>('/api/jobs')
+  const payload = await api<{ jobs: ProcessingJob[]; archive?: JobArchiveSummary }>('/api/jobs')
   return payload.jobs
+}
+
+export async function fetchArchivedJobs(cursor?: string, limit = 30) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (cursor) query.set('cursor', cursor)
+  return api<{
+    jobs: ProcessingJob[]
+    nextCursor: string | null
+    archive: JobArchiveSummary
+  }>(`/api/jobs/archive?${query.toString()}`)
 }
 
 export type CreateVideoJobOptions = {
@@ -270,7 +281,12 @@ export async function retryVideoJob(jobId: string) {
 }
 
 export async function clearFinishedJobs() {
-  return api<{ removed: string[] }>('/api/jobs', { method: 'DELETE' })
+  return api<{
+    removed: string[]
+    archived: string[]
+    protected: string[]
+    archive: JobArchiveSummary
+  }>('/api/jobs', { method: 'DELETE' })
 }
 
 export async function subscribeVideoJobs(

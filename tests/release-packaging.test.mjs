@@ -155,6 +155,22 @@ test('Electron preserves legacy user data only when the AEONQUILL location is st
   )
 })
 
+test('Electron treats a standalone job archive as durable user data', () => {
+  const current = join(projectRoot, '.test-paths', 'AEONQUILL-archive-only')
+  const legacy = join(projectRoot, '.test-paths', 'MiaoHui-archive-only')
+  const archiveMarker = DURABLE_USER_DATA_MARKERS.find((marker) => marker === join('runtime', 'job-archive.json'))
+  assert.ok(archiveMarker)
+
+  assert.deepEqual(
+    selectElectronUserDataDirectory({
+      defaultDirectory: current,
+      legacyDirectory: legacy,
+      pathExists: (pathname) => pathname === join(legacy, archiveMarker),
+    }),
+    { directory: legacy, layout: 'legacy-miaohui-preserved' },
+  )
+})
+
 test('portable desktop layout is strict and resolves UserData beside App', () => {
   const applicationDirectory = join(projectRoot, '.test-paths', 'portable', 'App')
   const markerPath = join(applicationDirectory, PORTABLE_LAYOUT_FILENAME)

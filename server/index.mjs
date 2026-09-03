@@ -20,6 +20,7 @@ import {
   JobScheduler,
 } from './job-scheduler.mjs'
 import { JobStore } from './job-store.mjs'
+import { normalizeJobArchivePolicy } from './job-archive.mjs'
 import { assetVersionId, MAX_PACKAGE_BYTES, ProjectStore } from './project-store.mjs'
 import {
   AEONQUILL_PACKAGE_EXTENSION,
@@ -137,6 +138,14 @@ const assetDirectory = join(dataDirectory, 'assets')
 const localRuntimeConfig = await loadLocalRuntimeConfig()
 const managedComfyLaunch = buildManagedComfyLaunch({ args: localRuntimeConfig.comfyArgs })
 const buildIdentity = await resolveBuildIdentity({ projectRoot, runtimeConfig: localRuntimeConfig })
+const jobArchivePolicy = normalizeJobArchivePolicy({
+  maxActiveTerminalJobs: process.env.AEONQUILL_JOB_ACTIVE_LIMIT,
+  archiveAfterDays: process.env.AEONQUILL_JOB_ARCHIVE_AFTER_DAYS,
+  failedArchiveAfterDays: process.env.AEONQUILL_JOB_FAILED_ARCHIVE_AFTER_DAYS,
+  recentFailureDays: process.env.AEONQUILL_JOB_RECENT_FAILURE_DAYS,
+  minActiveFailures: process.env.AEONQUILL_JOB_MIN_ACTIVE_FAILURES,
+})
+const terminalJobStatuses = new Set(['completed', 'failed', 'cancelled'])
 const port = Number(process.env.AEONQUILL_PORT || process.env.MIAOHUI_PORT || localRuntimeConfig.bridgePort || 8787)
 const host = process.env.AEONQUILL_HOST || process.env.MIAOHUI_HOST || '127.0.0.1'
 const security = new LocalBridgeSecurity({ host, port, allowedOrigins: localRuntimeConfig.allowedOrigins })
@@ -155,6 +164,7 @@ const imageProcessor = new ImageProcessor({
 })
 const store = new JobStore(join(dataDirectory, 'jobs.json'), {
   getExecutionIdentity: () => executionIdentity(buildIdentity),
+  archiveFilePath: join(dataDirectory, 'job-archive.json'),
 })
 const projectStore = new ProjectStore(join(dataDirectory, 'projects'))
 const workspaceStore = new WorkspaceStore(join(dataDirectory, 'workspaces'))
@@ -3674,7 +3684,49 @@ function broadcast(payload) {
   for (const response of sseClients) response.write(data)
 }
 
-store.subscribe((job) => broadcast({ type: 'job.updated', job }))
+let jobArchiveTimer = null
+let jobArchiveChain = Promise.resolve()
+
+function protectedJobIds() {
+  return [...new Set([
+    ...workspaceStore.jobReferences(),
+    ...projectStore.jobReferences(),
+  ])]
+}
+
+function runJobArchiveMaintenance(options = {}) {
+  const operation = jobArchiveChain
+    .catch(() => {})
+    .then(async () => {
+      const result = await store.archiveTerminal({
+        policy: jobArchivePolicy,
+        protectedJobIds: protectedJobIds(),
+        forceTerminal: options.forceTerminal === true,
+      })
+      if (result.archived.length) {
+        broadcast({ type: 'jobs.cleared', ids: result.archived, archive: result.summary })
+      }
+      return result
+    })
+  jobArchiveChain = operation.catch((error) => {
+    console.warn(`[JOB_ARCHIVE_SKIPPED] ${redactSensitiveText(error?.message || 'archive maintenance failed')}`)
+  })
+  return operation
+}
+
+function scheduleJobArchiveMaintenance(job) {
+  if (!terminalJobStatuses.has(job?.status) || jobArchiveTimer) return
+  jobArchiveTimer = setTimeout(() => {
+    jobArchiveTimer = null
+    void runJobArchiveMaintenance().catch(() => {})
+  }, 750)
+  jobArchiveTimer.unref()
+}
+
+store.subscribe((job) => {
+  broadcast({ type: 'job.updated', job })
+  scheduleJobArchiveMaintenance(job)
+})
 workflowCenter.subscribe((job) => broadcast({ type: 'workflow.install.updated', job }))
 runtimeManager.subscribe(() => {
   runtimeCache = null
@@ -3769,6 +3821,7 @@ scheduler
   .register('storage-cleanup', runStorageCleanupJob)
 await prepareRecoveredJobs()
 await scheduler.recover()
+await runJobArchiveMaintenance()
 
 const heartbeat = setInterval(() => {
   for (const response of sseClients) response.write(': heartbeat\n\n')
@@ -4646,14 +4699,41 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, { removed })
     }
     if (request.method === 'GET' && pathname === '/api/jobs') {
-      return sendJson(response, 200, { jobs: store.list().map((job) => store.publicJob(job)) })
+      return sendJson(response, 200, {
+        jobs: store.list().map((job) => store.publicJob(job)),
+        archive: store.archiveSummary(),
+      })
     }
     if (request.method === 'DELETE' && pathname === '/api/jobs') {
       const terminalJobs = store.list().filter((job) => ['completed', 'failed', 'cancelled'].includes(job.status))
-      const removed = await store.clearTerminal()
-      await cleanupTerminalJobInputs(terminalJobs)
-      broadcast({ type: 'jobs.cleared', ids: removed })
-      return sendJson(response, 200, { removed })
+      const result = await runJobArchiveMaintenance({ forceTerminal: true })
+      const archivedJobs = terminalJobs.filter((job) => result.archived.includes(job.id))
+      await cleanupTerminalJobInputs(archivedJobs)
+      return sendJson(response, 200, {
+        removed: result.archived,
+        archived: result.archived,
+        protected: result.protectedIds,
+        archive: result.summary,
+      })
+    }
+    if (request.method === 'GET' && pathname === '/api/jobs/archive') {
+      const page = store.archivedPage({
+        limit: url.searchParams.get('limit'),
+        cursor: url.searchParams.get('cursor'),
+      })
+      return sendJson(response, 200, {
+        jobs: page.jobs.map((job) => store.publicJob(job)),
+        nextCursor: page.nextCursor,
+        archive: page.summary,
+      })
+    }
+    if (request.method === 'POST' && pathname === '/api/jobs/archive/maintenance') {
+      const result = await runJobArchiveMaintenance()
+      return sendJson(response, 200, {
+        archived: result.archived,
+        protected: result.protectedIds,
+        archive: result.summary,
+      })
     }
     if (request.method === 'GET' && pathname === '/api/jobs/events') {
       response.writeHead(200, {
@@ -4662,7 +4742,11 @@ const server = createServer(async (request, response) => {
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
       })
-      response.write(`data: ${JSON.stringify({ type: 'jobs.snapshot', jobs: store.list().map((job) => store.publicJob(job)) })}\n\n`)
+      response.write(`data: ${JSON.stringify({
+        type: 'jobs.snapshot',
+        jobs: store.list().map((job) => store.publicJob(job)),
+        archive: store.archiveSummary(),
+      })}\n\n`)
       sseClients.add(response)
       request.on('close', () => sseClients.delete(response))
       return
@@ -4843,6 +4927,7 @@ async function shutdown() {
   if (shutdownStarted) return
   shutdownStarted = true
   clearInterval(heartbeat)
+  if (jobArchiveTimer) clearTimeout(jobArchiveTimer)
   for (const response of sseClients) response.end()
   await workflowCenter.close().catch(() => {})
   await runtimeManager.dispose().catch(() => {})

@@ -157,6 +157,17 @@ test('data directory keeps legacy durable state visible until an explicit migrat
   })
 })
 
+test('data directory treats a standalone job archive as durable state', async () => {
+  await withTempDirectory(async (root) => {
+    const runtimeRoot = join(root, 'runtime')
+    const configuredDirectory = join(root, 'data')
+    await mkdir(runtimeRoot, { recursive: true })
+    await writeFile(join(runtimeRoot, 'job-archive.json'), '{"schemaVersion":1,"jobs":[]}\n', 'utf8')
+
+    assert.equal(resolveDataDirectory({ configuredDirectory, runtimeRoot }), resolve(runtimeRoot))
+  })
+})
+
 test('default output directory follows the application root unless the desktop shell overrides it', async () => {
   await withTempDirectory(async (root) => {
     assert.equal(

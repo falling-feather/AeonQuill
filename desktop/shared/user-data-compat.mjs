@@ -10,6 +10,8 @@ export const DURABLE_USER_DATA_MARKERS = Object.freeze([
   join('runtime', 'projects'),
   join('runtime', 'assets'),
   join('runtime', 'client-state'),
+  join('data', 'job-archive.json'),
+  join('runtime', 'job-archive.json'),
 ])
 
 function containsDurableData(rootDirectory, pathExists) {

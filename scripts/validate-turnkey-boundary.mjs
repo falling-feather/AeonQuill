@@ -62,6 +62,7 @@ const forbiddenNames = new Set([
   'projects',
   'client-state',
   'jobs.json',
+  'job-archive.json',
 ])
 let files = 0
 let inspectedTextFiles = 0

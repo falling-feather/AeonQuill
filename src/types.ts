@@ -353,6 +353,15 @@ export type ProcessingJobOutputVersion = {
   provenance: Record<string, unknown>
 }
 
+export type JobArchiveSummary = {
+  schemaVersion: 1
+  revision: number
+  total: number
+  byStatus: { completed: number; failed: number; cancelled: number }
+  oldestArchivedAt: number | null
+  newestArchivedAt: number | null
+}
+
 export type VideoJobRequest = {
   mode: VideoGenerationMode
   prompt: string
@@ -567,6 +576,11 @@ export type ProcessingJob = {
   createdAt: number
   updatedAt?: number
   completedAt?: number
+  archiveMetadata?: {
+    schemaVersion: 1
+    archivedAt: number
+    reason: 'manual' | 'age' | 'active-limit'
+  }
   workflowVersion?: string
   executionIdentity?: {
     identityHash: string

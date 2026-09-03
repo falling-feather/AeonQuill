@@ -128,3 +128,89 @@ test('concurrent updates serialize and terminal cleanup is persisted', async (t)
   assert.deepEqual(await store.clearTerminal(), ['job-a'])
   assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), [])
 })
+
+test('terminal jobs move into a durable paged archive without losing failure evidence', async (t) => {
+  const { store, filePath } = await withTempStore(t, [
+    {
+      id: 'failed-job', kind: 'video', status: 'failed', phase: 'failed', progress: 71, createdAt: 1,
+      error: { code: 'GPU_OOM', title: '显存不足', message: '保留诊断证据' },
+      logs: [{ at: 2, level: 'error', message: '采样中断' }],
+      scheduling: { idempotencyKey: 'failed-request' },
+    },
+    { id: 'completed-job', status: 'completed', createdAt: 2 },
+    { id: 'protected-job', status: 'completed', createdAt: 3 },
+    { id: 'running-job', status: 'queued', createdAt: 4, request: { sourceJobIds: ['completed-job'] } },
+  ])
+
+  const result = await store.archiveTerminal({
+    now: 10,
+    forceTerminal: true,
+    protectedJobIds: ['protected-job'],
+  })
+  assert.deepEqual(result.archived, ['failed-job'])
+  assert.equal(store.location('failed-job'), 'archived')
+  assert.equal(store.location('completed-job'), 'active')
+  assert.equal(store.get('failed-job').error.code, 'GPU_OOM')
+  assert.equal(store.get('failed-job').logs[0].message, '采样中断')
+  assert.equal(store.list().length, 3)
+  assert.equal(store.listArchived().length, 1)
+
+  const active = JSON.parse(await readFile(filePath, 'utf8'))
+  assert.equal(active.some(({ id }) => id === 'failed-job'), false)
+  const archive = JSON.parse(await readFile(store.archiveFilePath, 'utf8'))
+  assert.equal(archive.schemaVersion, 1)
+  assert.equal(archive.jobs[0].id, 'failed-job')
+  assert.equal(archive.jobs[0].archiveMetadata.reason, 'manual')
+
+  const reopened = new JobStore(filePath, { archiveFilePath: store.archiveFilePath })
+  await reopened.load()
+  assert.equal(reopened.location('failed-job'), 'archived')
+  assert.equal(reopened.get('failed-job').error.message, '保留诊断证据')
+  const firstPage = reopened.archivedPage({ limit: 1 })
+  assert.equal(firstPage.jobs[0].id, 'failed-job')
+  assert.equal(firstPage.nextCursor, null)
+})
+
+test('active copy wins after an interrupted cross-file archive write', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'miaohui-job-store-'))
+  const filePath = join(directory, 'jobs.json')
+  const archiveFilePath = join(directory, 'job-archive.json')
+  const duplicate = { id: 'duplicate-job', status: 'completed', createdAt: 1 }
+  await writeFile(filePath, JSON.stringify([duplicate]), 'utf8')
+  await writeFile(archiveFilePath, JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: 2,
+    jobs: [{ ...duplicate, archiveMetadata: { schemaVersion: 1, archivedAt: 2, reason: 'age' } }],
+  }), 'utf8')
+  t.after(async () => {
+    assert.ok(resolve(directory).startsWith(resolve(tmpdir())))
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  const store = new JobStore(filePath, { archiveFilePath })
+  await store.load()
+  assert.equal(store.location('duplicate-job'), 'active')
+  assert.equal(store.listArchived().length, 0)
+  assert.deepEqual(JSON.parse(await readFile(archiveFilePath, 'utf8')).jobs, [])
+})
+
+test('corrupt archive fails closed without replacing the evidence file', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'miaohui-job-store-'))
+  const filePath = join(directory, 'jobs.json')
+  const archiveFilePath = join(directory, 'job-archive.json')
+  const corruptEvidence = '{"schemaVersion":1,"revision":0,"jobs":[{"id":"queued-in-archive","status":"queued"}]}'
+  await writeFile(filePath, '[]', 'utf8')
+  await writeFile(archiveFilePath, corruptEvidence, 'utf8')
+  t.after(async () => {
+    assert.ok(resolve(directory).startsWith(resolve(tmpdir())))
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  const store = new JobStore(filePath, { archiveFilePath })
+  await assert.rejects(
+    store.load(),
+    (error) => error.code === 'JOB_ARCHIVE_CORRUPT' && error.status === 500,
+  )
+  assert.equal(await readFile(archiveFilePath, 'utf8'), corruptEvidence)
+})

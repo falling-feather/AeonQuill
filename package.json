@@ -13,6 +13,7 @@
     "validate:quick": "node scripts/validate.mjs --quick",
     "validate:live": "node scripts/validate.mjs --live",
     "validate:api": "node scripts/validate-api.mjs",
+    "validate:job-archive": "npm run build && node scripts/validate-job-archive-api.mjs && node scripts/validate-job-archive-ui.mjs",
     "validate:browser": "node scripts/validate-browser.mjs",
     "validate:mode-splitting": "npm run build && node scripts/validate-mode-splitting.mjs && node scripts/validate-mode-loading-ui.mjs",
     "validate:project-center": "node scripts/validate-project-center.mjs",

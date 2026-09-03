@@ -526,7 +526,7 @@ export class StorageLifecycleService {
     }
     const workspaceReferences = this.workspaceStore.storageReferences()
     const workspaceProjectAssets = new Set(workspaceReferences.projectAssetIds)
-    const jobs = this.jobStore.list()
+    const jobs = this.jobStore.listAll()
     const activeJobIds = new Set(jobs.filter((job) => ACTIVE_STATUSES.has(job.status)).map((job) => job.id))
     const fileReferences = jobFileReferences(jobs, this.inputDirectory, this.assetDirectory)
 
@@ -888,7 +888,7 @@ export class StorageLifecycleService {
     const stats = await safeFileStats(candidate.path)
     if (!stats || Number(stats.size) !== candidate.bytes || Math.trunc(stats.mtimeMs) !== candidate.mtimeMs) return false
     if (candidate.filename && workspaceReferences.jobAssetFilenames.includes(candidate.filename)) return false
-    const jobs = this.jobStore.list()
+    const jobs = this.jobStore.listAll()
     const currentReferences = jobFileReferences(jobs, this.inputDirectory, this.assetDirectory)
     const pathKey = normalizedPath(candidate.path)
     const references = [

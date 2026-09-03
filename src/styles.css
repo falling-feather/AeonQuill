@@ -1394,6 +1394,42 @@ textarea:focus-visible,
   cursor: pointer;
 }
 
+.jobs-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.jobs-header-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.jobs-header-actions button.is-active {
+  border-color: #c9c5fb;
+  color: #4c43d8;
+  background: #f5f4ff;
+}
+
+.job-archive-feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 9px 11px 0;
+  padding: 8px 9px;
+  border-radius: 7px;
+  color: #656a75;
+  background: #f5f6f8;
+  font-size: 9px;
+}
+
+.job-archive-feedback.is-error {
+  color: #a13f3f;
+  background: #fff1f1;
+}
+
 .job-list {
   display: flex;
   flex-direction: column;
@@ -1457,6 +1493,34 @@ textarea:focus-visible,
   gap: 3px;
   color: #a0a4ad;
   font-size: 8px;
+}
+
+.job-archive-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  color: #77718e;
+  font-size: 8px;
+}
+
+.job-archive-more {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed #d9d7e7;
+  border-radius: 8px;
+  color: #625c79;
+  background: #faf9ff;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.job-archive-more:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .job-progress {

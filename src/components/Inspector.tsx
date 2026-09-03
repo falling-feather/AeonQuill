@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  Archive,
   AlertTriangle,
   CheckCircle2,
   Circle,
@@ -31,6 +32,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { resolveImageResource } from '../lib/assetVariants'
+import { fetchArchivedJobs } from '../lib/videoApi'
 import {
   isImageJobOutput,
   type CanvasElement,
@@ -57,7 +59,7 @@ type InspectorProps = {
   onToggleLock: (id: string) => void
   onOpenPixel: (id: string) => void
   onOpenImageTool: (id: string, tool: ImageToolId) => void
-  onClearJobs: () => void
+  onClearJobs: () => void | Promise<void>
   onRefreshRuntime: () => void
   onStartRuntime: () => void
   onStopRuntime: () => void
@@ -332,23 +334,68 @@ function ImageCapabilityPanel({
 
 function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
   jobs: ProcessingJob[]
-  onClearJobs: () => void
+  onClearJobs: () => void | Promise<void>
   onCancelJob: (jobId: string) => void
   onRetryJob: (jobId: string) => void
   onReuseJob: (job: ProcessingJob) => void
 }) {
-  const sortedJobs = [...jobs].sort((a, b) => b.createdAt - a.createdAt)
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [archivedJobs, setArchivedJobs] = useState<ProcessingJob[]>([])
+  const [archiveTotal, setArchiveTotal] = useState(0)
+  const [archiveCursor, setArchiveCursor] = useState<string | null>(null)
+  const [archiveLoading, setArchiveLoading] = useState(false)
+  const [archiveError, setArchiveError] = useState<string | null>(null)
+
+  const loadArchive = async (append = false) => {
+    setArchiveLoading(true)
+    setArchiveError(null)
+    try {
+      const page = await fetchArchivedJobs(append ? archiveCursor ?? undefined : undefined)
+      setArchivedJobs((current) => append ? [...current, ...page.jobs] : page.jobs)
+      setArchiveCursor(page.nextCursor)
+      setArchiveTotal(page.archive.total)
+    } catch (error) {
+      setArchiveError(error instanceof Error ? error.message : '任务归档读取失败')
+    } finally {
+      setArchiveLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (archiveOpen && !archivedJobs.length && !archiveLoading) void loadArchive()
+    // Archive loading is intentionally triggered only when the user opens the history view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archiveOpen])
+
+  const archiveFinished = async () => {
+    await onClearJobs()
+    if (archiveOpen) await loadArchive()
+  }
+  const sortedJobs = [...(archiveOpen ? archivedJobs : jobs)].sort((a, b) => b.createdAt - a.createdAt)
+  const terminalCount = jobs.filter((job) => ['completed', 'failed', 'cancelled'].includes(job.status)).length
   return (
     <div className="inspector-scroll">
       <div className="jobs-header">
         <span>
-          <strong>处理任务</strong>
-          <small>{jobs.length ? `${jobs.length} 条本地任务` : '等待新的处理任务'}</small>
+          <strong>{archiveOpen ? '任务归档' : '处理任务'}</strong>
+          <small>{archiveOpen
+            ? `${archiveTotal} 条完整历史 · 只在打开时读取`
+            : jobs.length ? `${jobs.length} 条活动记录` : '等待新的处理任务'}</small>
         </span>
-        {jobs.length ? (
-          <button type="button" onClick={onClearJobs}>清空</button>
-        ) : null}
+        <div className="jobs-header-actions">
+          <button type="button" className={archiveOpen ? '' : 'is-active'} onClick={() => setArchiveOpen(false)}>当前</button>
+          <button type="button" className={archiveOpen ? 'is-active' : ''} onClick={() => setArchiveOpen(true)}>
+            <Archive size={12} />历史{archiveTotal ? ` ${archiveTotal}` : ''}
+          </button>
+          {!archiveOpen && terminalCount ? (
+            <button type="button" onClick={() => void archiveFinished()}>归档终态</button>
+          ) : null}
+        </div>
       </div>
+      {archiveError ? <p className="job-archive-feedback is-error">{archiveError}</p> : null}
+      {archiveOpen && archiveLoading && !sortedJobs.length ? (
+        <p className="job-archive-feedback"><LoaderCircle className="is-spinning" size={14} />正在读取本机归档…</p>
+      ) : null}
       {sortedJobs.length ? (
         <div className="job-list">
           {sortedJobs.map((job) => {
@@ -380,6 +427,12 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
                     })}
                   </time>
                 </div>
+                {job.archiveMetadata ? (
+                  <div className="job-archive-badge">
+                    <Archive size={11} />
+                    {new Date(job.archiveMetadata.archivedAt).toLocaleDateString('zh-CN')} 归档 · {job.archiveMetadata.reason === 'manual' ? '手动整理' : job.archiveMetadata.reason === 'age' ? '超过保留期' : '活动数量收束'}
+                  </div>
+                ) : null}
                 <div className="job-progress" aria-label={`${job.progress}%`}>
                   <span style={{ width: `${job.progress}%` }} />
                 </div>
@@ -510,12 +563,25 @@ function JobPanel({ jobs, onClearJobs, onCancelJob, onRetryJob, onReuseJob }: {
               </article>
             )
           })}
+          {archiveOpen && archiveCursor ? (
+            <button
+              type="button"
+              className="job-archive-more"
+              onClick={() => void loadArchive(true)}
+              disabled={archiveLoading}
+            >
+              {archiveLoading ? <LoaderCircle className="is-spinning" size={14} /> : <Archive size={14} />}
+              加载更早记录
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="inspector-empty jobs-empty">
-          <LoaderCircle size={28} strokeWidth={1.4} />
-          <strong>还没有处理任务</strong>
-          <p>从“编辑”页启动像素化、去背景或放大预览，进度会集中显示在这里。</p>
+          {archiveOpen ? <Archive size={28} strokeWidth={1.4} /> : <LoaderCircle size={28} strokeWidth={1.4} />}
+          <strong>{archiveOpen ? '还没有归档任务' : '还没有处理任务'}</strong>
+          <p>{archiveOpen
+            ? '终态记录会按保留策略或手动整理进入这里，错误、日志与参数仍会完整保留。'
+            : '从“编辑”页启动像素化、去背景或放大预览，进度会集中显示在这里。'}</p>
         </div>
       )}
     </div>

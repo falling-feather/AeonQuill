@@ -5,6 +5,7 @@ import { basename, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { gzip, gunzip } from 'node:zlib'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
+import { collectJobReferenceIds } from './job-archive.mjs'
 
 const PROJECT_SCHEMA_VERSION = 1
 const PACKAGE_SCHEMA_VERSION = 1
@@ -197,6 +198,15 @@ function collectAssetIds(value, ids = new Set(), seen = new Set()) {
     collectAssetIds(child, ids, seen)
   }
   return ids
+}
+
+function collectSerializedJobReferences(source, references) {
+  if (typeof source !== 'string' || !source) return
+  try {
+    collectJobReferenceIds(JSON.parse(source), references)
+  } catch {
+    // Project JSON is validated on write; unreadable legacy metadata cannot protect an invented id.
+  }
 }
 
 function exportAssetPath(assetId, asset) {
@@ -1134,6 +1144,23 @@ export class ProjectStore {
     assertProjectId(projectId)
     const result = this.database.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
     return Number(result.changes) > 0
+  }
+
+  jobReferences() {
+    this.assertOpen()
+    const references = new Set()
+    const queries = [
+      'SELECT document_json AS value FROM projects',
+      'SELECT provenance_json AS value FROM assets',
+      'SELECT provenance_json AS value FROM asset_versions',
+      'SELECT provenance_json AS value FROM library_versions',
+    ]
+    for (const query of queries) {
+      for (const row of this.database.prepare(query).all()) {
+        collectSerializedJobReferences(row.value, references)
+      }
+    }
+    return [...references].sort()
   }
 
   async collectGarbage(options = {}) {

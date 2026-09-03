@@ -49,6 +49,15 @@ test('externalizes embedded media into one immutable content-addressed asset', a
   assert.equal((await stat(join(root, 'assets', `${saved.assets[0].id}.png`))).isFile(), true)
 })
 
+test('reports explicit job references from project documents and immutable provenance', async (t) => {
+  const { store } = await fixture(t)
+  const source = document('job-references')
+  source.elements[0].jobId = 'job-canvas-output'
+  const saved = await store.saveProject(source)
+  assert.equal(saved.document.elements[0].jobId, 'job-canvas-output')
+  assert.deepEqual(store.jobReferences(), ['job-canvas-output'])
+})
+
 test('100 saves preserve project nodes and reject a stale writer', async (t) => {
   const { store } = await fixture(t)
   let current = document('project-100', 0)

@@ -14,7 +14,7 @@ export function resolveRuntimeDirectory() {
 
 export const runtimeDirectory = resolveRuntimeDirectory()
 
-const DURABLE_DATA_MARKERS = ['jobs.json', 'projects', 'assets', 'client-state']
+const DURABLE_DATA_MARKERS = ['jobs.json', 'job-archive.json', 'projects', 'assets', 'client-state']
 
 export function resolveDataDirectory({
   configuredDirectory = process.env.AEONQUILL_DATA_DIR || process.env.MIAOHUI_DATA_DIR,

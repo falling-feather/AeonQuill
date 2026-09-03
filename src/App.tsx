@@ -1162,12 +1162,16 @@ function App({
 
   const clearJobs = useCallback(async () => {
     try {
-      await clearFinishedJobs()
-    } catch {
-      // The local image jobs can still be cleared while the bridge is offline.
+      const result = await clearFinishedJobs()
+      const archivedIds = new Set(result.archived)
+      setJobs((current) => current.filter((job) => !archivedIds.has(job.id)))
+      showToast(result.protected.length
+        ? `已归档 ${result.archived.length} 条；${result.protected.length} 条引用记录继续保留`
+        : `已归档 ${result.archived.length} 条任务记录`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '任务归档失败')
     }
-    setJobs((current) => current.filter((job) => job.status === 'running' || job.status === 'queued'))
-  }, [])
+  }, [showToast])
 
   const applyImageLabResult = useCallback(
     (result: ImageLabResult) => {

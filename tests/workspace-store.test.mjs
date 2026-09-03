@@ -205,6 +205,7 @@ test('storage references include rollback-only project assets and job outputs', 
         rotation: 0, opacity: 1, radius: 0, fill: '#fff', stroke: '#000',
         src: `/api/project-assets/${assetId}`,
         sourceSrc: `/api/assets/${jobFilename}`,
+        jobId: 'job-recovery-reference',
         locked: false, visible: true, zIndex: 1,
       }],
     }
@@ -229,5 +230,6 @@ test('storage references include rollback-only project assets and job outputs', 
     assert.deepEqual(references.projectAssetIds, [assetId])
     assert.deepEqual(references.jobAssetFilenames, [jobFilename])
     assert.equal(references.sources.recoveryPoints, 1)
+    assert.deepEqual(store.jobReferences(), ['job-recovery-reference'])
   })
 })

@@ -89,6 +89,8 @@ try {
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('video delivery quality gate', process.execPath, ['scripts/validate-video-delivery-quality.mjs'])
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])
+    await run('durable job archive API', process.execPath, ['scripts/validate-job-archive-api.mjs'])
+    await run('lazy job archive browser vertical', process.execPath, ['scripts/validate-job-archive-ui.mjs'])
     await run('video chain candidate manifest API', process.execPath, ['scripts/validate-video-chain-api.mjs'])
     await run('controlled custom ComfyUI execution', process.execPath, ['scripts/validate-custom-workflow-api.mjs'])
     await run('safe storage lifecycle API', process.execPath, ['scripts/validate-storage-lifecycle-api.mjs'])
