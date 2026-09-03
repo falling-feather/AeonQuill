@@ -118,6 +118,11 @@ async function validatePixelGameUi(baseUrl) {
     const frameButtons = page.locator('.aq-pixel-frame-strip > button')
     assert.equal(await frameButtons.count(), 8)
     assert.deepEqual(await frameButtons.locator('strong').allInnerTexts(), ['南', '西南', '西', '西北', '北', '东北', '东', '东南'])
+    const clipboardSourceFrameIndex = await frameButtons.evaluateAll((buttons) => (
+      buttons.findIndex((button) => button.getAttribute('aria-pressed') === 'true')
+    ))
+    assert.ok(clipboardSourceFrameIndex >= 0)
+    const clipboardTargetFrameIndex = clipboardSourceFrameIndex === 0 ? 1 : 0
 
     const paletteCycleWorkbench = page.getByLabel('调色板循环', { exact: true })
     await paletteCycleWorkbench.getByRole('button', { name: '新建调色板循环', exact: true }).click()
@@ -142,6 +147,52 @@ async function validatePixelGameUi(baseUrl) {
     await page.getByLabel('混合模式', { exact: true }).selectOption('screen')
     await groupWorkbench.getByRole('button', { name: '锁定图层组 角色光影', exact: true }).click()
     await groupWorkbench.getByRole('button', { name: '解锁图层组 角色光影', exact: true }).click()
+
+    await page.getByRole('button', { name: /选区 M/u }).click()
+    const pixelCanvas = page.getByLabel(/像素绘制区/u)
+    const canvasBox = await pixelCanvas.boundingBox()
+    assert.ok(canvasBox, 'Pixel canvas must have a visible bounding box')
+    const canvasPoint = (x, y) => ({
+      x: canvasBox.x + ((x + 0.5) / 16) * canvasBox.width,
+      y: canvasBox.y + ((y + 0.5) / 16) * canvasBox.height,
+    })
+    const selectionStart = canvasPoint(1, 12)
+    const selectionEnd = canvasPoint(2, 13)
+    await page.mouse.move(selectionStart.x, selectionStart.y)
+    await page.mouse.down()
+    await page.mouse.move(selectionEnd.x, selectionEnd.y)
+    await page.mouse.up()
+    await page.getByText(/已选择 2 × 2 区域/u).waitFor({ state: 'visible' })
+    const selectedRegion = await page.locator('.aq-pixel-marquee').evaluate((element) => ({
+      x: Math.round((Number.parseFloat(element.style.left) / 100) * 16),
+      y: Math.round((Number.parseFloat(element.style.top) / 100) * 16),
+      width: Math.round((Number.parseFloat(element.style.width) / 100) * 16),
+      height: Math.round((Number.parseFloat(element.style.height) / 100) * 16),
+    }))
+    assert.deepEqual({ width: selectedRegion.width, height: selectedRegion.height }, { width: 2, height: 2 })
+    await page.getByRole('button', { name: '剪切选区到剪贴板', exact: true }).click()
+    await page.getByText(/剪切到内存剪贴板：2×2.*1 个可撤销像素操作/u).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '撤销', exact: true }).click()
+    await page.getByText('已撤销上一步', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '重做', exact: true }).click()
+    await page.getByText('已重做上一步', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '撤销', exact: true }).click()
+    await page.getByText('已撤销上一步', { exact: true }).waitFor({ state: 'visible' })
+    await frameButtons.nth(clipboardTargetFrameIndex).click()
+    const silhouetteRow = page.locator('.aq-pixel-layer-list > div').filter({ hasText: '轮廓' }).first()
+    await silhouetteRow.locator('.aq-pixel-layer-main').click()
+    await silhouetteRow.getByRole('button', { name: '锁定 轮廓', exact: true }).click()
+    await page.getByRole('button', { name: '粘贴跨帧剪贴板', exact: true }).click()
+    await page.getByText('Layer silhouette is locked', { exact: true }).waitFor({ state: 'visible' })
+    await silhouetteRow.getByRole('button', { name: '解锁 轮廓', exact: true }).click()
+    await page.getByRole('button', { name: '粘贴跨帧剪贴板', exact: true }).click()
+    await page.getByText(/跨帧选区已粘贴到.*透明像素覆盖/u).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '撤销', exact: true }).click()
+    await page.getByText('已撤销上一步', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '重做', exact: true }).click()
+    await page.getByText('已重做上一步', { exact: true }).waitFor({ state: 'visible' })
+    await frameButtons.nth(clipboardSourceFrameIndex).click()
+    await page.locator('.aq-pixel-layer-list > div').filter({ hasText: '流光' }).first().locator('.aq-pixel-layer-main').click()
 
     const gameplayWorkbench = page.getByLabel('当前帧游戏元数据', { exact: true })
     await gameplayWorkbench.waitFor({ state: 'visible' })
@@ -272,6 +323,16 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(project.layerGroups.some((group) => group.id === groupId && group.name === '角色光影'), true)
     assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
     assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.groupId, groupId)
+    const clipboardIndexes = [
+      selectedRegion.y * 16 + selectedRegion.x,
+      selectedRegion.y * 16 + selectedRegion.x + 1,
+      (selectedRegion.y + 1) * 16 + selectedRegion.x,
+      (selectedRegion.y + 1) * 16 + selectedRegion.x + 1,
+    ]
+    assert.deepEqual(
+      clipboardIndexes.map((index) => project.frames[clipboardTargetFrameIndex].cels.silhouette[index]),
+      clipboardIndexes.map((index) => project.frames[clipboardSourceFrameIndex].cels.light[index]),
+    )
     assert.equal(manifest.schemaVersion, 5)
     assert.equal(manifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
     assert.equal(manifest.animationEvents.some((event) => event.name === '剑鸣'), true)
@@ -371,13 +432,13 @@ async function validatePixelGameUi(baseUrl) {
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery',
+      label: 'pixel cross-frame clipboard, terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel cross-frame clipboard, terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

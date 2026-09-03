@@ -4,6 +4,8 @@ import {
   ArrowRight,
   ArrowUp,
   ArrowLeft as ArrowLeftSmall,
+  ClipboardCopy,
+  ClipboardPaste,
   Copy,
   Compass,
   Crosshair,
@@ -30,6 +32,7 @@ import {
   PackageOpen,
   Redo2,
   Settings2,
+  Scissors,
   Square,
   SquareDashedMousePointer,
   Sparkles,
@@ -66,6 +69,8 @@ import {
   createPixelAnimationClipExportBundle,
   createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
+  createPixelSelectionClipboard,
+  createPixelSelectionPastePatch,
   createPixelTerrainPreviewExportBundle,
   createPixelCommand,
   createPixelDocument,
@@ -98,6 +103,8 @@ import {
   type PixelPoint,
   type PixelPaletteCycleDirection,
   type PixelRect,
+  type PixelSelectionClipboard,
+  type PixelSelectionPasteMode,
   type PixelTerrainPreviewLayout,
   type RgbaImage,
   type SpriteSheetMetadata,
@@ -360,6 +367,8 @@ export function PixelModeWorkbench({
   const [gameOverlayVisible, setGameOverlayVisible] = useState(true)
   const [zoom, setZoom] = useState(1)
   const [selection, setSelection] = useState<PixelRect | null>(null)
+  const [selectionClipboard, setSelectionClipboard] = useState<PixelSelectionClipboard | null>(null)
+  const [selectionPasteMode, setSelectionPasteMode] = useState<PixelSelectionPasteMode>('replace')
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
@@ -481,6 +490,8 @@ export function PixelModeWorkbench({
     setActivePaletteCycleId(nextDocument.paletteCycles[0]?.id ?? null)
     setBatchDurationMs(String(nextDocument.frames[0]?.durationMs ?? 140))
     setSelection(null)
+    setSelectionClipboard(null)
+    setSelectionPasteMode('replace')
     setDragDraft(null)
     dragContextRef.current = null
     setStatus(message)
@@ -1050,6 +1061,96 @@ export function PixelModeWorkbench({
     }
   }, [apply, selection])
 
+  const captureSelectionClipboard = useCallback((cut: boolean) => {
+    if (!selection) {
+      setStatus('请先框选要复制的像素区域')
+      return false
+    }
+    const current = historyRef.current.document
+    const activeLayer = current.layers.find((layer) => layer.id === current.activeLayerId)
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    const cel = frame?.cels[current.activeLayerId]
+    if (!activeLayer || !frame || !cel) {
+      setStatus('当前帧或图层不可用')
+      return false
+    }
+    const activeGroup = activeLayer.groupId === null
+      ? null
+      : current.layerGroups.find((group) => group.id === activeLayer.groupId)
+    if (cut && (activeLayer.locked || activeGroup?.locked || activeGroup?.visible === false)) {
+      setStatus(activeGroup?.visible === false
+        ? `图层组 ${activeGroup.name} 已隐藏`
+        : activeGroup?.locked ? `图层组 ${activeGroup.name} 已锁定` : `图层 ${activeLayer.name} 已锁定`)
+      return false
+    }
+    try {
+      const nextClipboard = createPixelSelectionClipboard(cel, current.width, current.height, selection, {
+        documentId: current.id,
+        documentRevision: current.revision,
+        frameId: frame.id,
+        layerId: activeLayer.id,
+      })
+      let cutChanged = false
+      if (cut) {
+        const pixels = createSelectionPatch(cel, current.width, current.height, selection, 'clear')
+          .filter((point) => cel[point.y * current.width + point.x] !== point.value)
+        if (pixels.length > 0 && !apply('pixels.patch', {
+          frameId: frame.id,
+          layerId: activeLayer.id,
+          pixels,
+        })) return false
+        cutChanged = pixels.length > 0
+      }
+      setSelectionClipboard(nextClipboard)
+      setStatus(`${cut ? '剪切' : '复制'}到内存剪贴板：${nextClipboard.width}×${nextClipboard.height} · ${frame.name}/${activeLayer.name}${cut ? cutChanged ? ' · 1 个可撤销像素操作' : ' · 透明区域，无正文修订' : ''}`)
+      return true
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '选区复制失败')
+      return false
+    }
+  }, [apply, selection])
+
+  const pasteSelectionClipboard = useCallback(() => {
+    const clipboard = selectionClipboard
+    if (!clipboard) {
+      setStatus('内存剪贴板为空')
+      return false
+    }
+    const current = historyRef.current.document
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    const layer = current.layers.find((item) => item.id === current.activeLayerId)
+    const cel = frame?.cels[current.activeLayerId]
+    if (!frame || !layer || !cel) {
+      setStatus('当前帧或图层不可用')
+      return false
+    }
+    const target = selection
+      ? { x: selection.x, y: selection.y }
+      : { x: clipboard.source.selection.x, y: clipboard.source.selection.y }
+    try {
+      const pixels = createPixelSelectionPastePatch(cel, current.width, current.height, clipboard, target, {
+        mode: selectionPasteMode,
+        allowedColorIds: current.palette.map((color) => color.id),
+      })
+      if (pixels.length === 0) {
+        setStatus('剪贴板内容与目标区域一致，没有产生修订')
+        return false
+      }
+      const succeeded = apply('pixels.patch', {
+        frameId: frame.id,
+        layerId: layer.id,
+        pixels,
+      })
+      if (!succeeded) return false
+      setSelection({ x: target.x, y: target.y, width: clipboard.width, height: clipboard.height })
+      setStatus(`跨帧选区已粘贴到 ${frame.name}/${layer.name} · ${selectionPasteMode === 'replace' ? '透明像素覆盖' : '仅不透明像素'} · ${pixels.length} 像素 · 1 个撤销单元`)
+      return true
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '选区粘贴失败')
+      return false
+    }
+  }, [apply, selection, selectionClipboard, selectionPasteMode])
+
   const selectedLayer = document.layers.find((layer) => layer.id === document.activeLayerId) ?? document.layers[0]
   const selectedLayerGroup = selectedLayer.groupId === null
     ? null
@@ -1486,6 +1587,23 @@ export function PixelModeWorkbench({
       onKeyDown={(event) => {
         if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
         const key = event.key.toLowerCase()
+        if (event.ctrlKey || event.metaKey) {
+          if (key === 'c' && selection) {
+            event.preventDefault()
+            captureSelectionClipboard(false)
+            return
+          }
+          if (key === 'x' && selection) {
+            event.preventDefault()
+            captureSelectionClipboard(true)
+            return
+          }
+          if (key === 'v' && selectionClipboard) {
+            event.preventDefault()
+            pasteSelectionClipboard()
+            return
+          }
+        }
         if (key === 'b') setTool('pencil')
         if (key === 'e') setTool('eraser')
         if (key === 'g') setTool('fill')
@@ -1509,7 +1627,7 @@ export function PixelModeWorkbench({
           const dy = key === 'arrowup' ? -1 : key === 'arrowdown' ? 1 : 0
           applySelectionOperation(event.altKey ? 'copy' : 'move', { dx, dy })
         }
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        if ((event.ctrlKey || event.metaKey) && key === 'z') {
           event.preventDefault()
           if (event.shiftKey) redo()
           else undo()
@@ -1984,18 +2102,59 @@ export function PixelModeWorkbench({
                 />
               ) : null}
             </div>
-            {selection ? (
-              <div className="aq-pixel-selection-actions" aria-label="区域变换">
-                <span><Move size={14} /> {selection.width}×{selection.height}</span>
-                <button type="button" title="向左移动一像素" onClick={() => applySelectionOperation('move', { dx: -1 })}><ArrowLeftSmall size={14} /></button>
-                <button type="button" title="向上移动一像素" onClick={() => applySelectionOperation('move', { dy: -1 })}><ArrowUp size={14} /></button>
-                <button type="button" title="向下移动一像素" onClick={() => applySelectionOperation('move', { dy: 1 })}><ArrowDown size={14} /></button>
-                <button type="button" title="向右移动一像素" onClick={() => applySelectionOperation('move', { dx: 1 })}><ArrowRight size={14} /></button>
-                <span className="aq-pixel-control-divider" />
-                <button type="button" title="复制并向右移动一像素" onClick={() => applySelectionOperation('copy', { dx: 1 })}><Copy size={14} /></button>
-                <button type="button" title="水平翻转" onClick={() => applySelectionOperation('flip-horizontal')}><FlipHorizontal2 size={14} /></button>
-                <button type="button" title="垂直翻转" onClick={() => applySelectionOperation('flip-vertical')}><FlipVertical2 size={14} /></button>
-                <button type="button" className="is-danger" title="清除选区" onClick={() => applySelectionOperation('clear')}><Trash2 size={14} /></button>
+            {selection || selectionClipboard ? (
+              <div className="aq-pixel-selection-actions" aria-label="区域变换与跨帧剪贴板">
+                {selection ? (
+                  <>
+                    <span><Move size={14} /> {selection.width}×{selection.height}</span>
+                    <button type="button" title="向左移动一像素" onClick={() => applySelectionOperation('move', { dx: -1 })}><ArrowLeftSmall size={14} /></button>
+                    <button type="button" title="向上移动一像素" onClick={() => applySelectionOperation('move', { dy: -1 })}><ArrowUp size={14} /></button>
+                    <button type="button" title="向下移动一像素" onClick={() => applySelectionOperation('move', { dy: 1 })}><ArrowDown size={14} /></button>
+                    <button type="button" title="向右移动一像素" onClick={() => applySelectionOperation('move', { dx: 1 })}><ArrowRight size={14} /></button>
+                    <span className="aq-pixel-control-divider" />
+                    <button type="button" title="复制并向右移动一像素" onClick={() => applySelectionOperation('copy', { dx: 1 })}><Copy size={14} /></button>
+                    <button type="button" title="水平翻转" onClick={() => applySelectionOperation('flip-horizontal')}><FlipHorizontal2 size={14} /></button>
+                    <button type="button" title="垂直翻转" onClick={() => applySelectionOperation('flip-vertical')}><FlipVertical2 size={14} /></button>
+                    <button type="button" className="is-danger" title="清除选区" onClick={() => applySelectionOperation('clear')}><Trash2 size={14} /></button>
+                    <span className="aq-pixel-control-divider" />
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  aria-label="复制选区到剪贴板"
+                  title="复制选区到跨帧剪贴板（Ctrl+C）"
+                  disabled={!selection}
+                  onClick={() => captureSelectionClipboard(false)}
+                ><ClipboardCopy size={14} /></button>
+                <button
+                  type="button"
+                  aria-label="剪切选区到剪贴板"
+                  title="剪切选区到跨帧剪贴板（Ctrl+X）"
+                  disabled={!selection}
+                  onClick={() => captureSelectionClipboard(true)}
+                ><Scissors size={14} /></button>
+                {selectionClipboard ? (
+                  <span
+                    className="aq-pixel-clipboard-badge"
+                    title={`来源 ${selectionClipboard.source.frameId}/${selectionClipboard.source.layerId} · revision ${selectionClipboard.source.documentRevision}`}
+                  ><ClipboardCopy size={13} /> {selectionClipboard.width}×{selectionClipboard.height}</span>
+                ) : null}
+                <button
+                  type="button"
+                  aria-label="粘贴跨帧剪贴板"
+                  title="粘贴到当前选区左上角；无选区时使用来源原位坐标（Ctrl+V）"
+                  disabled={!selectionClipboard}
+                  onClick={pasteSelectionClipboard}
+                ><ClipboardPaste size={14} /></button>
+                <button
+                  type="button"
+                  className={selectionPasteMode === 'replace' ? 'is-active' : ''}
+                  aria-label={selectionPasteMode === 'replace' ? '粘贴模式：透明像素覆盖' : '粘贴模式：仅不透明像素'}
+                  aria-pressed={selectionPasteMode === 'replace'}
+                  title="切换粘贴时是否用透明像素覆盖目标"
+                  disabled={!selectionClipboard}
+                  onClick={() => setSelectionPasteMode((value) => value === 'replace' ? 'opaque-only' : 'replace')}
+                ><span>{selectionPasteMode === 'replace' ? '覆盖透明' : '仅不透明'}</span></button>
               </div>
             ) : null}
           </div>

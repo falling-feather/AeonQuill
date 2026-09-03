@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  createPixelSelectionClipboard,
+  createPixelSelectionPastePatch,
   createSelectionPatch,
   expandPixelBrush,
   floodFillPixels,
@@ -81,5 +83,103 @@ test('builds mixed patches for clear, flip, copy and overlapping move', () => {
   assert.throws(
     () => createSelectionPatch(cel, 4, 3, selection, 'move', { dx: -1, dy: 0 }),
     (error) => error?.code === 'OUT_OF_BOUNDS',
+  )
+})
+
+test('copies one strict selection and pastes it across cels with explicit transparency semantics', () => {
+  const sourceCel = [
+    'a', null, 'x', 'x',
+    'b', 'c', 'x', 'x',
+    'x', 'x', 'x', 'x',
+  ]
+  const clipboard = createPixelSelectionClipboard(
+    sourceCel,
+    4,
+    3,
+    { x: 0, y: 0, width: 2, height: 2 },
+    { documentId: 'hero', documentRevision: 7, frameId: 'frame-1', layerId: 'light' },
+  )
+  assert.deepEqual(clipboard, {
+    kind: 'aeonquill.pixel-selection-clipboard',
+    schemaVersion: 1,
+    width: 2,
+    height: 2,
+    pixels: ['a', null, 'b', 'c'],
+    source: {
+      documentId: 'hero',
+      documentRevision: 7,
+      frameId: 'frame-1',
+      layerId: 'light',
+      canvasWidth: 4,
+      canvasHeight: 3,
+      selection: { x: 0, y: 0, width: 2, height: 2 },
+    },
+  })
+  const targetCel = Array(12).fill('x')
+  assert.deepEqual(createPixelSelectionPastePatch(
+    targetCel,
+    4,
+    3,
+    clipboard,
+    { x: 2, y: 1 },
+    { mode: 'replace', allowedColorIds: ['a', 'b', 'c', 'x'] },
+  ), [
+    { x: 2, y: 1, value: 'a' },
+    { x: 3, y: 1, value: null },
+    { x: 2, y: 2, value: 'b' },
+    { x: 3, y: 2, value: 'c' },
+  ])
+  assert.deepEqual(createPixelSelectionPastePatch(
+    targetCel,
+    4,
+    3,
+    clipboard,
+    { x: 2, y: 1 },
+    { mode: 'opaque-only', allowedColorIds: ['a', 'b', 'c', 'x'] },
+  ), [
+    { x: 2, y: 1, value: 'a' },
+    { x: 2, y: 2, value: 'b' },
+    { x: 3, y: 2, value: 'c' },
+  ])
+})
+
+test('selection clipboard rejects tampering, unknown colors, unsafe metadata and out-of-bounds paste', () => {
+  const clipboard = createPixelSelectionClipboard(
+    ['a', null, null, 'b'],
+    2,
+    2,
+    { x: 0, y: 0, width: 2, height: 2 },
+    { documentId: 'hero', documentRevision: 0, frameId: 'frame-1', layerId: 'light' },
+  )
+  assert.throws(
+    () => createPixelSelectionPastePatch(
+      Array(9).fill(null), 3, 3, { ...clipboard, hidden: true }, { x: 0, y: 0 }, { allowedColorIds: ['a', 'b'] },
+    ),
+    (error) => error?.code === 'UNKNOWN_FIELD',
+  )
+  assert.throws(
+    () => createPixelSelectionPastePatch(
+      Array(9).fill(null), 3, 3, { ...clipboard, pixels: ['a', null, null, 'foreign'] }, { x: 0, y: 0 }, { allowedColorIds: ['a', 'b'] },
+    ),
+    (error) => error?.code === 'UNKNOWN_COLOR',
+  )
+  assert.throws(
+    () => createPixelSelectionPastePatch(
+      Array(9).fill(null), 3, 3, clipboard, { x: 2, y: 2 }, { allowedColorIds: ['a', 'b'] },
+    ),
+    (error) => error?.code === 'OUT_OF_BOUNDS',
+  )
+  assert.throws(
+    () => createPixelSelectionPastePatch(
+      Array(9).fill(null), 3, 3, { ...clipboard, pixels: ['a'] }, { x: 0, y: 0 }, { allowedColorIds: ['a', 'b'] },
+    ),
+    (error) => error?.code === 'INVALID_CLIPBOARD_PIXELS',
+  )
+  assert.throws(
+    () => createPixelSelectionClipboard(
+      ['a', null, null, 'b'], 2, 2, { x: 0, y: 0, width: 2, height: 2 },
+      { documentId: '../hero', documentRevision: 0, frameId: 'frame-1', layerId: 'light' },
+    ),
+    (error) => error?.code === 'INVALID_ID',
   )
 })

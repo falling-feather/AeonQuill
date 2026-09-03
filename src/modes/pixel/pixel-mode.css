@@ -1526,7 +1526,10 @@
 .aq-pixel-selection-actions {
   bottom: 12px;
   left: 50%;
+  max-width: calc(100% - 24px);
   transform: translateX(-50%);
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .aq-pixel-stage-controls button,
@@ -1552,10 +1555,22 @@
 
 .aq-pixel-stage-controls button:hover,
 .aq-pixel-stage-controls button.is-active,
-.aq-pixel-selection-actions button:hover {
+.aq-pixel-selection-actions button:hover,
+.aq-pixel-selection-actions button.is-active {
   border-color: #d8d5ff;
   color: #4338ca;
   background: #f1efff;
+}
+
+.aq-pixel-selection-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.aq-pixel-selection-actions button:disabled:hover {
+  border-color: transparent;
+  color: inherit;
+  background: transparent;
 }
 
 .aq-pixel-selection-actions button.is-danger:hover {
@@ -1577,6 +1592,16 @@
   align-items: center;
   gap: 5px;
   padding: 0 5px;
+  white-space: nowrap;
+}
+
+.aq-pixel-selection-actions .aq-pixel-clipboard-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: auto;
+  padding: 0 4px;
+  color: #5d51bd;
   white-space: nowrap;
 }
 

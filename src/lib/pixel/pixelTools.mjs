@@ -1,4 +1,12 @@
 const MAX_TOOL_PIXELS = 65_536
+const PIXEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+const CLIPBOARD_FIELDS = new Set(['kind', 'schemaVersion', 'width', 'height', 'pixels', 'source'])
+const CLIPBOARD_SOURCE_FIELDS = new Set([
+  'documentId', 'documentRevision', 'frameId', 'layerId', 'canvasWidth', 'canvasHeight', 'selection',
+])
+
+export const PIXEL_SELECTION_CLIPBOARD_KIND = 'aeonquill.pixel-selection-clipboard'
+export const PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION = 1
 
 function fail(code, message, details) {
   const error = new Error(message)
@@ -19,6 +27,36 @@ function assertSize(width, height) {
   assertInteger(width, 'width', 1, 512)
   assertInteger(height, 'height', 1, 512)
   if (width * height > 262_144) fail('LIMIT_EXCEEDED', 'Pixel surface is too large')
+}
+
+function isRecord(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function assertRecord(value, name) {
+  if (!isRecord(value)) fail('INVALID_OBJECT', `${name} must be an object`)
+  return value
+}
+
+function assertKnownFields(value, allowed, name) {
+  const unknown = Object.keys(value).find((key) => !allowed.has(key))
+  if (unknown) fail('UNKNOWN_FIELD', `${name}.${unknown} is not allowed`)
+}
+
+function assertPixelId(value, name) {
+  if (typeof value !== 'string' || !PIXEL_ID_PATTERN.test(value)) {
+    fail('INVALID_ID', `${name} must be a safe pixel identifier`)
+  }
+  return value
+}
+
+function assertPixelValue(value, name) {
+  if (value !== null && (typeof value !== 'string' || !PIXEL_ID_PATTERN.test(value))) {
+    fail('INVALID_VALUE', `${name} must be a safe color id or null`)
+  }
+  return value
 }
 
 function assertPoint(point, width, height, name = 'point') {
@@ -162,6 +200,113 @@ function assertRect(rectInput, width, height) {
   }
   if (rect.x + rect.width > width || rect.y + rect.height > height) fail('OUT_OF_BOUNDS', 'selection exceeds the pixel surface')
   return rect
+}
+
+function assertPixelSelectionClipboard(input) {
+  const clipboard = assertRecord(input, 'clipboard')
+  assertKnownFields(clipboard, CLIPBOARD_FIELDS, 'clipboard')
+  if (clipboard.kind !== PIXEL_SELECTION_CLIPBOARD_KIND || clipboard.schemaVersion !== PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION) {
+    fail('UNSUPPORTED_CLIPBOARD', 'clipboard kind or schemaVersion is unsupported')
+  }
+  const width = assertInteger(clipboard.width, 'clipboard.width', 1, 512)
+  const height = assertInteger(clipboard.height, 'clipboard.height', 1, 512)
+  if (width * height > MAX_TOOL_PIXELS) fail('LIMIT_EXCEEDED', 'clipboard exceeds the maximum pixel patch')
+  if (!Array.isArray(clipboard.pixels) || clipboard.pixels.length !== width * height) {
+    fail('INVALID_CLIPBOARD_PIXELS', `clipboard.pixels must contain exactly ${width * height} values`)
+  }
+  const pixels = clipboard.pixels.map((value, index) => assertPixelValue(value, `clipboard.pixels[${index}]`))
+  const source = assertRecord(clipboard.source, 'clipboard.source')
+  assertKnownFields(source, CLIPBOARD_SOURCE_FIELDS, 'clipboard.source')
+  const canvasWidth = assertInteger(source.canvasWidth, 'clipboard.source.canvasWidth', 1, 512)
+  const canvasHeight = assertInteger(source.canvasHeight, 'clipboard.source.canvasHeight', 1, 512)
+  assertSize(canvasWidth, canvasHeight)
+  const selection = assertRect(source.selection, canvasWidth, canvasHeight)
+  if (selection.width !== width || selection.height !== height) {
+    fail('CLIPBOARD_SIZE_MISMATCH', 'clipboard dimensions must match its source selection')
+  }
+  return {
+    kind: PIXEL_SELECTION_CLIPBOARD_KIND,
+    schemaVersion: PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION,
+    width,
+    height,
+    pixels,
+    source: {
+      documentId: assertPixelId(source.documentId, 'clipboard.source.documentId'),
+      documentRevision: assertInteger(source.documentRevision, 'clipboard.source.documentRevision', 0, Number.MAX_SAFE_INTEGER),
+      frameId: assertPixelId(source.frameId, 'clipboard.source.frameId'),
+      layerId: assertPixelId(source.layerId, 'clipboard.source.layerId'),
+      canvasWidth,
+      canvasHeight,
+      selection,
+    },
+  }
+}
+
+export function createPixelSelectionClipboard(cel, width, height, selectionInput, sourceInput) {
+  assertSize(width, height)
+  if (!Array.isArray(cel) || cel.length !== width * height) fail('INVALID_CEL', 'cel size does not match the pixel surface')
+  const selection = assertRect(selectionInput, width, height)
+  if (selection.width * selection.height > MAX_TOOL_PIXELS) fail('LIMIT_EXCEEDED', 'selection exceeds the maximum clipboard size')
+  const source = assertRecord(sourceInput, 'source')
+  assertKnownFields(source, new Set(['documentId', 'documentRevision', 'frameId', 'layerId']), 'source')
+  const pixels = []
+  for (let y = 0; y < selection.height; y += 1) {
+    for (let x = 0; x < selection.width; x += 1) {
+      const sourceIndex = (selection.y + y) * width + selection.x + x
+      pixels.push(assertPixelValue(cel[sourceIndex], `cel[${sourceIndex}]`))
+    }
+  }
+  return assertPixelSelectionClipboard({
+    kind: PIXEL_SELECTION_CLIPBOARD_KIND,
+    schemaVersion: PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION,
+    width: selection.width,
+    height: selection.height,
+    pixels,
+    source: {
+      documentId: source.documentId,
+      documentRevision: source.documentRevision,
+      frameId: source.frameId,
+      layerId: source.layerId,
+      canvasWidth: width,
+      canvasHeight: height,
+      selection,
+    },
+  })
+}
+
+export function createPixelSelectionPastePatch(cel, width, height, clipboardInput, targetInput, optionsInput = {}) {
+  assertSize(width, height)
+  if (!Array.isArray(cel) || cel.length !== width * height) fail('INVALID_CEL', 'cel size does not match the pixel surface')
+  const clipboard = assertPixelSelectionClipboard(clipboardInput)
+  const target = assertPoint(targetInput, width, height, 'target')
+  if (target.x + clipboard.width > width || target.y + clipboard.height > height) {
+    fail('OUT_OF_BOUNDS', 'clipboard destination exceeds the pixel surface')
+  }
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['mode', 'allowedColorIds']), 'options')
+  const mode = options.mode ?? 'replace'
+  if (!['replace', 'opaque-only'].includes(mode)) fail('INVALID_MODE', 'options.mode must be replace or opaque-only')
+  if (!Array.isArray(options.allowedColorIds) || options.allowedColorIds.length < 1 || options.allowedColorIds.length > 256) {
+    fail('INVALID_PALETTE', 'options.allowedColorIds must contain 1-256 color ids')
+  }
+  const allowedColorIds = new Set(options.allowedColorIds.map((value, index) => (
+    assertPixelId(value, `options.allowedColorIds[${index}]`)
+  )))
+  if (allowedColorIds.size !== options.allowedColorIds.length) fail('DUPLICATE_COLOR', 'options.allowedColorIds must be unique')
+  const changed = []
+  for (let y = 0; y < clipboard.height; y += 1) {
+    for (let x = 0; x < clipboard.width; x += 1) {
+      const value = clipboard.pixels[y * clipboard.width + x]
+      if (value !== null && !allowedColorIds.has(value)) {
+        fail('UNKNOWN_COLOR', `clipboard references unknown color ${value}`)
+      }
+      if (mode === 'opaque-only' && value === null) continue
+      const targetX = target.x + x
+      const targetY = target.y + y
+      if (cel[targetY * width + targetX] !== value) changed.push({ x: targetX, y: targetY, value })
+    }
+  }
+  return changed
 }
 
 export function createSelectionPatch(cel, width, height, selectionInput, operation, options = {}) {

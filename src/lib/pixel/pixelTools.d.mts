@@ -1,6 +1,26 @@
 export type PixelPoint = { x: number; y: number }
 export type PixelRect = { x: number; y: number; width: number; height: number }
 export type PixelPatchPoint = PixelPoint & { value: string | null }
+export type PixelSelectionPasteMode = 'replace' | 'opaque-only'
+export type PixelSelectionClipboard = {
+  kind: 'aeonquill.pixel-selection-clipboard'
+  schemaVersion: 1
+  width: number
+  height: number
+  pixels: Array<string | null>
+  source: {
+    documentId: string
+    documentRevision: number
+    frameId: string
+    layerId: string
+    canvasWidth: number
+    canvasHeight: number
+    selection: PixelRect
+  }
+}
+
+export const PIXEL_SELECTION_CLIPBOARD_KIND: 'aeonquill.pixel-selection-clipboard'
+export const PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION: 1
 
 export function normalizePixelRect(start: PixelPoint, end: PixelPoint, width: number, height: number): PixelRect
 export function rasterPixelLine(start: PixelPoint, end: PixelPoint, width: number, height: number): PixelPoint[]
@@ -31,6 +51,21 @@ export function createSelectionPatch(
   selection: PixelRect,
   operation: 'clear' | 'flip-horizontal' | 'flip-vertical' | 'move' | 'copy',
   options?: { dx?: number; dy?: number },
+): PixelPatchPoint[]
+export function createPixelSelectionClipboard(
+  cel: Array<string | null>,
+  width: number,
+  height: number,
+  selection: PixelRect,
+  source: { documentId: string; documentRevision: number; frameId: string; layerId: string },
+): PixelSelectionClipboard
+export function createPixelSelectionPastePatch(
+  cel: Array<string | null>,
+  width: number,
+  height: number,
+  clipboard: PixelSelectionClipboard,
+  target: PixelPoint,
+  options: { mode?: PixelSelectionPasteMode; allowedColorIds: string[] },
 ): PixelPatchPoint[]
 
 export type SmartPixelCleanupReport = {
