@@ -352,7 +352,7 @@ try {
   }
   $env:AEONQUILL_BUILD_COMMIT = $sourceCommit
   $env:AEONQUILL_PRODUCT_VERSION = $productVersion
-  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.30'
+  $env:AEONQUILL_FUNCTIONAL_TRACK = 'V0.7.62'
   $env:AEONQUILL_BUILD_IDENTITY_VERSION = 'aeonquill-build-identity-v1'
   $env:AEONQUILL_RUNTIME_REGISTRY_VERSION = 'aeonquill-runtime-registry-v1'
 

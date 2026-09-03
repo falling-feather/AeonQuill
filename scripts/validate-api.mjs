@@ -26,7 +26,7 @@ function assertPublicJob(job) {
     assert.ok(!(privateKey in job), `public job must not expose ${privateKey}`)
   }
   assert.equal(job.executionIdentity?.productVersion, '0.7.1')
-  assert.equal(job.executionIdentity?.functionalTrack, 'V0.7.30')
+  assert.equal(job.executionIdentity?.functionalTrack, 'V0.7.62')
   assert.match(job.executionIdentity?.identityHash || '', /^[a-f0-9]{64}$/u)
 }
 
@@ -79,7 +79,7 @@ try {
   assert.equal(health.ok, true)
   assert.equal(health.service, 'miaohui-local-bridge')
   assert.equal(health.identity.productVersion, '0.7.1')
-  assert.equal(health.identity.functionalTrack, 'V0.7.30')
+  assert.equal(health.identity.functionalTrack, 'V0.7.62')
   assert.equal(health.identity.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.match(health.identity.sourceCommit || '', /^[a-f0-9]{40}$/u)
 
