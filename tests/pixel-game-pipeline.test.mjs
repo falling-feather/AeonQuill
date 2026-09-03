@@ -68,7 +68,7 @@ function createTerrainDocument(masks = [28, 124, 112, 31, 255, 241, 7, 199, 193]
   const layers = [{
     id: 'terrain-layer', name: 'Terrain', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal',
   }]
-  const frames = masks.map((bitmask, index) => ({
+  const stoneFrames = masks.map((bitmask, index) => ({
     id: `terrain-${index + 1}`,
     name: `Terrain ${bitmask}`,
     durationMs: 100,
@@ -79,6 +79,19 @@ function createTerrainDocument(masks = [28, 124, 112, 31, 255, 241, 7, 199, 193]
     },
     cels: { 'terrain-layer': [index % 2 === 0 ? 'ink' : 'paper'] },
   }))
+  const grassFrames = masks.map((bitmask, index) => ({
+    id: `grass-terrain-${index + 1}`,
+    name: `Grass ${bitmask}`,
+    durationMs: 100,
+    gameplay: {
+      anchor: { x: 0, y: 1 },
+      collisions: [],
+      tileRule: { terrainId: 'grass', bitmask },
+    },
+    cels: { 'terrain-layer': [index % 2 === 0 ? 'paper' : 'ink'] },
+  }))
+  const frames = [...stoneFrames, ...grassFrames]
+  const cells = Array.from({ length: 24 }, (_, index) => index % 6 < 3 ? 'stone' : 'grass')
   return createPixelDocument({
     id: 'terrain-nine-grid',
     name: 'Terrain Nine Grid',
@@ -89,10 +102,9 @@ function createTerrainDocument(masks = [28, 124, 112, 31, 255, 241, 7, 199, 193]
     terrainMaps: [{
       id: 'stone-yard',
       name: 'Stone Yard',
-      terrainId: 'stone',
       width: 6,
       height: 4,
-      occupancy: Array(24).fill(true),
+      cells,
     }],
     activeLayerId: layers[0].id,
     activeFrameId: frames[0].id,
@@ -103,7 +115,7 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3 })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
-  assert.equal(manifest.schemaVersion, 6)
+  assert.equal(manifest.schemaVersion, 7)
   assert.deepEqual(manifest.animationEvents, document.animationEvents)
   assert.deepEqual(manifest.paletteCycles, document.paletteCycles)
   assert.deepEqual(manifest.layerGroups, document.layerGroups)
@@ -155,7 +167,7 @@ test('exports one active animation clip with a unique atlas and exact playback, 
   const bundle = createPixelAnimationClipExportBundle(document, 'turn', { columns: 2, padding: 1, spacing: 1 })
   assert.equal(bundle.sprite.filename, 'Hero-Eight-Way-Turn-clip.png')
   assert.equal(bundle.manifest.value.kind, 'aeonquill.pixel-animation-clip')
-  assert.equal(bundle.manifest.value.schemaVersion, 6)
+  assert.equal(bundle.manifest.value.schemaVersion, 7)
   assert.deepEqual(bundle.manifest.value.frames.map((frame) => frame.frameId), [
     'direction-5', 'direction-6', 'direction-7', 'direction-8',
   ])
@@ -224,22 +236,28 @@ test('terrain preview reports stable fallback, renders pixels, exports facts and
   )
 })
 
-test('persistent non-3x3 terrain maps infer, render and export deterministic JSON plus an inline Tiled map', () => {
+test('persistent multi-terrain maps infer same-terrain neighbors, render and export deterministic JSON plus inline WangSets', () => {
   const document = createTerrainDocument()
   const layout = createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard' })
   assert.equal(layout.kind, 'aeonquill.pixel-terrain-map')
+  assert.equal(layout.schemaVersion, 2)
   assert.deepEqual(layout.grid, { width: 6, height: 4 })
+  assert.deepEqual(layout.terrainIds, ['stone', 'grass'])
   assert.equal(layout.cells.length, 24)
   assert.equal(layout.exactCount, 24)
   assert.equal(layout.fallbackCount, 0)
   assert.equal(layout.cells[0].expectedBitmask, 28)
   assert.equal(layout.cells[7].expectedBitmask, 255)
   assert.equal(layout.cells[23].expectedBitmask, 193)
+  assert.equal(layout.cells[2].expectedBitmask, 112, 'grass on the right must not connect to stone on the left')
+  assert.equal(layout.cells[3].expectedBitmask, 28, 'stone on the left must not connect to grass on the right')
+  assert.equal(layout.cells[2].terrainId, 'stone')
+  assert.equal(layout.cells[3].terrainId, 'grass')
 
-  const diagonalOnly = Array(24).fill(false)
-  diagonalOnly[1 * 6 + 2] = true
-  diagonalOnly[0 * 6 + 3] = true
-  const gated = createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', occupancy: diagonalOnly })
+  const diagonalOnly = Array(24).fill(null)
+  diagonalOnly[1 * 6 + 2] = 'stone'
+  diagonalOnly[0 * 6 + 3] = 'stone'
+  const gated = createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', cells: diagonalOnly })
   assert.equal(gated.cells[8].expectedBitmask, 0)
 
   const rendered = renderPixelTerrainMapRgba(document, { terrainMapId: 'stone-yard' })
@@ -254,7 +272,8 @@ test('persistent non-3x3 terrain maps infer, render and export deterministic JSO
   assert.equal(bundle.atlas.filename, 'Terrain-Nine-Grid-Stone-Yard-terrain-map-source-sprite-sheet.png')
   assert.equal(metadata.image, bundle.preview.filename)
   assert.equal(metadata.atlas, bundle.atlas.filename)
-  assert.deepEqual(metadata.occupancy, Array(24).fill(true))
+  assert.deepEqual(metadata.terrainGrid, document.terrainMaps[0].cells)
+  assert.deepEqual(metadata.terrainIds, ['stone', 'grass'])
   assert.equal(tiledMap.width, 6)
   assert.equal(tiledMap.height, 4)
   assert.equal(tiledMap.layers[0].data.length, 24)
@@ -263,6 +282,15 @@ test('persistent non-3x3 terrain maps infer, render and export deterministic JSO
   assert.equal(tiledMap.tilesets[0].image, bundle.atlas.filename)
   assert.equal(Object.hasOwn(tiledMap.tilesets[0], 'source'), false)
   assert.equal(tiledMap.tilesets[0].wangsets[0].name, 'stone')
+  assert.equal(tiledMap.tilesets[0].wangsets[1].name, 'grass')
+  assert.deepEqual(
+    JSON.parse(tiledMap.properties.find((property) => property.name === 'aeonquillTerrainIds').value),
+    ['stone', 'grass'],
+  )
+  assert.deepEqual(
+    JSON.parse(tiledMap.properties.find((property) => property.name === 'aeonquillTerrainGrid').value),
+    document.terrainMaps[0].cells,
+  )
 
   const fallbackDocument = createTerrainDocument([1, 2])
   const firstFallback = createPixelTerrainMapLayout(fallbackDocument, { terrainMapId: 'stone-yard' })
@@ -275,8 +303,14 @@ test('persistent non-3x3 terrain maps infer, render and export deterministic JSO
     (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_TERRAIN_MAP',
   )
   assert.throws(
-    () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', occupancy: [true] }),
-    (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_TERRAIN_OCCUPANCY',
+    () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', cells: ['stone'] }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_TERRAIN_CELLS',
+  )
+  const unknownCells = [...document.terrainMaps[0].cells]
+  unknownCells[0] = 'unknown-terrain'
+  assert.throws(
+    () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', cells: unknownCells }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_TERRAIN',
   )
   assert.throws(
     () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', surprise: true }),

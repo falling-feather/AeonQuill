@@ -2,13 +2,13 @@
 
 > 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、持久化 Terrain Map、调色板循环、动画事件、游戏交付及跨帧选区编辑的可复核事实。
 >
-> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，`PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付，`PIXEL-009 / V0.7.45` 建立的 Godot 4、Unity 2021.2+ 与 RPG Maker MZ 同源桥接包，`PIXEL-010 / V0.7.46` 建立的严格内存选区剪贴板与跨帧、跨图层原子粘贴，以及 `PIXEL-011 / V0.7.47` 建立的 schema v6 持久化任意尺寸 Terrain Map、连续画笔与 PNG/Sprite/JSON/TMJ 交付。
+> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，`PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付，`PIXEL-009 / V0.7.45` 建立的 Godot 4、Unity 2021.2+ 与 RPG Maker MZ 同源桥接包，`PIXEL-010 / V0.7.46` 建立的严格内存选区剪贴板与跨帧、跨图层原子粘贴，`PIXEL-011 / V0.7.47` 建立的 schema v6 持久化任意尺寸 Terrain Map，以及 `PIXEL-012 / V0.7.48` 建立的 schema v7 逐格多 Terrain 编排、切换画笔与多 WangSet 交付。
 >
 > **最后一次更新时间**：2026-09-03
 >
 > **更新者**：主开发、像素模式责任域、前端与游戏资产责任域
 >
-> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`、`PIXEL-009 / V0.7.45`、`PIXEL-010 / V0.7.46`、`PIXEL-011 / V0.7.47`
+> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`、`PIXEL-009 / V0.7.45`、`PIXEL-010 / V0.7.46`、`PIXEL-011 / V0.7.47`、`PIXEL-012 / V0.7.48`
 
 ---
 
@@ -333,3 +333,26 @@ RPG Maker MZ 单角色资源按官方 [Asset Standards](https://rpgmakerofficial
 4. `*-terrain-map.tmj`：可直接被 Tiled 打开的有限正交地图，Tileset 内联到 TMJ，避免把未交付的外部 TSJ 当成依赖。
 
 核心、转换与游戏专项合计 34/34；全仓 289/289、TypeScript、生产构建和 96 项默认安全基线通过。P7 在 D 盘隔离项目与后台系统 Edge 中创建 6×4 地图，以连续指针轨迹绘制 9 格 L 形区域，验证单步撤销/重做、四文件实际下载/解析、SQLite 刷新恢复和 1440×900/390×844 无页面级横向溢出；页面无 warning/error。该检查点没有启动 ComfyUI/H3、读取或改写正式项目/既有 output、重封安装包或替换 D 盘正式桌面，也不宣称多 Terrain 同图混合、自动生成缺失图块、Worker 化或三引擎原生地图导入已完成。
+
+## 26. V0.7.48 多 Terrain 地图正文与编排
+
+`PixelDocument schema v7` 把每张 Terrain Map 从“地图级 `terrainId` 加布尔 `occupancy`”升级为固定长度 `cells: Array<string | null>`。每个非空格直接保存稳定 Terrain ID，因此一张地图可以同时包含多种地形，空格仍以 `null` 明确表达；地图数量、1—64 单边和最多 4096 格预算保持不变。v6 迁移先严格验证旧地图字段、尺寸、唯一 ID 和布尔长度，再把每个真值映射为旧 `terrainId`、假值映射为 `null`，因而不会丢失任何占用或把损坏文档静默补空。v5 及更早版本继续沿原显式迁移链进入 v7。
+
+`terrain-maps.cells.patch` 的单格事实变为 `{x, y, terrainId}`，其中 `terrainId` 可为稳定 ID 或 `null`。重复坐标、未知字段、越界、非法 ID 和无实际变化仍失败关闭；逆命令逐格保存原 Terrain ID。尺寸变更以 `null` 初始化新区域、保留左上交叠区，并通过 `restore-shape` 保存完整旧 `cells`，因此混合地图也可一次撤销。地图属性补丁只允许名称，避免再次产生与逐格正文冲突的地图级 Terrain。
+
+工作台从当前全部帧的 `tileRule.terrainId` 建立画笔下拉选项；画笔将选中 ID 写入格子，橡皮写入 `null`，“当前 Terrain 填满”只使用所选 ID。连续轨迹仍由栅格线补点、拖动期间只维护瞬态 ID 草稿，抬笔后按实际差异提交一个原子命令。预览不可渲染时用 Terrain ID 的稳定哈希颜色区分各类，而不会把所有地形伪装成同一颜色；没有帧规则时禁用画笔但保留既有地图事实供修复。
+
+`createPixelTerrainMapLayout()` 输出 `aeonquill.pixel-terrain-map` schema v2。对每个非空格，八邻域只有与当前格 Terrain ID 完全相同的邻格才可置位；异种 Terrain、空格和越界均视为空，斜角仍要求同 Terrain 的斜格与两条正交门同时存在。候选按该 Terrain 独立过滤，再依次按精确 Mask、Hamming 距离、文档帧顺序和稳定 ID 选择。布局公开稳定首现顺序的 `terrainIds`、逐格 `terrainGrid`、每格 Terrain、期望/命中 Mask、来源、距离及精确性；空地图可透明渲染，任一已用 Terrain 没有候选则整体返回 `UNKNOWN_TERRAIN`，不以其他 Terrain 偷换图块。
+
+## 27. V0.7.48 交付、迁移与验证边界
+
+四文件包保持原文件数量，但内容升级为多 Terrain 事实：地图 PNG 由逐格匹配来源合成；来源 Sprite 是与项目导出共享的完整 Atlas；JSON 保存 schema v2 布局及逐格 Terrain；TMJ 内联同一 Atlas 的 Tileset，并为全部有帧规则的 Terrain 生成独立 WangSet。TMJ 顶层同时写入 `aeonquillTerrainIds` 和 `aeonquillTerrainGrid` JSON 字符串属性，tile layer 的 GID 仍只引用同一 manifest 的帧序，不建立第二套来源事实。
+
+验证结果：
+
+- 核心、转换和游戏交付定向测试 34/34；全仓单元契约 289/289；
+- TypeScript、生产构建、确定性图像处理、隔离 API、自定义工作流、空间生命周期和双尺寸浏览器组成的 96 项默认基线通过；
+- 固定测试覆盖 v6→v7 无损迁移、逐格多 ID 命令及精确逆操作、保留左上尺寸变更、同类角门、异种边界隔离、稳定降级、多 WangSet/TMJ 逐格事实、未知 Terrain 和非法选项失败关闭；
+- P7 在后台系统 Edge 中为两个真实帧登记 `wuxia-floor` 与 `mist-water`，于 6×4 地图绘制相邻转角共 16 格，验证第二笔一次撤销回到 9 格、重做到 16 格，实际解析 20 个交付文件中的地图 PNG、共享 Atlas、schema v2 JSON 和双 WangSet TMJ；SQLite 刷新恢复、1440×900、390×844、无横向溢出及无页面 warning/error 全部通过。
+
+本检查点不自动生成缺失 Mask 图块，不引入地形层/对象层叠加、Worker 化、三引擎原生地图导入或双向回写；也没有启动 ComfyUI/H3、读取或改写正式项目/既有 output、重封安装包或替换 D 盘正式桌面。产品 SemVer 仍为 0.7.1，正式桌面仍是 V0.7.30 功能轨。

@@ -222,16 +222,36 @@ test('switches and reorders layers and frames while keeping onion-skin settings 
   assert.deepEqual(onionRestored.document.onionSkin, original.onionSkin)
 })
 
-test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the single-layer palette-index format', () => {
+test('serializes schema v7 without loss and migrates v1-v6 plus the single-layer palette-index format', () => {
   const document = makeMultiLayerMultiFrameDocument()
   const serialized = serializePixelDocument(document)
   assert.equal(serializePixelDocument(deserializePixelDocument(serialized)), serialized)
 
-  const schemaFive = structuredClone(document)
+  const schemaSix = structuredClone(document)
+  schemaSix.schemaVersion = 6
+  schemaSix.terrainMaps = [{
+    id: 'legacy-yard',
+    name: 'Legacy Yard',
+    terrainId: 'stone',
+    width: 3,
+    height: 2,
+    occupancy: [true, false, true, false, true, false],
+  }]
+  const migratedSchemaSix = migratePixelDocument(schemaSix)
+  assert.equal(migratedSchemaSix.schemaVersion, 7)
+  assert.deepEqual(migratedSchemaSix.terrainMaps, [{
+    id: 'legacy-yard',
+    name: 'Legacy Yard',
+    width: 3,
+    height: 2,
+    cells: ['stone', null, 'stone', null, 'stone', null],
+  }])
+
+  const schemaFive = structuredClone(schemaSix)
   schemaFive.schemaVersion = 5
   delete schemaFive.terrainMaps
   const migratedSchemaFive = migratePixelDocument(schemaFive)
-  assert.equal(migratedSchemaFive.schemaVersion, 6)
+  assert.equal(migratedSchemaFive.schemaVersion, 7)
   assert.deepEqual(migratedSchemaFive.terrainMaps, [])
 
   const schemaFour = structuredClone(schemaFive)
@@ -239,7 +259,7 @@ test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the sin
   delete schemaFour.paletteCycles
   delete schemaFour.animationEvents
   const migratedSchemaFour = migratePixelDocument(schemaFour)
-  assert.equal(migratedSchemaFour.schemaVersion, 6)
+  assert.equal(migratedSchemaFour.schemaVersion, 7)
   assert.deepEqual(migratedSchemaFour.paletteCycles, [])
   assert.deepEqual(migratedSchemaFour.animationEvents, [])
 
@@ -247,7 +267,7 @@ test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the sin
   schemaThree.schemaVersion = 3
   schemaThree.frames = schemaThree.frames.map(({ gameplay: _gameplay, ...frame }) => frame)
   const migratedSchemaThree = migratePixelDocument(schemaThree)
-  assert.equal(migratedSchemaThree.schemaVersion, 6)
+  assert.equal(migratedSchemaThree.schemaVersion, 7)
   assert.deepEqual(migratedSchemaThree.frames.map((frame) => frame.gameplay), [
     { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
     { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
@@ -258,7 +278,7 @@ test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the sin
   delete schemaTwo.layerGroups
   schemaTwo.layers = schemaTwo.layers.map(({ groupId: _groupId, blendMode: _blendMode, ...layer }) => layer)
   const migratedSchemaTwo = migratePixelDocument(schemaTwo)
-  assert.equal(migratedSchemaTwo.schemaVersion, 6)
+  assert.equal(migratedSchemaTwo.schemaVersion, 7)
   assert.deepEqual(migratedSchemaTwo.layerGroups, [])
   assert.deepEqual(migratedSchemaTwo.layers.map((layer) => [layer.groupId, layer.blendMode]), [[null, 'normal'], [null, 'normal']])
 
@@ -266,7 +286,7 @@ test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the sin
   schemaOne.schemaVersion = 1
   delete schemaOne.animationTags
   const migratedSchemaOne = migratePixelDocument(schemaOne)
-  assert.equal(migratedSchemaOne.schemaVersion, 6)
+  assert.equal(migratedSchemaOne.schemaVersion, 7)
   assert.deepEqual(migratedSchemaOne.animationTags, [])
 
   const migrated = migratePixelDocument({
@@ -279,22 +299,21 @@ test('serializes schema v6 without loss and migrates v1/v2/v3/v4/v5 plus the sin
     pixels: ['1', '.', 2, 0],
     frameDurationMs: 90,
   })
-  assert.equal(migrated.schemaVersion, 6)
+  assert.equal(migrated.schemaVersion, 7)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', null, 'color-2', null])
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
   assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null })
 })
 
-test('terrain maps are bounded, persistent and exactly reversible across cell, metadata and top-left resize commands', () => {
+test('multi-terrain maps are bounded, persistent and exactly reversible across cell, metadata and top-left resize commands', () => {
   const original = createPixelDocument({ width: 2, height: 2, palette })
   const map = {
     id: 'terrain-map-1',
     name: 'Courtyard',
-    terrainId: 'stone',
     width: 4,
     height: 3,
-    occupancy: Array(12).fill(false),
+    cells: Array(12).fill(null),
   }
   const added = execute(original, 'terrain-maps.add', { terrainMap: map })
   assert.deepEqual(added.document.terrainMaps, [map])
@@ -303,16 +322,16 @@ test('terrain maps are bounded, persistent and exactly reversible across cell, m
   const painted = execute(added.document, 'terrain-maps.cells.patch', {
     terrainMapId: map.id,
     cells: [
-      { x: 0, y: 0, occupied: true },
-      { x: 1, y: 1, occupied: true },
-      { x: 3, y: 2, occupied: true },
+      { x: 0, y: 0, terrainId: 'stone' },
+      { x: 1, y: 1, terrainId: 'grass' },
+      { x: 3, y: 2, terrainId: 'water' },
     ],
   })
   assert.equal(painted.document.revision, added.document.revision + 1)
-  assert.deepEqual(painted.document.terrainMaps[0].occupancy, [
-    true, false, false, false,
-    false, true, false, false,
-    false, false, false, true,
+  assert.deepEqual(painted.document.terrainMaps[0].cells, [
+    'stone', null, null, null,
+    null, 'grass', null, null,
+    null, null, null, 'water',
   ])
   assert.deepEqual(withoutRevision(applyPixelCommand(painted.document, painted.inverse).document), withoutRevision(added.document))
 
@@ -325,7 +344,7 @@ test('terrain maps are bounded, persistent and exactly reversible across cell, m
     ...map,
     width: 2,
     height: 2,
-    occupancy: [true, false, false, true],
+    cells: ['stone', null, null, 'grass'],
   })
   const resizeUndone = applyPixelCommand(resized.document, resized.inverse)
   assert.deepEqual(withoutRevision(resizeUndone.document), withoutRevision(painted.document))
@@ -333,7 +352,7 @@ test('terrain maps are bounded, persistent and exactly reversible across cell, m
 
   const renamed = execute(resized.document, 'terrain-maps.patch', {
     terrainMapId: map.id,
-    patch: { name: 'Moon Courtyard', terrainId: 'moon-stone' },
+    patch: { name: 'Moon Courtyard' },
   })
   assert.equal(renamed.document.terrainMaps[0].name, 'Moon Courtyard')
   const metadata = createSpriteSheetMetadata(renamed.document)
@@ -343,10 +362,11 @@ test('terrain maps are bounded, persistent and exactly reversible across cell, m
   assert.deepEqual(withoutRevision(applyPixelCommand(removed.document, removed.inverse).document), withoutRevision(renamed.document))
 
   const invalidCommands = [
-    ['terrain-maps.cells.patch', { terrainMapId: map.id, cells: [{ x: 0, y: 1, occupied: false }] }],
-    ['terrain-maps.cells.patch', { terrainMapId: map.id, cells: [{ x: 0, y: 0, occupied: false }, { x: 0, y: 0, occupied: true }] }],
+    ['terrain-maps.cells.patch', { terrainMapId: map.id, cells: [{ x: 0, y: 1, terrainId: null }] }],
+    ['terrain-maps.cells.patch', { terrainMapId: map.id, cells: [{ x: 0, y: 0, terrainId: null }, { x: 0, y: 0, terrainId: 'stone' }] }],
     ['terrain-maps.resize', { terrainMapId: map.id, width: 65, height: 1 }],
     ['terrain-maps.patch', { terrainMapId: map.id, patch: { name: renamed.document.terrainMaps[0].name } }],
+    ['terrain-maps.patch', { terrainMapId: map.id, patch: { terrainId: 'legacy-field' } }],
   ]
   for (const [type, payload] of invalidCommands) {
     assert.throws(
@@ -403,7 +423,7 @@ test('frame gameplay metadata is strict, reversible, copied with frames and pres
     tileRule: null,
   })
   const metadata = createSpriteSheetMetadata(blank.document, { columns: 2 })
-  assert.equal(metadata.schemaVersion, 6)
+  assert.equal(metadata.schemaVersion, 7)
   assert.deepEqual(metadata.frames[0].gameplay, gameplay)
 
   const invalidCases = [
@@ -672,7 +692,7 @@ test('produces bounded sprite-sheet layout, metadata and RGBA pixels in document
 
   const metadata = createSpriteSheetMetadata(document, { columns: 2, padding: 1, spacing: 1 })
   assert.equal(metadata.kind, 'aeonquill.sprite-sheet')
-  assert.equal(metadata.schemaVersion, 6)
+  assert.equal(metadata.schemaVersion, 7)
   assert.deepEqual(metadata.frames.map((frame) => frame.durationMs), [120, 240, 360])
 
   const rendered = renderSpriteSheetRgba(document, { columns: 2, padding: 1, spacing: 1 })

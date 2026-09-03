@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 6
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 7
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -53,7 +53,8 @@ const FRAME_GAMEPLAY_FIELDS = new Set(['anchor', 'collisions', 'tileRule'])
 const ANCHOR_FIELDS = new Set(['x', 'y'])
 const COLLISION_FIELDS = new Set(['id', 'name', 'type', 'x', 'y', 'width', 'height'])
 const TILE_RULE_FIELDS = new Set(['terrainId', 'bitmask'])
-const TERRAIN_MAP_FIELDS = new Set(['id', 'name', 'terrainId', 'width', 'height', 'occupancy'])
+const TERRAIN_MAP_FIELDS = new Set(['id', 'name', 'width', 'height', 'cells'])
+const SCHEMA_SIX_TERRAIN_MAP_FIELDS = new Set(['id', 'name', 'terrainId', 'width', 'height', 'occupancy'])
 const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ANIMATION_EVENT_FIELDS = new Set(['id', 'name', 'type', 'animationTagId', 'frameId', 'value'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
@@ -358,6 +359,37 @@ function assertTerrainMap(input, path) {
   assertKnownFields(terrainMap, TERRAIN_MAP_FIELDS, path)
   assertId(terrainMap.id, `${path}.id`)
   assertString(terrainMap.name, `${path}.name`, { min: 1, max: 80 })
+  const width = assertInteger(terrainMap.width, `${path}.width`, {
+    min: 1,
+    max: PIXEL_LIMITS.maxTerrainMapWidth,
+  })
+  const height = assertInteger(terrainMap.height, `${path}.height`, {
+    min: 1,
+    max: PIXEL_LIMITS.maxTerrainMapHeight,
+  })
+  const cellCount = width * height
+  if (cellCount > PIXEL_LIMITS.maxTerrainMapCells) {
+    fail('TERRAIN_MAP_TOO_LARGE', `${path} contains ${cellCount} cells`, {
+      cellCount,
+      limit: PIXEL_LIMITS.maxTerrainMapCells,
+    })
+  }
+  if (!Array.isArray(terrainMap.cells) || terrainMap.cells.length !== cellCount) {
+    fail('INVALID_TERRAIN_CELLS', `${path}.cells must contain exactly ${cellCount} terrain ids or null values`, {
+      path: `${path}.cells`,
+    })
+  }
+  terrainMap.cells.forEach((terrainId, index) => {
+    if (terrainId !== null) assertId(terrainId, `${path}.cells[${index}]`)
+  })
+  return terrainMap
+}
+
+function assertSchemaSixTerrainMap(input, path) {
+  const terrainMap = assertRecord(input, path)
+  assertKnownFields(terrainMap, SCHEMA_SIX_TERRAIN_MAP_FIELDS, path)
+  assertId(terrainMap.id, `${path}.id`)
+  assertString(terrainMap.name, `${path}.name`, { min: 1, max: 80 })
   assertId(terrainMap.terrainId, `${path}.terrainId`)
   const width = assertInteger(terrainMap.width, `${path}.width`, {
     min: 1,
@@ -375,9 +407,7 @@ function assertTerrainMap(input, path) {
     })
   }
   if (!Array.isArray(terrainMap.occupancy) || terrainMap.occupancy.length !== cellCount) {
-    fail('INVALID_TERRAIN_OCCUPANCY', `${path}.occupancy must contain exactly ${cellCount} cells`, {
-      path: `${path}.occupancy`,
-    })
+    fail('INVALID_TERRAIN_OCCUPANCY', `${path}.occupancy must contain exactly ${cellCount} cells`)
   }
   terrainMap.occupancy.forEach((occupied, index) => assertBoolean(occupied, `${path}.occupancy[${index}]`))
   return terrainMap
@@ -698,6 +728,30 @@ export function migratePixelDocument(input) {
   if (isRecord(input) && input.schemaVersion === PIXEL_DOCUMENT_SCHEMA_VERSION) {
     assertPixelDocument(input)
     return cloneJson(input)
+  }
+  if (isRecord(input) && input.schemaVersion === 6) {
+    const legacy = assertRecord(input, 'schemaSixDocument')
+    assertKnownFields(legacy, DOCUMENT_FIELDS, 'schemaSixDocument')
+    if (!Array.isArray(legacy.terrainMaps) || legacy.terrainMaps.length > PIXEL_LIMITS.maxTerrainMaps) {
+      fail('INVALID_TERRAIN_MAPS', `schemaSixDocument.terrainMaps must contain 0-${PIXEL_LIMITS.maxTerrainMaps} maps`)
+    }
+    const legacyMaps = legacy.terrainMaps.map((terrainMap, index) => (
+      assertSchemaSixTerrainMap(terrainMap, `schemaSixDocument.terrainMaps[${index}]`)
+    ))
+    assertUniqueIds(legacyMaps, 'schemaSixDocument.terrainMaps')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      terrainMaps: legacyMaps.map((terrainMap) => ({
+        id: terrainMap.id,
+        name: terrainMap.name,
+        width: terrainMap.width,
+        height: terrainMap.height,
+        cells: terrainMap.occupancy.map((occupied) => occupied ? terrainMap.terrainId : null),
+      })),
+    }
+    assertPixelDocument(migrated)
+    return migrated
   }
   if (isRecord(input) && input.schemaVersion === 5) {
     const legacy = assertRecord(input, 'schemaFiveDocument')
@@ -1338,7 +1392,7 @@ export function assertPixelCommand(input, documentInput) {
       assertKnownFields(payload, new Set(['terrainMapId', 'patch']), 'command.payload')
       const terrainMap = assertTerrainMapTarget(payload, document)
       const patch = assertRecord(payload.patch, 'command.payload.patch')
-      assertKnownFields(patch, new Set(['name', 'terrainId']), 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name']), 'command.payload.patch')
       const keys = Object.keys(patch)
       if (keys.length === 0) fail('EMPTY_PATCH', 'Terrain map patch must change at least one field')
       if (keys.every((key) => terrainMap[key] === patch[key])) fail('NO_TERRAIN_CHANGE', 'Terrain map patch does not change any field')
@@ -1355,19 +1409,19 @@ export function assertPixelCommand(input, documentInput) {
       break
     }
     case 'terrain-maps.restore-shape': {
-      assertKnownFields(payload, new Set(['terrainMapId', 'width', 'height', 'occupancy']), 'command.payload')
+      assertKnownFields(payload, new Set(['terrainMapId', 'width', 'height', 'cells']), 'command.payload')
       const terrainMap = assertTerrainMapTarget(payload, document)
       const candidate = {
         ...terrainMap,
         width: payload.width,
         height: payload.height,
-        occupancy: payload.occupancy,
+        cells: payload.cells,
       }
       assertTerrainMap(candidate, 'command.payload')
       if (
         terrainMap.width === candidate.width
         && terrainMap.height === candidate.height
-        && terrainMap.occupancy.every((occupied, index) => occupied === candidate.occupancy[index])
+        && terrainMap.cells.every((terrainId, index) => terrainId === candidate.cells[index])
       ) fail('NO_TERRAIN_CHANGE', 'Terrain map shape is unchanged')
       break
     }
@@ -1752,19 +1806,19 @@ export function applyPixelCommand(documentInput, commandInput) {
       const previous = {
         width: terrainMap.width,
         height: terrainMap.height,
-        occupancy: cloneJson(terrainMap.occupancy),
+        cells: cloneJson(terrainMap.cells),
       }
-      const occupancy = Array.from({ length: payload.width * payload.height }, () => false)
+      const cells = Array.from({ length: payload.width * payload.height }, () => null)
       const overlapWidth = Math.min(terrainMap.width, payload.width)
       const overlapHeight = Math.min(terrainMap.height, payload.height)
       for (let y = 0; y < overlapHeight; y += 1) {
         for (let x = 0; x < overlapWidth; x += 1) {
-          occupancy[y * payload.width + x] = terrainMap.occupancy[y * terrainMap.width + x]
+          cells[y * payload.width + x] = terrainMap.cells[y * terrainMap.width + x]
         }
       }
       terrainMap.width = payload.width
       terrainMap.height = payload.height
-      terrainMap.occupancy = occupancy
+      terrainMap.cells = cells
       inverseType = 'terrain-maps.restore-shape'
       inversePayload = { terrainMapId: payload.terrainMapId, ...previous }
       break
@@ -1774,11 +1828,11 @@ export function applyPixelCommand(documentInput, commandInput) {
       const previous = {
         width: terrainMap.width,
         height: terrainMap.height,
-        occupancy: cloneJson(terrainMap.occupancy),
+        cells: cloneJson(terrainMap.cells),
       }
       terrainMap.width = payload.width
       terrainMap.height = payload.height
-      terrainMap.occupancy = cloneJson(payload.occupancy)
+      terrainMap.cells = cloneJson(payload.cells)
       inverseType = 'terrain-maps.restore-shape'
       inversePayload = { terrainMapId: payload.terrainMapId, ...previous }
       break
@@ -1788,10 +1842,10 @@ export function applyPixelCommand(documentInput, commandInput) {
       const previous = payload.cells.map((cell) => ({
         x: cell.x,
         y: cell.y,
-        occupied: terrainMap.occupancy[cell.y * terrainMap.width + cell.x],
+        terrainId: terrainMap.cells[cell.y * terrainMap.width + cell.x],
       }))
       for (const cell of payload.cells) {
-        terrainMap.occupancy[cell.y * terrainMap.width + cell.x] = cell.occupied
+        terrainMap.cells[cell.y * terrainMap.width + cell.x] = cell.terrainId
       }
       inverseType = 'terrain-maps.cells.patch'
       inversePayload = { terrainMapId: payload.terrainMapId, cells: previous }
@@ -1853,14 +1907,14 @@ function assertTerrainMapCells(cells, terrainMap, path) {
   cells.forEach((cellInput, index) => {
     const cellPath = `${path}[${index}]`
     const cell = assertRecord(cellInput, cellPath)
-    assertKnownFields(cell, new Set(['x', 'y', 'occupied']), cellPath)
+    assertKnownFields(cell, new Set(['x', 'y', 'terrainId']), cellPath)
     const x = assertInteger(cell.x, `${cellPath}.x`, { min: 0, max: terrainMap.width - 1 })
     const y = assertInteger(cell.y, `${cellPath}.y`, { min: 0, max: terrainMap.height - 1 })
-    assertBoolean(cell.occupied, `${cellPath}.occupied`)
+    if (cell.terrainId !== null) assertId(cell.terrainId, `${cellPath}.terrainId`)
     const key = `${x}:${y}`
     if (seen.has(key)) fail('DUPLICATE_TERRAIN_CELL', `${path} contains duplicate coordinate ${key}`, { path, key })
     seen.add(key)
-    if (terrainMap.occupancy[y * terrainMap.width + x] !== cell.occupied) changed = true
+    if (terrainMap.cells[y * terrainMap.width + x] !== cell.terrainId) changed = true
   })
   if (!changed) fail('NO_TERRAIN_CHANGE', `${path} does not change the terrain map`)
 }

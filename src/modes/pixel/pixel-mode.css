@@ -2891,6 +2891,7 @@
 }
 
 .aq-pixel-terrain-map-fields input,
+.aq-pixel-terrain-map-fields select,
 .aq-pixel-terrain-map-size input {
   min-width: 0;
   width: 100%;

@@ -29,7 +29,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 6
+  schemaVersion: 7
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -119,14 +119,25 @@ export type PixelTerrainPreviewExportBundle = {
 
 export type PixelTerrainMapOptions = {
   terrainMapId?: string
-  occupancy?: boolean[]
+  cells?: Array<string | null>
 }
 
-export type PixelTerrainMapLayout = Omit<PixelTerrainPreviewLayout, 'kind' | 'grid'> & {
+export type PixelTerrainMapCell = PixelTerrainPreviewCell & { terrainId: string | null }
+
+export type PixelTerrainMapLayout = {
+  schemaVersion: 2
   kind: 'aeonquill.pixel-terrain-map'
+  sourceDocumentId: string
+  sourceRevision: number
   terrainMapId: string
   terrainMapName: string
+  terrainIds: string[]
   grid: { width: number; height: number }
+  tile: { width: number; height: number }
+  terrainGrid: Array<string | null>
+  exactCount: number
+  fallbackCount: number
+  cells: PixelTerrainMapCell[]
 }
 
 export type PixelTerrainMapMetadata = PixelTerrainMapLayout & { image: string; atlas: string }

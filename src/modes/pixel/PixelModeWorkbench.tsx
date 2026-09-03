@@ -210,9 +210,9 @@ type TerrainMapStrokeContext = {
   terrainMapId: string
   width: number
   height: number
-  occupied: boolean
-  original: boolean[]
-  draft: boolean[]
+  terrainId: string | null
+  original: Array<string | null>
+  draft: Array<string | null>
   last: PixelPoint
 }
 
@@ -364,6 +364,15 @@ function readablePixelError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
 
+function terrainPreviewColor(terrainId: string) {
+  let hash = 0x811c9dc5
+  for (const character of terrainId) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `hsl(${Math.abs(hash) % 360} 72% 58%)`
+}
+
 export function PixelModeWorkbench({
   initialDocument,
   projectId = 'aeonquill-pixel-starter',
@@ -425,7 +434,10 @@ export function PixelModeWorkbench({
     () => history.document.terrainMaps[0]?.id ?? null,
   )
   const [terrainMapBrushMode, setTerrainMapBrushMode] = useState<'paint' | 'erase'>('paint')
-  const [terrainMapDraftOccupancy, setTerrainMapDraftOccupancy] = useState<boolean[] | null>(null)
+  const [terrainMapPaintTerrainId, setTerrainMapPaintTerrainId] = useState<string>(
+    () => history.document.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId ?? '',
+  )
+  const [terrainMapDraftCells, setTerrainMapDraftCells] = useState<Array<string | null> | null>(null)
   const [terrainMapWidthInput, setTerrainMapWidthInput] = useState('8')
   const [terrainMapHeightInput, setTerrainMapHeightInput] = useState('8')
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
@@ -527,7 +539,10 @@ export function PixelModeWorkbench({
     setDragDraft(null)
     dragContextRef.current = null
     setActiveTerrainMapId(nextDocument.terrainMaps[0]?.id ?? null)
-    setTerrainMapDraftOccupancy(null)
+    setTerrainMapPaintTerrainId(
+      nextDocument.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId ?? '',
+    )
+    setTerrainMapDraftCells(null)
     terrainMapStrokeRef.current = null
     setTerrainMapWidthInput(String(nextDocument.terrainMaps[0]?.width ?? 8))
     setTerrainMapHeightInput(String(nextDocument.terrainMaps[0]?.height ?? 8))
@@ -1200,9 +1215,12 @@ export function PixelModeWorkbench({
     frame.gameplay.tileRule ? [frame.gameplay.tileRule.terrainId] : []
   )))], [document.frames])
   useEffect(() => {
+    if (!terrainIds.includes(terrainMapPaintTerrainId)) setTerrainMapPaintTerrainId(terrainIds[0] ?? '')
+  }, [terrainIds, terrainMapPaintTerrainId])
+  useEffect(() => {
     const nextId = activeTerrainMap?.id ?? null
     if (activeTerrainMapId !== nextId) setActiveTerrainMapId(nextId)
-    setTerrainMapDraftOccupancy(null)
+    setTerrainMapDraftCells(null)
     terrainMapStrokeRef.current = null
     setTerrainMapWidthInput(String(activeTerrainMap?.width ?? 8))
     setTerrainMapHeightInput(String(activeTerrainMap?.height ?? 8))
@@ -1236,21 +1254,21 @@ export function PixelModeWorkbench({
     error: string | null
   }>(() => {
     if (!activeTerrainMap) return { preview: null, error: null }
-    const draft = terrainMapDraftOccupancy?.length === activeTerrainMap.occupancy.length
-      ? terrainMapDraftOccupancy
+    const draft = terrainMapDraftCells?.length === activeTerrainMap.cells.length
+      ? terrainMapDraftCells
       : undefined
     try {
       return {
         preview: renderPixelTerrainMapRgba(document, {
           terrainMapId: activeTerrainMap.id,
-          ...(draft ? { occupancy: draft } : {}),
+          ...(draft ? { cells: draft } : {}),
         }),
         error: null,
       }
     } catch (error) {
       return { preview: null, error: readablePixelError(error, 'Terrain Map 预览不可用') }
     }
-  }, [activeTerrainMap, document, terrainMapDraftOccupancy])
+  }, [activeTerrainMap, document, terrainMapDraftCells])
 
   useEffect(() => {
     const canvas = terrainPreviewCanvasRef.current
@@ -1270,9 +1288,9 @@ export function PixelModeWorkbench({
     const canvas = terrainMapCanvasRef.current
     const preview = terrainMapPreviewResult.preview
     if (!canvas || !activeTerrainMap) return
-    const fallbackOccupancy = terrainMapDraftOccupancy?.length === activeTerrainMap.occupancy.length
-      ? terrainMapDraftOccupancy
-      : activeTerrainMap.occupancy
+    const fallbackCells = terrainMapDraftCells?.length === activeTerrainMap.cells.length
+      ? terrainMapDraftCells
+      : activeTerrainMap.cells
     canvas.width = preview?.width ?? activeTerrainMap.width
     canvas.height = preview?.height ?? activeTerrainMap.height
     const context = canvas.getContext('2d')
@@ -1284,9 +1302,10 @@ export function PixelModeWorkbench({
       image.data.set(preview.pixels)
       context.putImageData(image, 0, 0)
     } else {
-      context.fillStyle = '#6553f5'
-      fallbackOccupancy.forEach((occupied, index) => {
-        if (occupied) context.fillRect(index % activeTerrainMap.width, Math.floor(index / activeTerrainMap.width), 1, 1)
+      fallbackCells.forEach((terrainId, index) => {
+        if (terrainId === null) return
+        context.fillStyle = terrainPreviewColor(terrainId)
+        context.fillRect(index % activeTerrainMap.width, Math.floor(index / activeTerrainMap.width), 1, 1)
       })
     }
     const cellWidth = canvas.width / activeTerrainMap.width
@@ -1303,7 +1322,7 @@ export function PixelModeWorkbench({
       context.lineTo(canvas.width, row * cellHeight)
     }
     context.stroke()
-  }, [activeTerrainMap, terrainMapDraftOccupancy, terrainMapPreviewResult.preview])
+  }, [activeTerrainMap, terrainMapDraftCells, terrainMapPreviewResult.preview])
 
   const exportPixelProject = useCallback(async () => {
     setIsExporting(true)
@@ -1626,16 +1645,16 @@ export function PixelModeWorkbench({
     const width = 8
     const height = 8
     if (apply('terrain-maps.add', {
-      terrainMap: {
-        id,
-        name: `Terrain Map ${current.terrainMaps.length + 1}`,
-        terrainId,
-        width,
-        height,
-        occupancy: Array(width * height).fill(false),
-      },
-    })) {
-      setActiveTerrainMapId(id)
+        terrainMap: {
+          id,
+          name: `Terrain Map ${current.terrainMaps.length + 1}`,
+          width,
+          height,
+          cells: Array(width * height).fill(null),
+        },
+      })) {
+        setActiveTerrainMapId(id)
+        setTerrainMapPaintTerrainId(terrainId)
       setTerrainMapWidthInput(String(width))
       setTerrainMapHeightInput(String(height))
       setStatus(`已创建 8×8 Terrain Map「${id}」· 项目内持久化 · 可撤销`)
@@ -1648,7 +1667,7 @@ export function PixelModeWorkbench({
     const fallback = current.terrainMaps.find((terrainMap) => terrainMap.id !== activeTerrainMap.id)?.id ?? null
     if (apply('terrain-maps.remove', { terrainMapId: activeTerrainMap.id })) {
       setActiveTerrainMapId(fallback)
-      setTerrainMapDraftOccupancy(null)
+      setTerrainMapDraftCells(null)
       setStatus(`Terrain Map「${activeTerrainMap.name}」已删除 · 可撤销`)
     }
   }, [activeTerrainMap, apply])
@@ -1673,28 +1692,32 @@ export function PixelModeWorkbench({
       setStatus('Terrain Map 尺寸未变化，没有产生修订')
       return
     }
-    setTerrainMapDraftOccupancy(null)
+    setTerrainMapDraftCells(null)
     terrainMapStrokeRef.current = null
     if (apply('terrain-maps.resize', { terrainMapId: activeTerrainMap.id, width, height })) {
       setStatus(`Terrain Map 已按左上锚点调整为 ${width}×${height} · 可撤销`)
     }
   }, [activeTerrainMap, apply, terrainMapHeightInput, terrainMapWidthInput])
 
-  const patchAllTerrainMapCells = useCallback((occupied: boolean) => {
+  const patchAllTerrainMapCells = useCallback((terrainId: string | null) => {
     if (!activeTerrainMap) return
-    const cells = activeTerrainMap.occupancy.flatMap((current, index) => (
-      current === occupied
+    if (terrainId !== null && !terrainIds.includes(terrainId)) {
+      setStatus('请先为至少一帧登记可用的 Terrain ID')
+      return
+    }
+    const cells = activeTerrainMap.cells.flatMap((current, index) => (
+      current === terrainId
         ? []
-        : [{ x: index % activeTerrainMap.width, y: Math.floor(index / activeTerrainMap.width), occupied }]
+        : [{ x: index % activeTerrainMap.width, y: Math.floor(index / activeTerrainMap.width), terrainId }]
     ))
     if (cells.length === 0) {
-      setStatus(occupied ? 'Terrain Map 已经全部填充，没有产生修订' : 'Terrain Map 已经为空，没有产生修订')
+      setStatus(terrainId === null ? 'Terrain Map 已经为空，没有产生修订' : `Terrain Map 已经全部是 ${terrainId}`)
       return
     }
     if (apply('terrain-maps.cells.patch', { terrainMapId: activeTerrainMap.id, cells })) {
-      setStatus(`${occupied ? '填满' : '清空'} Terrain Map · ${cells.length} 格 · 1 个撤销单元`)
+      setStatus(`${terrainId === null ? '清空' : `以 ${terrainId} 填满`} Terrain Map · ${cells.length} 格 · 1 个撤销单元`)
     }
-  }, [activeTerrainMap, apply])
+  }, [activeTerrainMap, apply, terrainIds])
 
   const terrainMapCellAtPointer = useCallback((
     event: ReactPointerEvent<HTMLCanvasElement>,
@@ -1710,14 +1733,19 @@ export function PixelModeWorkbench({
 
   const paintTerrainMapStroke = useCallback((context: TerrainMapStrokeContext, target: PixelPoint) => {
     for (const point of rasterPixelLine(context.last, target, context.width, context.height)) {
-      context.draft[point.y * context.width + point.x] = context.occupied
+      context.draft[point.y * context.width + point.x] = context.terrainId
     }
     context.last = target
-    setTerrainMapDraftOccupancy([...context.draft])
+    setTerrainMapDraftCells([...context.draft])
   }, [])
 
   const beginTerrainMapStroke = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!activeTerrainMap || event.button !== 0) return
+    const targetTerrainId = terrainMapBrushMode === 'paint' ? terrainMapPaintTerrainId : null
+    if (terrainMapBrushMode === 'paint' && (targetTerrainId === null || !terrainIds.includes(targetTerrainId))) {
+      setStatus('当前没有可用于 Terrain 画笔的帧规则')
+      return
+    }
     const point = terrainMapCellAtPointer(event, activeTerrainMap)
     if (!point) return
     event.preventDefault()
@@ -1727,14 +1755,14 @@ export function PixelModeWorkbench({
       terrainMapId: activeTerrainMap.id,
       width: activeTerrainMap.width,
       height: activeTerrainMap.height,
-      occupied: terrainMapBrushMode === 'paint',
-      original: [...activeTerrainMap.occupancy],
-      draft: [...activeTerrainMap.occupancy],
+      terrainId: targetTerrainId,
+      original: [...activeTerrainMap.cells],
+      draft: [...activeTerrainMap.cells],
       last: point,
     }
     terrainMapStrokeRef.current = context
     paintTerrainMapStroke(context, point)
-  }, [activeTerrainMap, paintTerrainMapStroke, terrainMapBrushMode, terrainMapCellAtPointer])
+  }, [activeTerrainMap, paintTerrainMapStroke, terrainIds, terrainMapBrushMode, terrainMapCellAtPointer, terrainMapPaintTerrainId])
 
   const continueTerrainMapStroke = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const context = terrainMapStrokeRef.current
@@ -1753,22 +1781,22 @@ export function PixelModeWorkbench({
     terrainMapStrokeRef.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     const current = historyRef.current.document.terrainMaps.find((terrainMap) => terrainMap.id === context.terrainMapId)
-    setTerrainMapDraftOccupancy(null)
+    setTerrainMapDraftCells(null)
     if (!current || current.width !== context.width || current.height !== context.height) {
       setStatus('Terrain Map 在绘制期间发生变化，本次草稿已安全丢弃')
       return
     }
-    const cells = context.draft.flatMap((occupied, index) => (
-      occupied === context.original[index]
+    const cells = context.draft.flatMap((terrainId, index) => (
+      terrainId === context.original[index]
         ? []
-        : [{ x: index % context.width, y: Math.floor(index / context.width), occupied }]
+        : [{ x: index % context.width, y: Math.floor(index / context.width), terrainId }]
     ))
     if (cells.length === 0) {
       setStatus('Terrain 画笔没有改变格子，项目 revision 保持不变')
       return
     }
     if (apply('terrain-maps.cells.patch', { terrainMapId: context.terrainMapId, cells })) {
-      setStatus(`Terrain ${context.occupied ? '画笔' : '橡皮'}完成 · ${cells.length} 格 · 1 个撤销单元`)
+      setStatus(`Terrain ${context.terrainId === null ? '橡皮' : `${context.terrainId} 画笔`}完成 · ${cells.length} 格 · 1 个撤销单元`)
     }
   }, [apply])
 
@@ -1776,7 +1804,7 @@ export function PixelModeWorkbench({
     const context = terrainMapStrokeRef.current
     if (!context || context.pointerId !== event.pointerId) return
     terrainMapStrokeRef.current = null
-    setTerrainMapDraftOccupancy(null)
+    setTerrainMapDraftCells(null)
     setStatus('Terrain 绘制已取消，项目 revision 保持不变')
   }, [])
 
@@ -3213,24 +3241,19 @@ export function PixelModeWorkbench({
                       />
                     </label>
                     <label>
-                      <span>Terrain ID</span>
-                      <input
-                        key={`${activeTerrainMap.id}-${activeTerrainMap.terrainId}`}
-                        aria-label="Terrain Map Terrain ID"
-                        defaultValue={activeTerrainMap.terrainId}
-                        list="aq-pixel-terrain-ids"
-                        maxLength={64}
-                        onBlur={(event) => {
-                          const terrainId = event.currentTarget.value.trim()
-                          if (terrainId !== activeTerrainMap.terrainId && !apply('terrain-maps.patch', {
-                            terrainMapId: activeTerrainMap.id,
-                            patch: { terrainId },
-                          })) event.currentTarget.value = activeTerrainMap.terrainId
+                      <span>画笔 Terrain</span>
+                      <select
+                        aria-label="Terrain Map 画笔 Terrain"
+                        value={terrainMapPaintTerrainId}
+                        disabled={terrainIds.length === 0}
+                        onChange={(event) => {
+                          setTerrainMapPaintTerrainId(event.currentTarget.value)
+                          setTerrainMapBrushMode('paint')
                         }}
-                      />
-                      <datalist id="aq-pixel-terrain-ids">
-                        {terrainIds.map((terrainId) => <option key={terrainId} value={terrainId} />)}
-                      </datalist>
+                      >
+                        {terrainIds.length === 0 ? <option value="">暂无帧规则</option> : null}
+                        {terrainIds.map((terrainId) => <option key={terrainId} value={terrainId}>{terrainId}</option>)}
+                      </select>
                     </label>
                   </div>
                   <div className="aq-pixel-terrain-map-size" aria-label="Terrain Map 尺寸">
@@ -3263,6 +3286,7 @@ export function PixelModeWorkbench({
                       type="button"
                       className={terrainMapBrushMode === 'paint' ? 'is-active' : ''}
                       aria-pressed={terrainMapBrushMode === 'paint'}
+                      disabled={terrainIds.length === 0}
                       onClick={() => setTerrainMapBrushMode('paint')}
                     ><Pencil size={12} /> 画笔</button>
                     <button
@@ -3271,8 +3295,8 @@ export function PixelModeWorkbench({
                       aria-pressed={terrainMapBrushMode === 'erase'}
                       onClick={() => setTerrainMapBrushMode('erase')}
                     ><Eraser size={12} /> 橡皮</button>
-                    <button type="button" onClick={() => patchAllTerrainMapCells(true)}><PaintBucket size={12} /> 填满</button>
-                    <button type="button" onClick={() => patchAllTerrainMapCells(false)}>清空</button>
+                    <button type="button" disabled={!terrainMapPaintTerrainId} onClick={() => patchAllTerrainMapCells(terrainMapPaintTerrainId)}><PaintBucket size={12} /> 当前 Terrain 填满</button>
+                    <button type="button" onClick={() => patchAllTerrainMapCells(null)}>清空</button>
                   </div>
                   <figure className="aq-pixel-terrain-map-preview">
                     <canvas
@@ -3286,17 +3310,18 @@ export function PixelModeWorkbench({
                       onContextMenu={(event) => event.preventDefault()}
                     />
                     <figcaption>
-                      {activeTerrainMap.width}×{activeTerrainMap.height} · {activeTerrainMap.occupancy.filter(Boolean).length} 个持久化格
-                      {terrainMapDraftOccupancy ? ' · 正在预览笔触' : ''}
+                      {activeTerrainMap.width}×{activeTerrainMap.height} · {activeTerrainMap.cells.filter((terrainId) => terrainId !== null).length} 个持久化格
+                      {' · '}{new Set(activeTerrainMap.cells.filter((terrainId) => terrainId !== null)).size} 种 Terrain
+                      {terrainMapDraftCells ? ' · 正在预览笔触' : ''}
                     </figcaption>
                   </figure>
                   {terrainMapPreviewResult.preview ? (
                     <output className="aq-pixel-terrain-map-match" aria-label="Terrain Map 匹配摘要">
-                      {terrainMapPreviewResult.preview.layout.exactCount} 精确 · {terrainMapPreviewResult.preview.layout.fallbackCount} 降级
+                      {terrainMapPreviewResult.preview.layout.terrainIds.length} 种 Terrain · {terrainMapPreviewResult.preview.layout.exactCount} 精确 · {terrainMapPreviewResult.preview.layout.fallbackCount} 降级
                     </output>
                   ) : (
                     <p className="aq-pixel-terrain-warning" role="status">
-                      {terrainMapPreviewResult.error ?? '地图可继续编辑；为帧登记相同 Terrain ID 后即可渲染图块。'}
+                      {terrainMapPreviewResult.error ?? '空地图可继续编辑；从画笔 Terrain 选择帧规则后即可混合绘制。'}
                     </p>
                   )}
                   <div className="aq-pixel-terrain-map-actions">
@@ -3310,7 +3335,7 @@ export function PixelModeWorkbench({
                 </div>
               ) : (
                 <p className="aq-pixel-gameplay-empty">
-                  先为帧登记 Terrain ID，再新建 1—64 格宽高的地图；画笔、橡皮、扩缩尺寸和导出都走可撤销项目命令。
+                  先为帧登记 Terrain ID，再新建 1—64 格宽高的地图；可在同一地图切换多种 Terrain 连续绘制，跨种类边界独立推导。
                 </p>
               )}
             </div>

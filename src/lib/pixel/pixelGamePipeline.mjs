@@ -121,6 +121,16 @@ function assertTerrainOccupancy(value, width, height, path) {
   return [...value]
 }
 
+function assertTerrainCells(value, width, height, path) {
+  const cellCount = width * height
+  if (!Array.isArray(value) || value.length !== cellCount) {
+    fail('INVALID_TERRAIN_CELLS', `${path} must contain exactly ${cellCount} terrain ids or null values`)
+  }
+  return value.map((terrainId, index) => (
+    terrainId === null ? null : assertTerrainId(terrainId, `${path}[${index}]`)
+  ))
+}
+
 function terrainGridOccupied(occupancy, row, column, width, height) {
   if (row < 0 || column < 0 || row >= height || column >= width) return false
   return occupancy[row * width + column]
@@ -133,6 +143,24 @@ function inferTerrainCellBitmask(occupancy, row, column, width, height) {
     const gatesOpen = neighbor.gateIds.every((gateId) => {
       const gate = TERRAIN_OFFSET_BY_ID.get(gateId)
       return terrainGridOccupied(occupancy, row + gate.row, column + gate.column, width, height)
+    })
+    if (gatesOpen) bitmask |= TERRAIN_BIT_BY_ID.get(neighbor.id)
+  }
+  return bitmask
+}
+
+function terrainGridMatches(cells, terrainId, row, column, width, height) {
+  if (row < 0 || column < 0 || row >= height || column >= width) return false
+  return cells[row * width + column] === terrainId
+}
+
+function inferTerrainCellBitmaskById(cells, terrainId, row, column, width, height) {
+  let bitmask = 0
+  for (const neighbor of TERRAIN_NEIGHBOR_OFFSETS) {
+    if (!terrainGridMatches(cells, terrainId, row + neighbor.row, column + neighbor.column, width, height)) continue
+    const gatesOpen = neighbor.gateIds.every((gateId) => {
+      const gate = TERRAIN_OFFSET_BY_ID.get(gateId)
+      return terrainGridMatches(cells, terrainId, row + gate.row, column + gate.column, width, height)
     })
     if (gatesOpen) bitmask |= TERRAIN_BIT_BY_ID.get(neighbor.id)
   }
@@ -240,26 +268,98 @@ export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}
 export function createPixelTerrainMapLayout(documentInput, optionsInput = {}) {
   const document = assertPixelDocument(documentInput)
   const options = assertRecord(optionsInput, 'options')
-  assertKnownFields(options, new Set(['terrainMapId', 'occupancy']), 'options')
+  assertKnownFields(options, new Set(['terrainMapId', 'cells']), 'options')
   const terrainMapId = options.terrainMapId ?? document.terrainMaps[0]?.id
   if (typeof terrainMapId !== 'string') fail('UNKNOWN_TERRAIN_MAP', 'options.terrainMapId must reference an existing terrain map')
   const terrainMap = document.terrainMaps.find((item) => item.id === terrainMapId)
   if (!terrainMap) fail('UNKNOWN_TERRAIN_MAP', `Unknown terrain map ${terrainMapId}`, { terrainMapId })
-  const occupancy = assertTerrainOccupancy(
-    options.occupancy ?? terrainMap.occupancy,
+  const terrainGrid = assertTerrainCells(
+    options.cells ?? terrainMap.cells,
     terrainMap.width,
     terrainMap.height,
-    'options.occupancy',
+    'options.cells',
   )
-  return createTerrainLayout(document, {
+  const terrainIds = [...new Set(terrainGrid.filter((terrainId) => terrainId !== null))]
+  const candidatesByTerrain = new Map(terrainIds.map((terrainId) => [
+    terrainId,
+    document.frames
+      .map((frame, frameIndex) => ({ frame, frameIndex }))
+      .filter(({ frame }) => frame.gameplay.tileRule?.terrainId === terrainId),
+  ]))
+  const unavailableTerrainIds = terrainIds.filter((terrainId) => candidatesByTerrain.get(terrainId).length === 0)
+  if (unavailableTerrainIds.length > 0) {
+    fail('UNKNOWN_TERRAIN', `No frames are registered for terrain ${unavailableTerrainIds.join(', ')}`, {
+      terrainIds: unavailableTerrainIds,
+    })
+  }
+  const cells = terrainGrid.map((terrainId, index) => {
+    const row = Math.floor(index / terrainMap.width)
+    const column = index % terrainMap.width
+    if (terrainId === null) {
+      return {
+        index,
+        row,
+        column,
+        terrainId: null,
+        occupied: false,
+        expectedBitmask: null,
+        frameId: null,
+        frameName: null,
+        matchedBitmask: null,
+        distance: null,
+        exact: false,
+      }
+    }
+    const expectedBitmask = inferTerrainCellBitmaskById(
+      terrainGrid,
+      terrainId,
+      row,
+      column,
+      terrainMap.width,
+      terrainMap.height,
+    )
+    const ranked = candidatesByTerrain.get(terrainId)
+      .map(({ frame, frameIndex }) => ({
+        frame,
+        frameIndex,
+        matchedBitmask: frame.gameplay.tileRule.bitmask,
+        distance: bitCount8(expectedBitmask ^ frame.gameplay.tileRule.bitmask),
+      }))
+      .sort((left, right) => (
+        left.distance - right.distance
+        || left.frameIndex - right.frameIndex
+        || left.frame.id.localeCompare(right.frame.id)
+      ))
+    const match = ranked[0]
+    return {
+      index,
+      row,
+      column,
+      terrainId,
+      occupied: true,
+      expectedBitmask,
+      frameId: match.frame.id,
+      frameName: match.frame.name,
+      matchedBitmask: match.matchedBitmask,
+      distance: match.distance,
+      exact: match.distance === 0,
+    }
+  })
+  return {
+    schemaVersion: 2,
     kind: 'aeonquill.pixel-terrain-map',
-    terrainId: terrainMap.terrainId,
-    width: terrainMap.width,
-    height: terrainMap.height,
-    occupancy,
+    sourceDocumentId: document.id,
+    sourceRevision: document.revision,
     terrainMapId: terrainMap.id,
     terrainMapName: terrainMap.name,
-  })
+    terrainIds,
+    grid: { width: terrainMap.width, height: terrainMap.height },
+    tile: { width: document.width, height: document.height },
+    terrainGrid,
+    exactCount: cells.filter((cell) => cell.occupied && cell.exact).length,
+    fallbackCount: cells.filter((cell) => cell.occupied && !cell.exact).length,
+    cells,
+  }
 }
 
 function renderTerrainLayout(document, layout) {
@@ -439,7 +539,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     layers: document.layers.map((layer) => ({ ...layer })),
     palette: document.palette.map((color) => ({ ...color })),
     paletteCycles: document.paletteCycles.map((cycle) => ({ ...cycle, colorIds: [...cycle.colorIds] })),
-    terrainMaps: document.terrainMaps.map((terrainMap) => ({ ...terrainMap, occupancy: [...terrainMap.occupancy] })),
+    terrainMaps: document.terrainMaps.map((terrainMap) => ({ ...terrainMap, cells: [...terrainMap.cells] })),
   }
 }
 
@@ -697,10 +797,10 @@ export function createPixelTerrainPreviewExportBundle(documentInput, optionsInpu
 export function createPixelTerrainMapExportBundle(documentInput, optionsInput = {}) {
   const document = assertPixelDocument(documentInput)
   const options = assertRecord(optionsInput, 'options')
-  assertKnownFields(options, new Set(['terrainMapId', 'occupancy', 'baseName']), 'options')
+  assertKnownFields(options, new Set(['terrainMapId', 'cells', 'baseName']), 'options')
   const rendered = renderPixelTerrainMapRgba(document, {
     ...(options.terrainMapId === undefined ? {} : { terrainMapId: options.terrainMapId }),
-    ...(options.occupancy === undefined ? {} : { occupancy: options.occupancy }),
+    ...(options.cells === undefined ? {} : { cells: options.cells }),
   })
   const baseName = safePixelFilename(options.baseName ?? document.name)
   const terrainMapName = safePixelFilename(rendered.layout.terrainMapName, rendered.layout.terrainMapId)
@@ -736,7 +836,8 @@ export function createPixelTerrainMapExportBundle(documentInput, optionsInput = 
     orientation: 'orthogonal',
     properties: [
       { name: 'aeonquillTerrainMapId', type: 'string', value: rendered.layout.terrainMapId },
-      { name: 'aeonquillTerrainId', type: 'string', value: rendered.layout.terrainId },
+      { name: 'aeonquillTerrainIds', type: 'string', value: JSON.stringify(rendered.layout.terrainIds) },
+      { name: 'aeonquillTerrainGrid', type: 'string', value: JSON.stringify(rendered.layout.terrainGrid) },
       { name: 'aeonquillSourceDocumentId', type: 'string', value: document.id },
       { name: 'aeonquillSourceRevision', type: 'int', value: document.revision },
     ],

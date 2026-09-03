@@ -223,6 +223,13 @@ async function validatePixelGameUi(baseUrl) {
     await terrainComposer.getByRole('button', { name: /导出九宫格预览/u }).click()
     await waitForDownloads(downloads, 2)
     await page.getByText(/九宫格预览包完成：1 格精确、3 格降级/u).waitFor({ state: 'visible' })
+    await frameButtons.nth(clipboardTargetFrameIndex).click()
+    await gameplayWorkbench.getByRole('button', { name: '启用', exact: true }).click()
+    const secondTerrainId = gameplayWorkbench.getByLabel('Terrain ID', { exact: true })
+    await secondTerrainId.fill('mist-water')
+    await secondTerrainId.press('Tab')
+    await page.getByText('地形标识已更新 · 可撤销', { exact: true }).waitFor({ state: 'visible' })
+    await frameButtons.nth(clipboardSourceFrameIndex).click()
     const terrainMapEditor = gameplayWorkbench.getByLabel('持久化 Terrain Map 编辑器', { exact: true })
     await terrainMapEditor.getByRole('button', { name: '新建 Terrain Map', exact: true }).click()
     await page.getByText(/已创建 8×8 Terrain Map/u).waitFor({ state: 'visible' })
@@ -246,12 +253,22 @@ async function validatePixelGameUi(baseUrl) {
     await page.mouse.move(terrainTurn.x, terrainTurn.y, { steps: 6 })
     await page.mouse.move(terrainEnd.x, terrainEnd.y, { steps: 4 })
     await page.mouse.up()
-    await page.getByText('Terrain 画笔完成 · 9 格 · 1 个撤销单元', { exact: true }).waitFor({ state: 'visible' })
-    await terrainMapEditor.getByText(/6×4 · 9 个持久化格/u).waitFor({ state: 'visible' })
+    await page.getByText('Terrain wuxia-floor 画笔完成 · 9 格 · 1 个撤销单元', { exact: true }).waitFor({ state: 'visible' })
+    await terrainMapEditor.getByLabel('Terrain Map 画笔 Terrain', { exact: true }).selectOption('mist-water')
+    const secondTerrainStart = terrainMapPoint(0, 1)
+    const secondTerrainTurn = terrainMapPoint(4, 1)
+    const secondTerrainEnd = terrainMapPoint(4, 3)
+    await page.mouse.move(secondTerrainStart.x, secondTerrainStart.y)
+    await page.mouse.down()
+    await page.mouse.move(secondTerrainTurn.x, secondTerrainTurn.y, { steps: 5 })
+    await page.mouse.move(secondTerrainEnd.x, secondTerrainEnd.y, { steps: 3 })
+    await page.mouse.up()
+    await page.getByText('Terrain mist-water 画笔完成 · 7 格 · 1 个撤销单元', { exact: true }).waitFor({ state: 'visible' })
+    await terrainMapEditor.getByText(/6×4 · 16 个持久化格 · 2 种 Terrain/u).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: '撤销', exact: true }).click()
-    await terrainMapEditor.getByText(/6×4 · 0 个持久化格/u).waitFor({ state: 'visible' })
+    await terrainMapEditor.getByText(/6×4 · 9 个持久化格 · 1 种 Terrain/u).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: '重做', exact: true }).click()
-    await terrainMapEditor.getByText(/6×4 · 9 个持久化格/u).waitFor({ state: 'visible' })
+    await terrainMapEditor.getByText(/6×4 · 16 个持久化格 · 2 种 Terrain/u).waitFor({ state: 'visible' })
     await terrainMapEditor.getByRole('button', { name: /导出 PNG \/ JSON \/ TMJ/u }).click()
     await waitForDownloads(downloads, 6)
     await page.getByText(/Terrain Map 已导出/u).waitFor({ state: 'visible' })
@@ -358,7 +375,7 @@ async function validatePixelGameUi(baseUrl) {
     assert.deepEqual([...terrainMapSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.deepEqual([...terrainMapAtlas.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.deepEqual([...rpgMakerCharacter.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
-    assert.equal(project.schemaVersion, 6)
+    assert.equal(project.schemaVersion, 7)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
     assert.equal(project.paletteCycles.some((cycle) => cycle.name === '灵光轮转' && cycle.stepDurationMs === 80 && cycle.direction === 'ping-pong'), true)
     assert.equal(project.animationEvents.some((event) => event.name === '剑鸣' && event.type === 'sfx' && event.value === 'sfx.sword'), true)
@@ -370,7 +387,8 @@ async function validatePixelGameUi(baseUrl) {
       { width: project.terrainMaps[0].width, height: project.terrainMaps[0].height },
       { width: 6, height: 4 },
     )
-    assert.equal(project.terrainMaps[0].occupancy.filter(Boolean).length, 9)
+    assert.equal(project.terrainMaps[0].cells.filter((terrainId) => terrainId !== null).length, 16)
+    assert.deepEqual([...new Set(project.terrainMaps[0].cells.filter((terrainId) => terrainId !== null))], ['wuxia-floor', 'mist-water'])
     const clipboardIndexes = [
       selectedRegion.y * 16 + selectedRegion.x,
       selectedRegion.y * 16 + selectedRegion.x + 1,
@@ -381,7 +399,7 @@ async function validatePixelGameUi(baseUrl) {
       clipboardIndexes.map((index) => project.frames[clipboardTargetFrameIndex].cels.silhouette[index]),
       clipboardIndexes.map((index) => project.frames[clipboardSourceFrameIndex].cels.light[index]),
     )
-    assert.equal(manifest.schemaVersion, 6)
+    assert.equal(manifest.schemaVersion, 7)
     assert.equal(manifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
     assert.equal(manifest.animationEvents.some((event) => event.name === '剑鸣'), true)
     assert.equal(manifest.layerGroups.some((group) => group.id === groupId), true)
@@ -404,11 +422,12 @@ async function validatePixelGameUi(baseUrl) {
     const gameplayTile = tileset.tiles.find((tile) => tile.id === gameplayFrameIndex)
     assert.equal(gameplayTile.objectgroup.objects[0].name, '剑锋')
     assert.equal(tileset.wangsets.some((wangset) => wangset.name === 'wuxia-floor'), true)
+    assert.equal(tileset.wangsets.some((wangset) => wangset.name === 'mist-water'), true)
     assert.equal(tilemap.tilesets[0].source.endsWith('-tileset.tsj'), true)
     assert.equal(/https?:\/\//u.test(viewer), false)
     assert.match(viewer, /collisionColors/u)
     assert.match(viewer, /paletteCycles/u)
-    assert.equal(clipManifest.schemaVersion, 6)
+    assert.equal(clipManifest.schemaVersion, 7)
     assert.equal(clipManifest.kind, 'aeonquill.pixel-animation-clip')
     assert.equal(clipManifest.frames.length, 8)
     assert.equal(clipManifest.animation.frameIds.length, 14)
@@ -423,10 +442,11 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(terrainManifest.cells[4].expectedBitmask, 7)
     assert.equal(terrainManifest.cells[4].matchedBitmask, 7)
     assert.equal(terrainManifest.cells[4].exact, true)
-    assert.equal(terrainMapManifest.schemaVersion, 1)
+    assert.equal(terrainMapManifest.schemaVersion, 2)
     assert.equal(terrainMapManifest.kind, 'aeonquill.pixel-terrain-map')
     assert.deepEqual(terrainMapManifest.grid, { width: 6, height: 4 })
-    assert.equal(terrainMapManifest.occupancy.filter(Boolean).length, 9)
+    assert.equal(terrainMapManifest.terrainGrid.filter((terrainId) => terrainId !== null).length, 16)
+    assert.deepEqual(terrainMapManifest.terrainIds, ['wuxia-floor', 'mist-water'])
     assert.equal(terrainMapManifest.cells.length, 24)
     assert.equal(terrainMapTiled.width, 6)
     assert.equal(terrainMapTiled.height, 4)
@@ -434,6 +454,10 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(terrainMapTiled.tilesets[0].firstgid, 1)
     assert.equal(Object.hasOwn(terrainMapTiled.tilesets[0], 'source'), false)
     assert.equal(terrainMapTiled.tilesets[0].image, terrainMapManifest.atlas)
+    assert.deepEqual(
+      terrainMapTiled.tilesets[0].wangsets.map((wangset) => wangset.name),
+      [...new Set(manifest.frames.map((frame) => frame.tileRule?.terrainId).filter(Boolean))],
+    )
     assert.equal(engineManifest.schemaVersion, 1)
     assert.equal(engineManifest.kind, 'aeonquill.pixel-engine-bridge')
     assert.equal(engineManifest.sourceDocumentId, project.id)
@@ -489,20 +513,20 @@ async function validatePixelGameUi(baseUrl) {
     await restoredTerrainMapEditor.getByLabel('Terrain Map 画布', { exact: true }).waitFor({ state: 'visible' })
     assert.equal(await restoredTerrainMapEditor.getByLabel('Terrain Map 宽度', { exact: true }).inputValue(), '6')
     assert.equal(await restoredTerrainMapEditor.getByLabel('Terrain Map 高度', { exact: true }).inputValue(), '4')
-    assert.equal(await restoredTerrainMapEditor.getByText(/6×4 · 9 个持久化格/u).isVisible(), true)
+    assert.equal(await restoredTerrainMapEditor.getByText(/6×4 · 16 个持久化格 · 2 种 Terrain/u).isVisible(), true)
     assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
     assert.equal(await page.locator('html').evaluate((html) => html.scrollWidth <= html.clientWidth), true)
     await page.getByLabel('当前帧游戏元数据', { exact: true }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel cross-frame clipboard, arbitrary terrain painting, palette cycles, events, clip bundle and twenty-download engine delivery',
+      label: 'pixel cross-frame clipboard, multi-terrain painting, palette cycles, events, clip bundle and twenty-download engine delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel cross-frame clipboard, arbitrary terrain painting, palette cycles, events, clip bundle and twenty-download engine delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel cross-frame clipboard, multi-terrain painting, palette cycles, events, clip bundle and twenty-download engine delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

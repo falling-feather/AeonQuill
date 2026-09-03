@@ -30,10 +30,9 @@ export type PixelTileRule = { terrainId: string; bitmask: number }
 export type PixelTerrainMap = {
   id: string
   name: string
-  terrainId: string
   width: number
   height: number
-  occupancy: boolean[]
+  cells: Array<string | null>
 }
 export type PixelFrameGameplay = {
   anchor: { x: number; y: number }
@@ -77,7 +76,7 @@ export type PixelAnimationEvent = {
 export type PixelOnionSkin = { enabled: boolean; previousFrames: number; nextFrames: number; opacity: number }
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 6
+  schemaVersion: 7
   id: string
   name: string
   width: number
@@ -111,7 +110,7 @@ export type SpriteSheetCell = {
 export type SpriteSheetFrame = SpriteSheetCell & { gameplay: PixelFrameGameplay }
 export type SpriteSheetLayout = { width: number; height: number; columns: number; rows: number; padding: number; spacing: number; cells: SpriteSheetCell[] }
 export type SpriteSheetMetadata = {
-  schemaVersion: 6
+  schemaVersion: 7
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -131,7 +130,7 @@ export type SpriteSheetMetadata = {
   terrainMaps: PixelTerrainMap[]
 }
 export type PixelAnimationClipMetadata = {
-  schemaVersion: 6
+  schemaVersion: 7
   kind: 'aeonquill.pixel-animation-clip'
   sourceDocumentId: string
   sourceRevision: number
@@ -153,7 +152,7 @@ export type PixelAnimationClipMetadata = {
 
 export class PixelContractError extends Error { code: string; details?: unknown }
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 6
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 7
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_PALETTE_CYCLE_DIRECTIONS: ReadonlyArray<PixelPaletteCycleDirection>
 export const PIXEL_ANIMATION_EVENT_TYPES: ReadonlyArray<PixelAnimationEventType>
