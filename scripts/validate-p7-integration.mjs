@@ -111,6 +111,16 @@ async function validatePixelGameUi(baseUrl) {
     await page.getByRole('button', { name: '创建并进入', exact: true }).click()
     await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
 
+    const activeLayerProperties = page.getByLabel('当前图层属性', { exact: true })
+    const firstLayerName = activeLayerProperties.getByLabel('图层名称', { exact: true })
+    await firstLayerName.fill('流光')
+    await firstLayerName.press('Tab')
+    await page.getByRole('button', { name: '添加图层', exact: true }).click()
+    const secondLayerName = activeLayerProperties.getByLabel('图层名称', { exact: true })
+    await secondLayerName.fill('轮廓')
+    await secondLayerName.press('Tab')
+    await page.locator('.aq-pixel-layer-list > div').filter({ hasText: '流光' }).first().locator('.aq-pixel-layer-main').click()
+
     await page.getByRole('button', { name: /本地智能清理/u }).click()
     await page.getByText('本地智能清理未发现孤立噪点或单像素针孔', { exact: true }).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: /补齐八方向/u }).click()
@@ -148,7 +158,6 @@ async function validatePixelGameUi(baseUrl) {
     await groupWorkbench.getByRole('button', { name: '锁定图层组 角色光影', exact: true }).click()
     await groupWorkbench.getByRole('button', { name: '解锁图层组 角色光影', exact: true }).click()
 
-    await page.getByRole('button', { name: /选区 M/u }).click()
     const pixelCanvas = page.getByLabel(/像素绘制区/u)
     const canvasBox = await pixelCanvas.boundingBox()
     assert.ok(canvasBox, 'Pixel canvas must have a visible bounding box')
@@ -158,6 +167,9 @@ async function validatePixelGameUi(baseUrl) {
     })
     const selectionStart = canvasPoint(1, 12)
     const selectionEnd = canvasPoint(2, 13)
+    await page.getByRole('button', { name: /铅笔 B/u }).click()
+    await page.mouse.click(selectionStart.x, selectionStart.y)
+    await page.getByRole('button', { name: /选区 M/u }).click()
     await page.mouse.move(selectionStart.x, selectionStart.y)
     await page.mouse.down()
     await page.mouse.move(selectionEnd.x, selectionEnd.y)
@@ -183,7 +195,7 @@ async function validatePixelGameUi(baseUrl) {
     await silhouetteRow.locator('.aq-pixel-layer-main').click()
     await silhouetteRow.getByRole('button', { name: '锁定 轮廓', exact: true }).click()
     await page.getByRole('button', { name: '粘贴跨帧剪贴板', exact: true }).click()
-    await page.getByText('Layer silhouette is locked', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByText(/^Layer .* is locked$/u).waitFor({ state: 'visible' })
     await silhouetteRow.getByRole('button', { name: '解锁 轮廓', exact: true }).click()
     await page.getByRole('button', { name: '粘贴跨帧剪贴板', exact: true }).click()
     await page.getByText(/跨帧选区已粘贴到.*透明像素覆盖/u).waitFor({ state: 'visible' })
@@ -395,9 +407,13 @@ async function validatePixelGameUi(baseUrl) {
       (selectedRegion.y + 1) * 16 + selectedRegion.x,
       (selectedRegion.y + 1) * 16 + selectedRegion.x + 1,
     ]
+    const outlineLayerId = project.layers.find((layer) => layer.name === '轮廓')?.id
+    const lightLayerId = project.layers.find((layer) => layer.name === '流光')?.id
+    assert.ok(outlineLayerId)
+    assert.ok(lightLayerId)
     assert.deepEqual(
-      clipboardIndexes.map((index) => project.frames[clipboardTargetFrameIndex].cels.silhouette[index]),
-      clipboardIndexes.map((index) => project.frames[clipboardSourceFrameIndex].cels.light[index]),
+      clipboardIndexes.map((index) => project.frames[clipboardTargetFrameIndex].cels[outlineLayerId][index]),
+      clipboardIndexes.map((index) => project.frames[clipboardSourceFrameIndex].cels[lightLayerId][index]),
     )
     assert.equal(manifest.schemaVersion, 7)
     assert.equal(manifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
@@ -406,7 +422,7 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(manifest.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
     assert.equal(manifest.directions.length, 8)
     assert.equal(manifest.frames.length, 8)
-    assert.equal(manifest.animations.length, 2)
+    assert.equal(manifest.animations.length, 1)
     assert.equal(manifest.animation.name, '八方演武')
     assert.equal(manifest.animation.direction, 'ping-pong')
     assert.equal(manifest.animation.frames.length, 14)

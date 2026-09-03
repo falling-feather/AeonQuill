@@ -104,6 +104,7 @@ import { CUSTOM_WORKFLOW_EXECUTION_VERSION, WorkflowCenterService } from './work
 import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
+import { composeWorkspaceCreativePlan } from './agent-plan-composer.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
 import { StorageLifecycleService, STORAGE_LIFECYCLE_VERSION } from './storage-lifecycle.mjs'
 import { createDiagnosticReport, DiagnosticBundleService } from './diagnostic-bundle.mjs'
@@ -4411,6 +4412,15 @@ const server = createServer(async (request, response) => {
         source: body.source || 'client-create',
       })
       return sendJson(response, 201, initialized)
+    }
+    if (request.method === 'POST' && pathname === '/api/workspace/agent-plans/compose') {
+      const body = await readJsonBody(request, 32 * 1024)
+      const result = await composeWorkspaceCreativePlan({
+        request: body,
+        workspaceStore,
+        agentAdapter: agentAdapters,
+      })
+      return sendJson(response, 200, result)
     }
     if (request.method === 'POST' && pathname === '/api/workspace/agent-plans/commit') {
       const body = await readJsonBody(request, 512 * 1024)

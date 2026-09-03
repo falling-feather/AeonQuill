@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './styles.css'
 import { CheckCircle2, X } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
+import { AgentPlanComposer } from './components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from './components/AgentPlanReviewDialog'
 import { ImageLab, type ImageLabResult } from './components/ImageLab'
 import { Inspector } from './components/Inspector'
@@ -61,6 +62,7 @@ import {
   downloadLocalProjectPackage,
   importLocalProjectPackage,
   commitWorkspaceCreativePlan,
+  flushWorkspaceModeDocument,
   listWorkspaceCreativePlanReceipts,
   loadLocalProject,
   saveLocalProject,
@@ -1621,6 +1623,16 @@ function App({
             onOpenPixel={setPixelEditorId}
             onImageDrop={addImageFile}
           />
+          <div className="agent-plan-canvas-launch" data-ui-overlay>
+            <AgentPlanComposer
+              projectId={workspaceProjectId}
+              documentId={projectId}
+              modeId="balanced"
+              baseRevision={canvasDocument.revision}
+              onBeforeCompose={() => flushWorkspaceModeDocument(projectId)}
+              onPlan={openAgentPlan}
+            />
+          </div>
           <PromptBar onSubmit={runPrompt} />
         </section>
 

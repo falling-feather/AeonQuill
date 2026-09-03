@@ -74,6 +74,7 @@ import {
   listWorkspaceCreativePlanReceipts,
 } from '../../lib/projectApi'
 import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
+import { AgentPlanComposer } from '../../components/AgentPlanComposer'
 import {
   approveCreativePlan,
   createCreativePlan,
@@ -921,9 +922,8 @@ export function SmartVideoWorkbench({
     onPlanReady?.(next)
   }
 
-  const reviewProductionAgentPlan = useCallback((request: ProductionAgentPlanRequest) => {
+  const openAgentPlan = useCallback((plan: CreativePlan) => {
     try {
-      const documentId = projectId ?? result.project.id
       const baseRevision = workspaceRevision ?? result.production.revision
       const modeDocument: SmartVideoModeDocument = {
         schemaVersion: 2,
@@ -931,6 +931,21 @@ export function SmartVideoWorkbench({
         plan: result.plan,
         production: result.production,
       }
+      const preview = previewCreativePlan(modeDocument, plan, { workspaceRevision: baseRevision })
+      setAgentPlanError(null)
+      setAgentPlanReview({ plan, preview })
+      setBridgeMessage(plan.source.kind === 'byok-text'
+        ? 'BYOK 文本计划已通过服务端预演；批准前不会修改正式制片正文。'
+        : '变更卡已进入受控计划预览；批准前正式节点保持不变。')
+    } catch (nextError) {
+      setExecutionError(errorMessage(nextError))
+    }
+  }, [result, workspaceRevision])
+
+  const reviewProductionAgentPlan = useCallback((request: ProductionAgentPlanRequest) => {
+    try {
+      const documentId = projectId ?? result.project.id
+      const baseRevision = workspaceRevision ?? result.production.revision
       const createdAt = Date.now()
       const plan = createCreativePlan({
         id: `video-plan-${crypto.randomUUID()}`,
@@ -950,13 +965,11 @@ export function SmartVideoWorkbench({
         }],
         createdAt,
       })
-      const preview = previewCreativePlan(modeDocument, plan, { workspaceRevision: baseRevision })
-      setAgentPlanError(null)
-      setAgentPlanReview({ plan, preview })
+      openAgentPlan(plan)
     } catch (nextError) {
       setExecutionError(errorMessage(nextError))
     }
-  }, [projectId, result, workspaceProjectId, workspaceRevision])
+  }, [openAgentPlan, projectId, result, workspaceProjectId, workspaceRevision])
 
   const rejectAgentPlan = useCallback(() => {
     if (agentPlanBusy) return
@@ -1077,6 +1090,15 @@ export function SmartVideoWorkbench({
           </div>
         </div>
         <div className="aq-video-header-status">
+          <AgentPlanComposer
+            projectId={workspaceProjectId}
+            documentId={projectId ?? result.project.id}
+            modeId="smart-video"
+            baseRevision={workspaceRevision ?? result.production.revision}
+            launcherLabel="文本智能体"
+            onBeforeCompose={() => flushWorkspaceModeDocument(projectId ?? result.project.id)}
+            onPlan={openAgentPlan}
+          />
           <span className={`aq-video-runtime is-${runtime.state}`}><i />{runtime.label}</span>
           <span className="aq-video-safe-badge"><ShieldCheck size={14} /> Powered by MiniMax H3 · 固定工作流</span>
         </div>

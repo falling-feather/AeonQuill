@@ -37,6 +37,16 @@ async function openLibrary() {
   await page.getByRole('dialog', { name: '资源库' }).waitFor({ state: 'visible' })
 }
 
+async function selectProductionNode(studio, title) {
+  const card = studio
+    .getByRole('list', { name: '制片智能体依赖图' })
+    .getByRole('listitem')
+    .filter({ hasText: title })
+    .first()
+  await card.click()
+  await studio.locator('.aq-production-inspector h3', { hasText: title }).waitFor({ state: 'visible' })
+}
+
 try {
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible' })
@@ -82,7 +92,7 @@ try {
   await page.getByRole('button', { name: '新建智能视频', exact: true }).click()
   const studio = page.getByRole('region', { name: '多智能体制片工作室' })
   await studio.waitFor({ state: 'visible', timeout: 10_000 })
-  await studio.getByText('人物设定', { exact: true }).first().click()
+  await selectProductionNode(studio, '人物设定')
   const continuity = studio.getByRole('region', { name: '连续性资产槽位' })
   await continuity.getByRole('button', { name: '选择资源', exact: true }).first().click()
   await studio.getByText(/槽位已选中/u).waitFor({ state: 'visible' })
@@ -96,10 +106,16 @@ try {
   await continuity.getByText('已批准', { exact: true }).first().waitFor({ state: 'visible' })
 
   await page.waitForTimeout(700)
+  const restoredDocumentResponse = page.waitForResponse((response) => (
+    response.request().method() === 'GET'
+    && response.url().includes('/api/workspace/documents/')
+    && response.status() === 200
+  ), { timeout: 10_000 })
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await restoredDocumentResponse
   const restoredStudio = page.getByRole('region', { name: '多智能体制片工作室' })
   await restoredStudio.waitFor({ state: 'visible', timeout: 10_000 })
-  await restoredStudio.getByText('人物设定', { exact: true }).first().click()
+  await selectProductionNode(restoredStudio, '人物设定')
   const restoredContinuity = restoredStudio.getByRole('region', { name: '连续性资产槽位' })
   await restoredContinuity.getByText(/sha256:/u).first().waitFor({ state: 'visible' })
   await restoredContinuity.getByText('已批准', { exact: true }).first().waitFor({ state: 'visible' })

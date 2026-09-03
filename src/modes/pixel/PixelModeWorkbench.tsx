@@ -114,6 +114,7 @@ import {
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
 import type { LibraryAssetInsertion } from '../../lib/libraryApi'
+import { AgentPlanComposer } from '../../components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
 import {
   approveCreativePlan,
@@ -126,6 +127,7 @@ import {
 } from '../../lib/agent/creativePlan.mjs'
 import {
   commitWorkspaceCreativePlan,
+  flushWorkspaceModeDocument,
   listWorkspaceCreativePlanReceipts,
 } from '../../lib/projectApi'
 import {
@@ -519,7 +521,11 @@ export function PixelModeWorkbench({
     const inverse = current.undo.at(-1)
     if (!inverse) return
     try {
-      const result = applyPixelCommand(current.document, inverse)
+      const result = applyPixelCommand(current.document, {
+        ...inverse,
+        id: `pixel-ui-undo-${commandSequenceRef.current++}`,
+        baseRevision: current.document.revision,
+      })
       replaceHistory({
         document: result.document,
         undo: current.undo.slice(0, -1),
@@ -537,7 +543,11 @@ export function PixelModeWorkbench({
     const command = current.redo.at(-1)
     if (!command) return
     try {
-      const result = applyPixelCommand(current.document, command)
+      const result = applyPixelCommand(current.document, {
+        ...command,
+        id: `pixel-ui-redo-${commandSequenceRef.current++}`,
+        baseRevision: current.document.revision,
+      })
       replaceHistory({
         document: result.document,
         undo: [...current.undo, result.inverse],
@@ -1394,6 +1404,20 @@ export function PixelModeWorkbench({
     }
   }, [onSpriteSheetReady])
 
+  const openAgentPlan = useCallback((plan: CreativePlan) => {
+    try {
+      const current = historyRef.current.document
+      const preview = previewCreativePlan(current, plan, { workspaceRevision: current.revision })
+      setAgentPlanError(null)
+      setAgentPlanReview({ plan, preview })
+      setStatus(plan.source.kind === 'byok-text'
+        ? 'BYOK 文本计划已通过服务端预演；批准前不会修改像素正文'
+        : '智能清理计划已生成；批准前不会修改像素正文')
+    } catch (error) {
+      setStatus(readablePixelError(error, '智能体计划无法生成预览'))
+    }
+  }, [])
+
   const cleanupActivePixelLayer = useCallback(() => {
     const current = historyRef.current.document
     const frame = current.frames.find((item) => item.id === current.activeFrameId)
@@ -1435,14 +1459,11 @@ export function PixelModeWorkbench({
         }],
         createdAt,
       })
-      const preview = previewCreativePlan(current, plan, { workspaceRevision: current.revision })
-      setAgentPlanError(null)
-      setAgentPlanReview({ plan, preview })
-      setStatus('智能清理计划已生成；批准前不会修改像素正文')
+      openAgentPlan(plan)
     } catch (error) {
       setStatus(readablePixelError(error, '智能清理失败'))
     }
-  }, [projectId, workspaceProjectId])
+  }, [openAgentPlan, projectId, workspaceProjectId])
 
   const rejectAgentPlan = useCallback(() => {
     if (agentPlanBusy) return
@@ -1458,8 +1479,13 @@ export function PixelModeWorkbench({
     stopPlayback()
     try {
       const current = historyRef.current
-      const command = agentPlanReview.preview.commands[0] as PixelCommand
-      const localResult = applyPixelCommand(current.document, command)
+      let localDocument = current.document
+      const localInverses: PixelCommand[] = []
+      for (const command of agentPlanReview.preview.commands as PixelCommand[]) {
+        const localResult = applyPixelCommand(localDocument, command)
+        localDocument = localResult.document
+        localInverses.push(localResult.inverse)
+      }
       const approved = await approveCreativePlan(agentPlanReview.plan)
       let next: PixelDocument
       let receipt: CreativePlanReceipt
@@ -1476,12 +1502,12 @@ export function PixelModeWorkbench({
       }
       replaceHistory({
         document: next,
-        undo: [...current.undo, localResult.inverse],
+        undo: [...current.undo, ...localInverses],
         redo: [],
       })
       setLatestAgentReceipt(receipt)
       setAgentPlanReview(null)
-      setStatus('智能清理已批准并提交 · 1 个撤销单元 · 执行回执已保存')
+      setStatus(`智能体计划已批准并提交 · ${localInverses.length} 个可撤销步骤 · 执行回执已保存`)
     } catch (error) {
       setAgentPlanError(readablePixelError(error, '智能清理计划提交失败'))
     } finally {
@@ -2070,6 +2096,15 @@ export function PixelModeWorkbench({
           <small>{document.width} × {document.height} · revision {document.revision}</small>
         </div>
         <div className="aq-pixel-history" aria-label="编辑历史">
+          <AgentPlanComposer
+            projectId={workspaceProjectId}
+            documentId={document.id}
+            modeId="pixel"
+            baseRevision={document.revision}
+            launcherLabel="文本智能体"
+            onBeforeCompose={() => flushWorkspaceModeDocument(document.id)}
+            onPlan={openAgentPlan}
+          />
           <button type="button" onClick={undo} disabled={history.undo.length === 0} aria-label="撤销">
             <Undo2 size={17} />
           </button>

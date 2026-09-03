@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
 
 import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
@@ -7,6 +8,8 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_MODEL_CHARACTERS = 160
 const MAX_ENDPOINT_CHARACTERS = 2_048
 const DEFAULT_TIMEOUT_MS = 60_000
+const MAX_CONTEXT_BYTES = 96 * 1024
+const MAX_PLAN_STEPS = 50
 const PRIVATE_V4 = [
   /^10\./u,
   /^127\./u,
@@ -34,17 +37,17 @@ function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function exactFields(value, allowed, label) {
-  if (!isRecord(value)) fail('AGENT_ADAPTER_INVALID_REQUEST', `${label} 必须是对象`)
+function exactFields(value, allowed, label, status = 400) {
+  if (!isRecord(value)) fail('AGENT_ADAPTER_INVALID_REQUEST', `${label} 必须是对象`, status)
   const unknown = Object.keys(value).filter((key) => !allowed.has(key))
-  if (unknown.length) fail('AGENT_ADAPTER_UNKNOWN_FIELD', `${label} 包含不支持的字段`, 400, { unknown })
+  if (unknown.length) fail('AGENT_ADAPTER_UNKNOWN_FIELD', `${label} 包含不支持的字段`, status, { unknown })
   return value
 }
 
-function boundedString(value, label, min, max) {
-  if (typeof value !== 'string') fail('AGENT_ADAPTER_INVALID_FIELD', `${label} 必须是字符串`)
+function boundedString(value, label, min, max, status = 400) {
+  if (typeof value !== 'string') fail('AGENT_ADAPTER_INVALID_FIELD', `${label} 必须是字符串`, status)
   const normalized = value.trim()
-  if (normalized.length < min || normalized.length > max) fail('AGENT_ADAPTER_INVALID_FIELD', `${label} 长度必须为 ${min}–${max}`)
+  if (normalized.length < min || normalized.length > max) fail('AGENT_ADAPTER_INVALID_FIELD', `${label} 长度必须为 ${min}–${max}`, status)
   return normalized
 }
 
@@ -102,6 +105,64 @@ function strictProposal(value) {
   }
 }
 
+function assertJsonValue(value, label, state = { depth: 0, counter: { keys: 0 }, seen: new Set() }) {
+  if (value === null || typeof value === 'boolean') return
+  if (typeof value === 'string') {
+    if (value.length > 16_000) fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 字符串过长`)
+    return
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 包含无效数字`)
+    return
+  }
+  if (typeof value !== 'object') fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 只能包含 JSON 值`)
+  if (state.seen.has(value) || state.depth >= 12) fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 结构过深或存在循环`)
+  state.seen.add(value)
+  const next = { ...state, depth: state.depth + 1 }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertJsonValue(item, `${label}[${index}]`, next))
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      if (['__proto__', 'constructor', 'prototype'].includes(key)) fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 包含不安全字段`)
+      state.counter.keys += 1
+      if (state.counter.keys > 4_000) fail('AGENT_ADAPTER_CONTEXT_INVALID', `${label} 字段过多`)
+      assertJsonValue(child, `${label}.${key}`, next)
+    }
+  }
+  state.seen.delete(value)
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (!isRecord(value)) return value
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+}
+
+function requestHash(model, messages) {
+  return createHash('sha256').update(JSON.stringify(canonicalize({ model, messages }))).digest('hex')
+}
+
+function strictCreativePlanCandidate(value) {
+  const candidate = exactFields(value, new Set(['title', 'objective', 'steps']), '模型计划', 502)
+  if (!Array.isArray(candidate.steps) || candidate.steps.length < 1 || candidate.steps.length > MAX_PLAN_STEPS) {
+    fail('AGENT_ADAPTER_INVALID_PLAN', `模型计划必须包含 1–${MAX_PLAN_STEPS} 个步骤`, 502)
+  }
+  return {
+    title: boundedString(candidate.title, 'title', 1, 120, 502),
+    objective: boundedString(candidate.objective, 'objective', 1, 2_000, 502),
+    steps: candidate.steps.map((step, index) => {
+      const item = exactFields(step, new Set(['toolId', 'summary', 'input']), `模型计划步骤 ${index + 1}`, 502)
+      if (!isRecord(item.input)) fail('AGENT_ADAPTER_INVALID_PLAN', `模型计划步骤 ${index + 1} 的 input 必须是对象`, 502)
+      assertJsonValue(item.input, `模型计划步骤 ${index + 1}.input`)
+      return {
+        toolId: boundedString(item.toolId, `steps[${index}].toolId`, 1, 160, 502),
+        summary: boundedString(item.summary, `steps[${index}].summary`, 1, 500, 502),
+        input: structuredClone(item.input),
+      }
+    }),
+  }
+}
+
 function extractJsonText(value) {
   const text = boundedString(value, '模型响应', 2, MAX_RESPONSE_BYTES)
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(text)
@@ -150,6 +211,26 @@ function createAgentMessages(project, node) {
   ]
 }
 
+function createCreativePlanMessages({ modeId, instruction, context, toolGuide }) {
+  return [
+    {
+      role: 'system',
+      content: [
+        '你是光阴砚 AEONQUILL 的受控创作规划器。',
+        `当前模式是 ${modeId}。只可使用下方工具，不得发明字段、路径、媒体 URL、密钥或声称已经执行。`,
+        '只返回一个 JSON 对象，字段必须恰好为 title、objective、steps。',
+        'steps 每项字段必须恰好为 toolId、summary、input；input 必须严格遵循工具说明。',
+        '不要返回 Markdown、解释、审批结果、项目身份、revision、sourceAssets 或时间。',
+        `工具说明：\n${toolGuide.join('\n')}`,
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({ instruction, context }),
+    },
+  ]
+}
+
 function publicUsage(usage) {
   if (!isRecord(usage)) return null
   const promptTokens = Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 ? usage.prompt_tokens : null
@@ -162,6 +243,8 @@ export class AgentAdapterService {
   constructor(options = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.now = options.now ?? Date.now
+    this.setTimeoutImpl = options.setTimeoutImpl ?? setTimeout
+    this.clearTimeoutImpl = options.clearTimeoutImpl ?? clearTimeout
     this.text = null
   }
 
@@ -200,17 +283,12 @@ export class AgentAdapterService {
     return this.status()
   }
 
-  async propose(input) {
-    const value = exactFields(input, new Set(['project', 'nodeId']), '智能体提案请求')
+  async completeJson(messages, options = {}) {
     if (!this.text) fail('AGENT_ADAPTER_NOT_CONFIGURED', '尚未配置本次运行使用的文本 API', 409)
-    const project = assertVideoProductionProject(value.project)
-    const nodeId = boundedString(value.nodeId, 'nodeId', 1, 80)
-    const node = project.nodes.find((candidate) => candidate.id === nodeId)
-    if (!node) fail('AGENT_ADAPTER_UNKNOWN_NODE', `找不到生产节点 ${nodeId}`, 404)
-    if (node.status === 'waiting' || node.status === 'failed') fail('AGENT_ADAPTER_NODE_BLOCKED', '节点依赖未满足或处于失败态，不能生成提案', 409)
+    if (!Array.isArray(messages) || !messages.length) fail('AGENT_ADAPTER_INVALID_REQUEST', '模型消息不能为空')
     const configured = this.text
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(new Error('timeout')), configured.timeoutMs)
+    const timeout = this.setTimeoutImpl(() => controller.abort(new Error('timeout')), configured.timeoutMs)
     const startedAt = this.now()
     let response
     try {
@@ -224,18 +302,18 @@ export class AgentAdapterService {
         },
         body: JSON.stringify({
           model: configured.model,
-          messages: createAgentMessages(project, node),
-          temperature: 0.35,
-          max_tokens: 1_500,
+          messages,
+          temperature: options.temperature ?? 0.25,
+          max_tokens: options.maxTokens ?? 1_500,
           ...(configured.jsonMode === 'json-object' ? { response_format: { type: 'json_object' } } : {}),
         }),
         signal: controller.signal,
       })
     } catch (error) {
-      if (controller.signal.aborted) fail('AGENT_ADAPTER_TIMEOUT', '文本 API 超时；正式节点未改变', 504)
+      if (controller.signal.aborted) fail('AGENT_ADAPTER_TIMEOUT', '文本 API 超时；正式项目未改变', 504)
       fail('AGENT_ADAPTER_NETWORK_ERROR', `文本 API 请求失败：${error instanceof Error ? error.message : '网络错误'}`, 502)
     } finally {
-      clearTimeout(timeout)
+      this.clearTimeoutImpl(timeout)
     }
     if (!response.ok) {
       const body = await response.text().catch(() => '')
@@ -245,21 +323,67 @@ export class AgentAdapterService {
     if (declaredBytes > MAX_RESPONSE_BYTES) fail('AGENT_ADAPTER_RESPONSE_TOO_LARGE', '文本 API 响应超过 2 MiB', 502)
     const responseText = await response.text()
     if (Buffer.byteLength(responseText) > MAX_RESPONSE_BYTES) fail('AGENT_ADAPTER_RESPONSE_TOO_LARGE', '文本 API 响应超过 2 MiB', 502)
+    if (this.text !== configured) fail('AGENT_ADAPTER_CONFIGURATION_CHANGED', '模型返回期间文本 API 配置已变化；结果已丢弃', 409)
     let payload
     try { payload = JSON.parse(responseText) } catch { fail('AGENT_ADAPTER_INVALID_RESPONSE', '文本 API 没有返回有效 JSON', 502) }
     const content = payload?.choices?.[0]?.message?.content
     if (typeof content !== 'string') fail('AGENT_ADAPTER_INVALID_RESPONSE', '文本 API 响应缺少 choices[0].message.content', 502)
-    let proposalPayload
-    try { proposalPayload = JSON.parse(extractJsonText(content)) } catch { fail('AGENT_ADAPTER_INVALID_PROPOSAL', '文本模型没有返回可校验的提案 JSON', 502) }
+    let result
+    try { result = JSON.parse(extractJsonText(content)) } catch { fail('AGENT_ADAPTER_INVALID_PROPOSAL', '文本模型没有返回可校验的 JSON', 502) }
     return {
-      proposal: strictProposal(proposalPayload),
+      result,
       adapter: {
         providerLabel: configured.providerLabel,
         model: configured.model,
         persistence: 'memory-only',
       },
+      requestHash: requestHash(configured.model, messages),
       usage: publicUsage(payload.usage),
       elapsedMs: Math.max(0, this.now() - startedAt),
+    }
+  }
+
+  async propose(input) {
+    const value = exactFields(input, new Set(['project', 'nodeId']), '智能体提案请求')
+    const project = assertVideoProductionProject(value.project)
+    const nodeId = boundedString(value.nodeId, 'nodeId', 1, 80)
+    const node = project.nodes.find((candidate) => candidate.id === nodeId)
+    if (!node) fail('AGENT_ADAPTER_UNKNOWN_NODE', `找不到生产节点 ${nodeId}`, 404)
+    if (node.status === 'waiting' || node.status === 'failed') fail('AGENT_ADAPTER_NODE_BLOCKED', '节点依赖未满足或处于失败态，不能生成提案', 409)
+    const completion = await this.completeJson(createAgentMessages(project, node), { temperature: 0.35, maxTokens: 1_500 })
+    return {
+      proposal: strictProposal(completion.result),
+      adapter: completion.adapter,
+      usage: completion.usage,
+      elapsedMs: completion.elapsedMs,
+    }
+  }
+
+  async composeCreativePlan(input) {
+    const value = exactFields(input, new Set(['modeId', 'instruction', 'context', 'toolGuide']), '跨模式计划请求')
+    if (!['balanced', 'pixel', 'smart-video'].includes(value.modeId)) fail('AGENT_ADAPTER_INVALID_FIELD', 'modeId 不受支持')
+    const instruction = boundedString(value.instruction, 'instruction', 1, 4_000)
+    if (!isRecord(value.context)) fail('AGENT_ADAPTER_CONTEXT_INVALID', 'context 必须是对象')
+    assertJsonValue(value.context, 'context')
+    const contextBytes = Buffer.byteLength(JSON.stringify(value.context))
+    if (contextBytes > MAX_CONTEXT_BYTES) fail('AGENT_ADAPTER_CONTEXT_TOO_LARGE', '发送给文本 API 的结构摘要超过 96 KiB')
+    if (!Array.isArray(value.toolGuide) || value.toolGuide.length < 1 || value.toolGuide.length > 12) {
+      fail('AGENT_ADAPTER_INVALID_FIELD', 'toolGuide 必须包含 1–12 项')
+    }
+    const toolGuide = value.toolGuide.map((item, index) => boundedString(item, `toolGuide[${index}]`, 1, 2_000))
+    const completion = await this.completeJson(createCreativePlanMessages({
+      modeId: value.modeId,
+      instruction,
+      context: value.context,
+      toolGuide,
+    }), { temperature: 0.2, maxTokens: 4_000 })
+    return {
+      candidate: strictCreativePlanCandidate(completion.result),
+      adapter: completion.adapter,
+      requestHash: completion.requestHash,
+      usage: completion.usage,
+      elapsedMs: completion.elapsedMs,
+      contextBytes,
     }
   }
 }

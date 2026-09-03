@@ -88,6 +88,7 @@ try {
     await run('recoverable lazy surface browser vertical', process.execPath, ['scripts/validate-mode-loading-ui.mjs'])
     await run('atomic three-mode project initialization', process.execPath, ['scripts/validate-project-initialization.mjs'])
     await run('cross-mode controlled Agent plans', process.execPath, ['scripts/validate-agent-plan-ui.mjs'])
+    await run('cross-mode BYOK text plan compiler', process.execPath, ['scripts/validate-agent-planner-ui.mjs'])
     await run('product cold start and memory smoke gate', process.execPath, ['scripts/benchmark-product-performance.mjs', '--profile=smoke', '--assert'])
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('video delivery quality gate', process.execPath, ['scripts/validate-video-delivery-quality.mjs'])

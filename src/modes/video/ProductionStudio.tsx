@@ -45,6 +45,7 @@ import type { LibraryAsset, LibraryAssetInsertion } from '../../lib/libraryApi'
 import { flushWorkspaceModeDocument } from '../../lib/projectApi'
 import { cancelVideoJob, createSoundRenderJob, retryVideoJob } from '../../lib/videoApi'
 import {
+  AGENT_ADAPTER_STATUS_EVENT,
   clearTextAgentAdapter,
   configureTextAgentAdapter,
   fetchAgentAdapterStatus,
@@ -271,6 +272,11 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
 
   useEffect(() => {
     let disposed = false
+    const onAdapterStatus = (event: Event) => {
+      const next = (event as CustomEvent<AgentAdapterStatus>).detail
+      if (!disposed && next?.text) setAdapterStatus(next)
+    }
+    window.addEventListener(AGENT_ADAPTER_STATUS_EVENT, onAdapterStatus)
     void fetchAgentAdapterStatus()
       .then((status) => {
         if (!disposed) setAdapterStatus(status)
@@ -281,7 +287,10 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
       .finally(() => {
         if (!disposed) setAdapterBusy(null)
       })
-    return () => { disposed = true }
+    return () => {
+      disposed = true
+      window.removeEventListener(AGENT_ADAPTER_STATUS_EVENT, onAdapterStatus)
+    }
   }, [])
 
   useEffect(() => {

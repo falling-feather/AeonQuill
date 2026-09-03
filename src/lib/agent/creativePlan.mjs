@@ -53,7 +53,7 @@ const PIXEL_TOOL_TYPES = new Map([
   ['pixel.pixels.paint', 'pixels.paint'],
   ['pixel.pixels.erase', 'pixels.erase'],
   ['pixel.pixels.patch', 'pixels.patch'],
-  ['pixel.palette.add', 'palette.add'],
+  ['pixel.palette.replace', 'palette.replace'],
   ['pixel.frames.duration.set', 'frames.duration.set'],
   ['pixel.cels.copy', 'cels.copy'],
 ])
