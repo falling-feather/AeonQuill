@@ -1,9 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Library, Workflow } from 'lucide-react'
-import BalancedWorkbench from './App'
-import { ProjectRecoveryDialog, RuntimeSettingsDialog, SurfaceState } from './components/Home'
-import { AssetLibraryDialog } from './components/Library'
-import { WorkflowCenterDialog } from './components/WorkflowCenter'
+import { SurfaceState } from './components/Home/SurfaceState'
 import type { CanvasDocument } from './lib/canvasCore'
 import {
   deserializePixelDocument,
@@ -56,15 +53,8 @@ import {
   startRuntime,
   stopRuntime,
 } from './lib/videoApi'
-import {
-  PixelModeWorkbench,
-  type PixelSpriteSheetPayload,
-} from './modes/pixel'
-import {
-  SmartVideoWorkbench,
-  type SmartVideoPlanResult,
-  type SmartVideoRuntimeSummary,
-} from './modes/video'
+import type { PixelSpriteSheetPayload } from './modes/pixel'
+import type { SmartVideoPlanResult, SmartVideoRuntimeSummary } from './modes/video'
 import {
   AeonQuillShell,
   createProductTarget,
@@ -90,6 +80,17 @@ import {
   type ShellPreferences,
   type SmartVideoSessionSummary,
 } from './shell'
+import {
+  LazyAssetLibraryDialog,
+  LazyBalancedWorkbench,
+  LazyPixelModeWorkbench,
+  LazyProjectRecoveryDialog,
+  LazyRuntimeSettingsDialog,
+  LazySmartVideoWorkbench,
+  LazyWorkflowCenterDialog,
+  preloadProductDialog,
+  preloadProductMode,
+} from './shell/lazyProductSurfaces'
 import type {
   RuntimeConfigurationRequest,
   RuntimeDiagnostics,
@@ -541,6 +542,41 @@ function ModeGate({ modeLabel, feedback, onAction, onSecondaryAction, onBack }: 
   )
 }
 
+function ModeModuleLoading({ modeId, modeLabel, onBack }: { modeId: ProductModeId; modeLabel: string; onBack: () => void }) {
+  return (
+    <main className="aq-product-state-host" data-mode-module-loading={modeId} aria-label={`${modeLabel}模块加载状态`}>
+      <header className="aq-mode-gate__header">
+        <button type="button" className="aq-mode-gate__back" onClick={onBack}>返回主页</button>
+        <span>光阴砚 AEONQUILL · {modeLabel}</span>
+      </header>
+      <SurfaceState
+        feedback={{
+          status: 'loading',
+          title: `正在载入${modeLabel}`,
+          detail: '首次进入时只读取当前工作台；项目正文与本机资产不会因此改变。',
+        }}
+      />
+    </main>
+  )
+}
+
+function DeferredDialogLoading({ label }: { label: string }) {
+  return (
+    <div className="aq-deferred-surface-backdrop" role="presentation">
+      <section className="aq-deferred-surface-card" role="dialog" aria-modal="true" aria-label={`正在载入${label}`}>
+        <SurfaceState
+          compact
+          feedback={{
+            status: 'loading',
+            title: `正在载入${label}`,
+            detail: '界面模块就绪后会自动打开。',
+          }}
+        />
+      </section>
+    </div>
+  )
+}
+
 interface ProductModeHostProps {
   modeId: ProductModeId
   modeLabel: string
@@ -565,7 +601,9 @@ function ProductModeHost({ modeId, modeLabel, routeKey: currentRouteKey, notice,
   return (
     <div ref={hostRef} className="aq-product-mode-host" data-product-mode={modeId}>
       <ModeErrorBoundary modeLabel={modeLabel} resetKey={currentRouteKey} onBack={onBack}>
-        {children}
+        <Suspense fallback={<ModeModuleLoading modeId={modeId} modeLabel={modeLabel} onBack={onBack} />}>
+          {children}
+        </Suspense>
       </ModeErrorBoundary>
       <button type="button" className="aq-product-library-launcher" onClick={onOpenLibrary} aria-label="打开跨模式资源库">
         <Library size={16} />
@@ -800,6 +838,7 @@ export default function ProductApp() {
   }, [])
 
   const chooseMode = useCallback((modeId: ProductModeId) => {
+    void preloadProductMode(modeId).catch(() => undefined)
     setSelectedModeId(modeId)
     updatePreferences({ selectedModeId: modeId })
   }, [updatePreferences])
@@ -945,6 +984,7 @@ export default function ProductApp() {
       setProjectCatalogError(`找不到项目 ${projectId}`)
       return
     }
+    void preloadProductDialog('recovery').catch(() => undefined)
     setRecoveryDialog({
       projectId,
       projectTitle: project.title,
@@ -1375,6 +1415,7 @@ export default function ProductApp() {
   }, [activeModeDocument, preferences.balancedProjectId, refreshProject])
 
   const openRuntimeSettings = useCallback(() => {
+    void preloadProductDialog('settings').catch(() => undefined)
     setSettingsOpen(true)
     setSettingsError(undefined)
     setSettingsMessage(undefined)
@@ -1382,6 +1423,7 @@ export default function ProductApp() {
   }, [refreshRuntime])
 
   const openWorkflowCenter = useCallback(() => {
+    void preloadProductDialog('workflow').catch(() => undefined)
     setWorkflowCenterOpen(true)
   }, [])
 
@@ -1758,6 +1800,7 @@ export default function ProductApp() {
   const goHome = useCallback(() => navigate({ modeId: 'home' }), [navigate])
 
   const openLibrary = useCallback(() => {
+    void preloadProductDialog('library').catch(() => undefined)
     setLibraryOpenPending(true)
     if (!clientStateReady) setModeNotice({ tone: 'info', message: '正在同步 SQLite 项目目录，随后打开资源库。' })
   }, [clientStateReady])
@@ -1826,25 +1869,29 @@ export default function ProductApp() {
     && libraryInsertion.documentId === activeModeDocumentId
     ? libraryInsertion
     : undefined
-  const libraryDialog = (
-    <AssetLibraryDialog
-      open={libraryOpen}
-      projects={libraryProjects}
-      activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
-      modeLabel={route.modeId === 'home' ? undefined : PRODUCT_MODE_LABELS[route.modeId]}
-      onClose={() => setLibraryOpen(false)}
-      onUseAsset={route.modeId === 'home' ? undefined : handleUseLibraryAsset}
-    />
-  )
-  const workflowCenterDialog = (
-    <WorkflowCenterDialog
-      open={workflowCenterOpen}
-      onClose={() => setWorkflowCenterOpen(false)}
-      onOpenRuntimeSettings={openRuntimeSettings}
-      projects={libraryProjects}
-      activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
-    />
-  )
+  const libraryDialog = libraryOpen ? (
+    <Suspense fallback={<DeferredDialogLoading label="资源库" />}>
+      <LazyAssetLibraryDialog
+        open
+        projects={libraryProjects}
+        activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
+        modeLabel={route.modeId === 'home' ? undefined : PRODUCT_MODE_LABELS[route.modeId]}
+        onClose={() => setLibraryOpen(false)}
+        onUseAsset={route.modeId === 'home' ? undefined : handleUseLibraryAsset}
+      />
+    </Suspense>
+  ) : null
+  const workflowCenterDialog = workflowCenterOpen ? (
+    <Suspense fallback={<DeferredDialogLoading label="工作流中心" />}>
+      <LazyWorkflowCenterDialog
+        open
+        onClose={() => setWorkflowCenterOpen(false)}
+        onOpenRuntimeSettings={openRuntimeSettings}
+        projects={libraryProjects}
+        activeProjectId={activeWorkspaceProjectId ?? libraryProjects[0]?.id}
+      />
+    </Suspense>
+  ) : null
 
   if (route.modeId === 'balanced') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
@@ -1909,7 +1956,7 @@ export default function ProductApp() {
     return (
       <>
       <ProductModeHost modeId="balanced" modeLabel="均衡模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
-        <BalancedWorkbench
+        <LazyBalancedWorkbench
           key={requestedProjectId}
           projectId={requestedProjectId}
           workspaceProjectId={activeWorkspaceProjectId}
@@ -2001,7 +2048,7 @@ export default function ProductApp() {
     return (
       <>
       <ProductModeHost modeId="pixel" modeLabel="像素模式" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
-        <PixelModeWorkbench
+        <LazyPixelModeWorkbench
           key={requestedProjectId ?? 'pixel-legacy'}
           initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
           projectId={requestedProjectId}
@@ -2090,7 +2137,7 @@ export default function ProductApp() {
     return (
       <>
       <ProductModeHost modeId="smart-video" modeLabel="智能视频" routeKey={currentRouteKey} notice={modeNotice} onBack={goHome} onOpenLibrary={openLibrary} onOpenWorkflowCenter={openWorkflowCenter}>
-        <SmartVideoWorkbench
+        <LazySmartVideoWorkbench
           key={requestedProjectId ?? 'video-legacy'}
           initialText={videoSession.status === 'ready' ? videoSession.session?.sourceText : undefined}
           initialKind={videoSession.status === 'ready' ? videoSession.session?.sourceKind : undefined}
@@ -2137,35 +2184,41 @@ export default function ProductApp() {
       />
       {libraryDialog}
       {workflowCenterDialog}
-      <RuntimeSettingsDialog
-        open={settingsOpen}
-        projects={projectCatalog.projects.map(({ id, title }) => ({ id, title }))}
-        diagnostics={runtimeProbe.diagnostics}
-        loading={refreshingRuntime}
-        saving={settingsSaving}
-        error={settingsError}
-        message={settingsMessage}
-        onClose={() => setSettingsOpen(false)}
-        onRefresh={() => void refreshRuntime()}
-        onConfigure={(request) => void handleRuntimeConfigure(request)}
-        onApplyRegistryMigration={(planId, beforeHash) => void handleApplyRegistryMigration(planId, beforeHash)}
-        onRollbackRegistryMigration={(recordId) => void handleRollbackRegistryMigration(recordId)}
-      />
-      <ProjectRecoveryDialog
-        open={Boolean(recoveryDialog)}
-        projectTitle={recoveryDialog?.projectTitle ?? ''}
-        recoveryPoints={recoveryDialog?.recoveryPoints ?? []}
-        loading={recoveryDialog?.loading ?? false}
-        busyId={recoveryDialog?.busyId}
-        error={recoveryDialog?.error}
-        message={recoveryDialog?.message}
-        onClose={() => setRecoveryDialog(null)}
-        onRefresh={() => {
-          if (recoveryDialog) void refreshRecoveryDialog(recoveryDialog.projectId)
-        }}
-        onCreate={() => void handleCreateRecoveryPoint()}
-        onRestore={(recoveryPoint) => void handleRestoreRecoveryPoint(recoveryPoint)}
-      />
+      {settingsOpen ? (
+        <Suspense fallback={<DeferredDialogLoading label="设置" />}>
+          <LazyRuntimeSettingsDialog
+            open
+            projects={projectCatalog.projects.map(({ id, title }) => ({ id, title }))}
+            diagnostics={runtimeProbe.diagnostics}
+            loading={refreshingRuntime}
+            saving={settingsSaving}
+            error={settingsError}
+            message={settingsMessage}
+            onClose={() => setSettingsOpen(false)}
+            onRefresh={() => void refreshRuntime()}
+            onConfigure={(request) => void handleRuntimeConfigure(request)}
+            onApplyRegistryMigration={(planId, beforeHash) => void handleApplyRegistryMigration(planId, beforeHash)}
+            onRollbackRegistryMigration={(recordId) => void handleRollbackRegistryMigration(recordId)}
+          />
+        </Suspense>
+      ) : null}
+      {recoveryDialog ? (
+        <Suspense fallback={<DeferredDialogLoading label="恢复点" />}>
+          <LazyProjectRecoveryDialog
+            open
+            projectTitle={recoveryDialog.projectTitle}
+            recoveryPoints={recoveryDialog.recoveryPoints}
+            loading={recoveryDialog.loading}
+            busyId={recoveryDialog.busyId}
+            error={recoveryDialog.error}
+            message={recoveryDialog.message}
+            onClose={() => setRecoveryDialog(null)}
+            onRefresh={() => void refreshRecoveryDialog(recoveryDialog.projectId)}
+            onCreate={() => void handleCreateRecoveryPoint()}
+            onRestore={(recoveryPoint) => void handleRestoreRecoveryPoint(recoveryPoint)}
+          />
+        </Suspense>
+      ) : null}
       <input
         ref={packageInputRef}
         className="aq-sr-only"

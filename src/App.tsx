@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import './styles.css'
 import { CheckCircle2, X } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
 import { ImageLab, type ImageLabResult } from './components/ImageLab'

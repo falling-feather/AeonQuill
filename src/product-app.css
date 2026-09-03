@@ -130,6 +130,30 @@
   box-shadow: 0 20px 70px rgba(29, 31, 36, 0.08);
 }
 
+.aq-deferred-surface-backdrop {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(26, 25, 30, 0.34);
+  backdrop-filter: blur(6px);
+}
+
+.aq-deferred-surface-card {
+  width: min(440px, 100%);
+  padding: 22px;
+  border: 1px solid rgba(111, 94, 178, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 80px rgba(24, 22, 32, 0.22);
+}
+
+.aq-deferred-surface-card > .aq-surface-state {
+  margin: 0;
+}
+
 .aq-product-notice.is-error {
   border-color: rgba(220, 86, 72, 0.48);
 }

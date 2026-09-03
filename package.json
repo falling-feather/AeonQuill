@@ -14,6 +14,7 @@
     "validate:live": "node scripts/validate.mjs --live",
     "validate:api": "node scripts/validate-api.mjs",
     "validate:browser": "node scripts/validate-browser.mjs",
+    "validate:mode-splitting": "npm run build && node scripts/validate-mode-splitting.mjs && node scripts/validate-mode-loading-ui.mjs",
     "validate:project-center": "node scripts/validate-project-center.mjs",
     "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "validate:workflow-center": "npm run build && node scripts/validate-workflow-center-ui.mjs",
