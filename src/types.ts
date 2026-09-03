@@ -764,6 +764,61 @@ export type ProcessingJob = {
     soundMix?: boolean
     subtitles?: boolean
     soundRenderJobId?: string
+    qualityReport?: {
+      schemaVersion: 1
+      profileVersion: string
+      evaluatedAt: number
+      asset: { sha256: string; bytes: number }
+      media: {
+        width: number
+        height: number
+        durationSeconds: number
+        frameRate: number
+        frames: number
+        videoCodec: string
+        pixelFormat: string
+        bitRate: number
+        hasAudio: boolean
+        audioCodec: string | null
+        sampleRate: number | null
+        channels: number | null
+      }
+      signals: {
+        black: { count: number; totalSeconds: number; longestSeconds: number; segments: Array<{ start: number; end: number; duration: number }> }
+        freeze: { count: number; totalSeconds: number; longestSeconds: number; segments: Array<{ start: number; end: number; duration: number }> }
+        silence: { count: number; totalSeconds: number; longestSeconds: number; segments: Array<{ start: number; end: number; duration: number }> }
+        loudness: { integratedLufs: number | null; rangeLu: number | null; truePeakDbfs: number | null }
+      }
+      subtitles: {
+        present: boolean
+        format?: 'ass'
+        playResolution?: { width: number; height: number }
+        cueCount?: number
+        invalidTiming?: number
+        unsafeMargins?: number
+        outsidePositions?: number
+        overlappingCues?: number
+        minimumSafeMargin?: { x: number; y: number }
+      }
+      checks: Array<{
+        id: string
+        label: string
+        level: 'error' | 'warning'
+        status: 'pass' | 'fail' | 'not-applicable'
+        actual: unknown
+        expected: unknown
+        message: string
+      }>
+      summary: {
+        status: 'pass' | 'review' | 'fail'
+        blockingCount: number
+        reviewCount: number
+        passedCount: number
+        manualReviewRequired: true
+        manualReviewDimensions: string[]
+        statement: string
+      }
+    }
   }
   childJobIds?: string[]
   checkpointChildJobIds?: string[]

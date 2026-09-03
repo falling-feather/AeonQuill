@@ -297,6 +297,12 @@ function chainShotStatusLabel(status: NonNullable<ProcessingJob['videoChainManif
   return '待执行'
 }
 
+function deliveryQualityStatusLabel(status: NonNullable<NonNullable<ProcessingJob['finalCutMetadata']>['qualityReport']>['summary']['status']) {
+  if (status === 'pass') return '机器交付门通过'
+  if (status === 'review') return '机器门通过 · 待人工复核'
+  return '交付门未通过'
+}
+
 function upsertJob(jobs: ProcessingJob[], updated: ProcessingJob) {
   const existingIndex = jobs.findIndex(({ id }) => id === updated.id)
   if (existingIndex < 0) return [updated, ...jobs]
@@ -438,7 +444,7 @@ export function SmartVideoWorkbench({
     const sessionJobs = submittedJobIds.map((id) => jobById.get(id)).filter((job): job is ProcessingJob => Boolean(job))
     const seen = new Set(sessionJobs.map(({ id }) => id))
     const restoredChains = jobs.filter((job) => (
-      job.kind === 'video-chain'
+      ['video-chain', 'final-cut'].includes(job.kind ?? '')
       && job.request
       && 'projectId' in job.request
       && job.request.projectId === chainWorkspaceId
@@ -1571,6 +1577,34 @@ export function SmartVideoWorkbench({
                           })}
                         </ol>
                       ) : null}
+                      {job.finalCutMetadata?.qualityReport ? (() => {
+                        const quality = job.finalCutMetadata.qualityReport
+                        const attention = quality.checks.filter(({ status }) => status === 'fail').slice(0, 4)
+                        const loudness = quality.signals.loudness.integratedLufs
+                        return (
+                          <section className={`aq-video-delivery-quality is-${quality.summary.status}`} aria-label="720P 成片质量报告">
+                            <header>
+                              <span><ShieldCheck size={11} />{deliveryQualityStatusLabel(quality.summary.status)}</span>
+                              <div>
+                                <code>{quality.profileVersion}</code>
+                                <a href={`/api/jobs/${encodeURIComponent(job.id)}/quality-report`} target="_blank" rel="noreferrer">质检 JSON</a>
+                              </div>
+                            </header>
+                            <dl>
+                              <div><dt>画面</dt><dd>{quality.media.width}×{quality.media.height} · {quality.media.frameRate.toFixed(2)}fps</dd></div>
+                              <div><dt>时长</dt><dd>{quality.media.durationSeconds.toFixed(2)}s</dd></div>
+                              <div><dt>响度</dt><dd>{loudness === null ? '未测得' : `${loudness.toFixed(1)} LUFS`}</dd></div>
+                              <div><dt>画面信号</dt><dd>黑场 {quality.signals.black.totalSeconds.toFixed(2)}s · 静帧 {quality.signals.freeze.longestSeconds.toFixed(2)}s</dd></div>
+                            </dl>
+                            {attention.length ? (
+                              <ul>
+                                {attention.map((item) => <li key={item.id}>{item.label}：{item.message}</li>)}
+                              </ul>
+                            ) : <p>结构、声画规格与自动回归信号均未发现异常。</p>}
+                            <footer>{quality.summary.statement}</footer>
+                          </section>
+                        )
+                      })() : null}
                     </article>
                   ))}
                 </div>

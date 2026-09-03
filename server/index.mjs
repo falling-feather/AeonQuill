@@ -2493,7 +2493,11 @@ async function runFinalCutJob(jobId, { signal }) {
       subtitlePath: sound?.subtitlePath,
       signal,
       onProgress(update) {
-        const detail = update.phase === 'probing' ? '探测并统一镜头媒体规格' : '正在进行 720P 转场、响度与成片编码'
+        const detail = update.phase === 'probing'
+          ? '探测并统一镜头媒体规格'
+          : update.phase === 'quality'
+            ? '检查黑帧、静帧、响度与字幕安全区'
+            : '正在进行 720P 转场、响度与成片编码'
         void store.update(jobId, { phase: update.phase, progress: update.progress, detail })
       },
     })
@@ -2506,12 +2510,16 @@ async function runFinalCutJob(jobId, { signal }) {
     })
     const outputVersion = await describeOutputVersion(job, outputPath, 'video/mp4')
     const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
-    await store.log(jobId, 'success', `成片媒体质检通过：${finalCutMetadata.outputProbe.width}×${finalCutMetadata.outputProbe.height} / ${finalCutMetadata.outputProbe.duration.toFixed(2)} 秒`)
+    const qualitySummary = finalCutMetadata.qualityReport.summary
+    await store.log(jobId, qualitySummary.status === 'review' ? 'warning' : 'success',
+      `成片交付门${qualitySummary.status === 'review' ? '需要人工复核' : '通过'}：${finalCutMetadata.outputProbe.width}×${finalCutMetadata.outputProbe.height} / ${finalCutMetadata.outputProbe.duration.toFixed(2)} 秒 / ${qualitySummary.reviewCount} 项提示`)
     await store.update(jobId, {
       status: 'completed',
       phase: 'completed',
       progress: 100,
-      detail: '成片完成，镜头源文件保持不变',
+      detail: qualitySummary.status === 'review'
+        ? `成片完成，机器交付门通过；${qualitySummary.reviewCount} 项需人工复核`
+        : '成片完成，机器交付门通过；仍需人工画质复核',
       outputUrl: `/api/assets/${encodeURIComponent(outputFilename)}`,
       output: { filename: outputFilename, subfolder: '', type: 'output' },
       outputVersion,
@@ -4738,6 +4746,22 @@ const server = createServer(async (request, response) => {
           : resolvePriority(request.headers['x-miaohui-priority'], 35),
       })
       return sendJson(response, result.reused ? 200 : 202, result)
+    }
+    const qualityReportMatch = /^\/api\/jobs\/([^/]+)\/quality-report$/.exec(pathname)
+    if (request.method === 'GET' && qualityReportMatch) {
+      const job = store.get(decodeURIComponent(qualityReportMatch[1]))
+      if (!job) return sendError(response, 404, 'JOB_NOT_FOUND', 'Task was not found')
+      const qualityReport = job.finalCutMetadata?.qualityReport
+      if (!qualityReport) return sendError(response, 409, 'VIDEO_QUALITY_REPORT_NOT_READY', 'Task does not have a completed delivery quality report')
+      const body = `${JSON.stringify({ jobId: job.id, qualityReport }, null, 2)}\n`
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        'content-disposition': `attachment; filename="${job.id}-quality-report.json"`,
+        'cache-control': 'no-store',
+      })
+      response.end(body)
+      return
     }
     const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname)
     if (request.method === 'GET' && jobMatch) {

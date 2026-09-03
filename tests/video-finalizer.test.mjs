@@ -19,7 +19,7 @@ test('final cut request is a bounded managed-job contract', () => {
     projectId: 'wuxia-trial-20260827',
     title: '雪夜问剑',
   })
-  assert.equal(VIDEO_FINALIZER_VERSION, 'aeonquill-final-cut-v2')
+  assert.equal(VIDEO_FINALIZER_VERSION, 'aeonquill-final-cut-v3')
   assert.deepEqual(request, {
     sourceJobIds,
     projectId: 'wuxia-trial-20260827',

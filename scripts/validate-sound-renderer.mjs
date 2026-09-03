@@ -111,8 +111,9 @@ try {
 
   const clipA = join(directory, 'clip-a.mp4')
   const clipB = join(directory, 'clip-b.mp4')
-  await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x171421:s=320x180:r=24:d=1.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipA])
-  await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0xd19a32:s=320x180:r=24:d=1.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipB])
+  const clipDuration = (plan.durationMs / 1_000 + 0.24) / 2
+  await ffmpeg(['-f', 'lavfi', '-i', `color=c=0x171421:s=320x180:r=24:d=${clipDuration.toFixed(3)}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipA])
+  await ffmpeg(['-f', 'lavfi', '-i', `color=c=0xd19a32:s=320x180:r=24:d=${clipDuration.toFixed(3)}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clipB])
   const finalPath = join(directory, 'final.mp4')
   const final = await renderFinalCut({
     ffmpegPath,

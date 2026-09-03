@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { basename, dirname } from 'node:path'
 import { createRestrictedChildEnvironment } from './security.mjs'
+import { analyzeVideoDeliveryQuality } from './video-delivery-quality.mjs'
 
-export const VIDEO_FINALIZER_VERSION = 'aeonquill-final-cut-v2'
+export const VIDEO_FINALIZER_VERSION = 'aeonquill-final-cut-v3'
 
 const JOB_ID_PATTERN = /^(?:video|provider-video)-[a-zA-Z0-9-]{8,120}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
@@ -340,6 +341,30 @@ export async function renderFinalCut({
       outputDuration: outputProbe.duration,
     })
   }
+  onProgress?.({ phase: 'quality', progress: 96 })
+  const qualityReport = await analyzeVideoDeliveryQuality({
+    ffmpegPath,
+    ffprobePath,
+    inputPath: outputPath,
+    subtitlePath,
+    expected: {
+      width: request.width,
+      height: request.height,
+      fps: request.fps,
+      durationSeconds: graph.duration,
+      durationToleranceSeconds: allowedDelta,
+      requireAudio: true,
+      subtitleExpected: Boolean(subtitlePath),
+    },
+    signal,
+  })
+  if (qualityReport.summary.status === 'fail') {
+    fail('FINAL_CUT_QA_FAILED', 'Final cut failed the managed delivery quality gate', 500, {
+      profileVersion: qualityReport.profileVersion,
+      asset: qualityReport.asset,
+      failedChecks: qualityReport.checks.filter(({ level, status }) => level === 'error' && status === 'fail'),
+    })
+  }
   return {
     version: VIDEO_FINALIZER_VERSION,
     sourceCount: inputPaths.length,
@@ -349,5 +374,6 @@ export async function renderFinalCut({
     outputProbe,
     soundMix: Boolean(soundMixPath),
     subtitles: Boolean(subtitlePath),
+    qualityReport,
   }
 }
