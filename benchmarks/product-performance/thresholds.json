@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "aeonquill-product-performance-thresholds-v1",
+  "environment": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "coldSamples": 7,
+    "warmSamples": 7,
+    "modeSamples": 7,
+    "formalSoakMinutes": 30,
+    "smokeSoakSeconds": 30,
+    "modeDwellMs": 750,
+    "homeDwellMs": 250
+  },
+  "limits": {
+    "homeColdP95Ms": 3000,
+    "homeWarmP95Ms": 1500,
+    "modeFirstP95Ms": 5000,
+    "modeCachedP95Ms": 2500,
+    "heapGrowthBytes": 67108864,
+    "heapSlopeBytesPerMinute": 2097152,
+    "domNodeGrowth": 500,
+    "domNodeSlopePerMinute": 20,
+    "documentGrowth": 2,
+    "eventListenerGrowth": 500,
+    "finalModeHosts": 0,
+    "finalMediaElements": 0
+  }
+}

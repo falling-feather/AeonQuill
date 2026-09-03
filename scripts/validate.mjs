@@ -86,6 +86,7 @@ try {
     await run('production build', npmInvocation.executable, [...npmInvocation.prefix, 'run', 'build'])
     await run('mode-level code splitting budget', process.execPath, ['scripts/validate-mode-splitting.mjs'])
     await run('recoverable lazy surface browser vertical', process.execPath, ['scripts/validate-mode-loading-ui.mjs'])
+    await run('product cold start and memory smoke gate', process.execPath, ['scripts/benchmark-product-performance.mjs', '--profile=smoke', '--assert'])
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('video delivery quality gate', process.execPath, ['scripts/validate-video-delivery-quality.mjs'])
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])

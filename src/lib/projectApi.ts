@@ -29,6 +29,27 @@ export class ProjectApiError extends Error {
   }
 }
 
+const TRANSIENT_GET_RETRY_DELAYS_MS = [80, 240] as const
+
+function delay(durationMs: number) {
+  return new Promise<void>((resolvePromise) => window.setTimeout(resolvePromise, durationMs))
+}
+
+async function fetchProjectApi(path: string, options?: RequestInit) {
+  const method = String(options?.method || 'GET').toUpperCase()
+  const delays = method === 'GET' ? TRANSIENT_GET_RETRY_DELAYS_MS : []
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(path, { ...options, credentials: 'same-origin' })
+    } catch (error) {
+      if (options?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError') || attempt >= delays.length) {
+        throw error
+      }
+      await delay(delays[attempt])
+    }
+  }
+}
+
 export type ProjectAssetSummary = {
   id: string
   mimeType: string
@@ -62,7 +83,7 @@ export type StoredProject = {
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   await ensureLocalSession()
-  const response = await fetch(path, { ...options, credentials: 'same-origin' })
+  const response = await fetchProjectApi(path, options)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new ProjectApiError(payload?.error?.message || `项目存储返回 HTTP ${response.status}`, {

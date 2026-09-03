@@ -74,6 +74,10 @@ npm run validate:live
 npm run benchmark:canvas -- --label=desktop --viewport=desktop --assert
 npm run benchmark:canvas -- --label=mobile --viewport=mobile --assert
 
+# 产品壳冷/暖启动、三模式切换与持续内存：30 秒烟门 / 30 分钟正式门
+npm run validate:product-performance
+npm run benchmark:product-performance
+
 # 已有 release 产物的桌面专项门禁：sidecar、两壳生命周期、NSIS 安装卸载和资源对照
 npm run validate:desktop:release
 ```

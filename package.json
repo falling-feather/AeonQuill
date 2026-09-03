@@ -17,6 +17,8 @@
     "validate:diagnostics": "npm run build && node scripts/validate-diagnostic-bundle-api.mjs && node scripts/validate-diagnostic-bundle-ui.mjs",
     "validate:browser": "node scripts/validate-browser.mjs",
     "validate:mode-splitting": "npm run build && node scripts/validate-mode-splitting.mjs && node scripts/validate-mode-loading-ui.mjs",
+    "validate:product-performance": "npm run build && node scripts/benchmark-product-performance.mjs --profile=smoke --assert",
+    "benchmark:product-performance": "npm run build && node scripts/benchmark-product-performance.mjs --profile=formal --assert",
     "validate:project-center": "node scripts/validate-project-center.mjs",
     "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "validate:workflow-center": "npm run build && node scripts/validate-workflow-center-ui.mjs",
