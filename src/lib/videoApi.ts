@@ -1,4 +1,5 @@
 import type {
+  DiagnosticBundleReceipt,
   FinalCutJobRequest,
   JobArchiveSummary,
   ProcessingJob,
@@ -102,6 +103,25 @@ export function saveClientState(kind: ClientStateKind, value: string) {
 
 export async function fetchRuntimeDiagnostics(refresh = false) {
   return api<RuntimeDiagnostics>(`/api/runtime/diagnostics${refresh ? '?refresh=1' : ''}`)
+}
+
+export async function exportDiagnosticBundle() {
+  const payload = await api<{ bundle: DiagnosticBundleReceipt }>('/api/diagnostics/bundles', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  if (!/^\/api\/diagnostics\/bundles\/diag-[0-9]{14}-[a-f0-9-]{36}$/u.test(payload.bundle.downloadUrl)) {
+    throw new Error('本机服务返回了无效的诊断包下载地址')
+  }
+  const response = await authenticatedFetch(payload.bundle.downloadUrl)
+  if (!response.ok) {
+    const error = await response.json().catch(() => null)
+    throw new Error(error?.error?.message || `诊断包下载失败（HTTP ${response.status}）`)
+  }
+  const blob = await response.blob()
+  if (blob.size !== payload.bundle.bytes) throw new Error('诊断包下载大小与本机回执不一致')
+  return { receipt: payload.bundle, blob }
 }
 
 export async function fetchStorageScan(projectId?: string, includeRuntimeRoots = true) {

@@ -1097,6 +1097,25 @@ export type RuntimeConfigurationResult = {
   diagnostics: RuntimeDiagnostics
 }
 
+export type DiagnosticBundleReceipt = {
+  version: 'aeonquill-diagnostic-bundle-v1'
+  id: string
+  filename: string
+  bytes: number
+  sha256: string
+  createdAt: number
+  expiresAt: number
+  reportSchemaVersion: 'aeonquill-diagnostic-report-v1'
+  downloadUrl: string
+  privacy: {
+    defaultRedaction: true
+    includesPrivateMedia: false
+    includesAbsolutePaths: false
+    includesCredentials: false
+    includesUserCreativeText: false
+  }
+}
+
 export type PixelDraft = {
   width: number
   height: number

@@ -1005,6 +1005,12 @@
   font-size: 11px;
 }
 
+.aq-runtime-settings__toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .aq-runtime-settings__toolbar button,
 .aq-runtime-settings__discovery button,
 .aq-runtime-settings__form footer button {
@@ -2287,6 +2293,22 @@
   .aq-runtime-settings__disclaimer {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .aq-runtime-settings__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aq-runtime-settings__toolbar > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aq-runtime-settings__toolbar button {
+    min-width: 0;
+    min-height: 42px;
+    padding: 0 8px;
   }
 
   .aq-runtime-settings__body {

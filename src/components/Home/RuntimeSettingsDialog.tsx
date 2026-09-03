@@ -4,6 +4,7 @@ import {
   BadgeInfo,
   CheckCircle2,
   Cpu,
+  FileArchive,
   FolderCog,
   FolderOpen,
   HardDrive,
@@ -23,6 +24,7 @@ import type {
   RuntimeDiagnostics,
 } from '../../types'
 import { pickNativeOutputDirectory, supportsNativeDirectoryPicker } from '../../lib/desktopDialog'
+import { exportDiagnosticBundle } from '../../lib/videoApi'
 import { StorageLifecyclePanel } from './StorageLifecyclePanel'
 
 interface RuntimeSettingsDialogProps {
@@ -45,6 +47,18 @@ function capabilityStatus(status: string) {
   if (status === 'sleeping') return { label: '已配置 · 休眠', tone: 'idle' }
   if (status === 'incomplete') return { label: '依赖不完整', tone: 'warning' }
   return { label: '需要配置', tone: 'warning' }
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
 }
 
 export function RuntimeSettingsDialog({
@@ -70,6 +84,9 @@ export function RuntimeSettingsDialog({
   const [idleSeconds, setIdleSeconds] = useState(300)
   const [outputDirectory, setOutputDirectory] = useState('')
   const [outputPickerError, setOutputPickerError] = useState<string>()
+  const [diagnosticExporting, setDiagnosticExporting] = useState(false)
+  const [diagnosticError, setDiagnosticError] = useState<string>()
+  const [diagnosticMessage, setDiagnosticMessage] = useState<string>()
 
   useEffect(() => {
     if (!open) return
@@ -118,6 +135,9 @@ export function RuntimeSettingsDialog({
     if (!open) return
     setOutputDirectory('')
     setOutputPickerError(undefined)
+    setDiagnosticExporting(false)
+    setDiagnosticError(undefined)
+    setDiagnosticMessage(undefined)
   }, [open])
 
   if (!open) return null
@@ -126,7 +146,7 @@ export function RuntimeSettingsDialog({
   const comfy = diagnostics?.capabilities.comfyui
   const semantic = diagnostics?.capabilities.semantic
   const comfyHealth = capabilityStatus(comfy?.status ?? 'needs-configuration')
-  const disabled = loading || saving
+  const disabled = loading || saving || diagnosticExporting
   const identity = diagnostics?.identity
   const migration = diagnostics?.registryMigration
   const readyMigration = migration?.plans.find((plan) => plan.status === 'ready' && plan.id)
@@ -152,6 +172,20 @@ export function RuntimeSettingsDialog({
     if (pythonPath.trim()) request.pythonPath = pythonPath.trim()
     if (outputDirectory.trim()) request.outputDirectory = outputDirectory.trim()
     onConfigure(request)
+  }
+
+  const exportDiagnostics = () => {
+    setDiagnosticExporting(true)
+    setDiagnosticError(undefined)
+    setDiagnosticMessage(undefined)
+    void exportDiagnosticBundle()
+      .then(({ receipt, blob }) => {
+        downloadBlob(blob, receipt.filename)
+        const expires = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(receipt.expiresAt)
+        setDiagnosticMessage(`脱敏诊断包已生成并开始下载；本机临时副本将在 ${expires} 前自动清理。`)
+      })
+      .catch((nextError) => setDiagnosticError(nextError instanceof Error ? nextError.message : '诊断包生成失败'))
+      .finally(() => setDiagnosticExporting(false))
   }
 
   return (
@@ -195,22 +229,30 @@ export function RuntimeSettingsDialog({
               ? `上次检查 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(diagnostics.checkedAt)}`
               : '尚未取得诊断快照'}
           </span>
-          <button type="button" onClick={onRefresh} disabled={disabled}>
-            <RefreshCw className={loading ? 'is-spinning' : undefined} size={15} aria-hidden="true" />
-            {loading ? '检查中' : '重新检测'}
-          </button>
+          <div>
+            <button type="button" onClick={exportDiagnostics} disabled={disabled} aria-label="导出脱敏诊断包">
+              {diagnosticExporting
+                ? <LoaderCircle className="is-spinning" size={15} aria-hidden="true" />
+                : <FileArchive size={15} aria-hidden="true" />}
+              {diagnosticExporting ? '整理中' : '导出诊断包'}
+            </button>
+            <button type="button" onClick={onRefresh} disabled={disabled}>
+              <RefreshCw className={loading ? 'is-spinning' : undefined} size={15} aria-hidden="true" />
+              {loading ? '检查中' : '重新检测'}
+            </button>
+          </div>
         </div>
 
-        {error ? (
+        {diagnosticError || error ? (
           <div className="aq-runtime-settings__feedback is-error" role="alert">
             <AlertTriangle size={17} aria-hidden="true" />
-            <span>{error}</span>
+            <span>{diagnosticError ?? error}</span>
           </div>
         ) : null}
-        {message ? (
+        {diagnosticMessage || message ? (
           <div className="aq-runtime-settings__feedback is-success" role="status">
             <CheckCircle2 size={17} aria-hidden="true" />
-            <span>{message}</span>
+            <span>{diagnosticMessage ?? message}</span>
           </div>
         ) : null}
 
@@ -482,7 +524,7 @@ export function RuntimeSettingsDialog({
         </div>
 
         <div className="aq-runtime-settings__disclaimer">
-          当前为未签名阶段测试版；不会静默下载模型、修改外部 ComfyUI 或在卸载时删除用户项目。
+          当前为未签名阶段测试版；诊断包默认排除凭据、绝对路径、私有媒体与创作正文，不会静默下载模型或修改外部 ComfyUI。
         </div>
       </section>
     </div>

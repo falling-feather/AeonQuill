@@ -106,6 +106,7 @@ import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mj
 import { AgentAdapterService } from './agent-adapter.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
 import { StorageLifecycleService, STORAGE_LIFECYCLE_VERSION } from './storage-lifecycle.mjs'
+import { createDiagnosticReport, DiagnosticBundleService } from './diagnostic-bundle.mjs'
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
 import {
   compileH3Prompt,
@@ -214,6 +215,9 @@ const storageLifecycle = new StorageLifecycleService({
   getRuntimeRegistry: () => workflowCenter.runtimeRegistry(),
   onProjectAssetsRemoved: (assetIds) => assetPreviewService.removeVariants(assetIds),
 })
+const diagnosticBundles = new DiagnosticBundleService({
+  rootDirectory: join(cacheDirectory, 'diagnostics'),
+})
 let hardwareHint = null
 let hardwareHintPromise = null
 
@@ -244,6 +248,7 @@ await Promise.all([
   runtimeRegistryMigration.open(),
   assetPreviewService.open(),
   storageLifecycle.open(),
+  diagnosticBundles.open(),
 ])
 
 try {
@@ -797,6 +802,37 @@ async function inspectRuntimeDiagnostics(force = false, persistedConfig) {
     identity: buildIdentity,
     registryMigration,
   })
+}
+
+async function createSupportDiagnosticBundle() {
+  const tasks = [
+    ['runtime', () => inspectRuntimeDiagnostics(true)],
+    ['workflows', async () => workflowCenter.catalog(await inspectWorkflowCenterContext({ force: false }))],
+    ['storage', () => storageLifecycle.scan({ includeRuntimeRoots: false })],
+  ]
+  const settled = await Promise.allSettled(tasks.map(([, task]) => task()))
+  const values = {}
+  const collectionIssues = []
+  settled.forEach((result, index) => {
+    const section = tasks[index][0]
+    if (result.status === 'fulfilled') values[section] = result.value
+    else collectionIssues.push({
+      section,
+      code: result.reason?.code || 'DIAGNOSTIC_SECTION_FAILED',
+      message: result.reason?.message || 'Diagnostic section could not be collected',
+    })
+  })
+  const report = createDiagnosticReport({
+    runtimeDiagnostics: values.runtime,
+    workflowCatalog: values.workflows,
+    storageScan: values.storage,
+    activeJobs: store.list(),
+    archivedJobs: store.listArchived(),
+    archiveSummary: store.archiveSummary(),
+    schedulerSnapshot: scheduler.snapshot(),
+    collectionIssues,
+  })
+  return diagnosticBundles.create(report)
 }
 
 const IDEMPOTENCY_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}$/
@@ -4023,6 +4059,26 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/runtime/diagnostics') {
       return sendJson(response, 200, await inspectRuntimeDiagnostics(url.searchParams.get('refresh') === '1'))
     }
+    if (request.method === 'POST' && pathname === '/api/diagnostics/bundles') {
+      const body = await readJsonBody(request, 2 * 1024)
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+        return sendError(response, 400, 'DIAGNOSTIC_REQUEST_INVALID', 'Diagnostic bundle request must be an empty object')
+      }
+      return sendJson(response, 201, { bundle: await createSupportDiagnosticBundle() })
+    }
+    const diagnosticBundleMatch = /^\/api\/diagnostics\/bundles\/(diag-[0-9]{14}-[a-f0-9-]{36})$/u.exec(pathname)
+    if (request.method === 'GET' && diagnosticBundleMatch) {
+      const bundle = await diagnosticBundles.read(diagnosticBundleMatch[1])
+      response.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-length': bundle.content.length,
+        'content-disposition': `attachment; filename="${bundle.filename}"`,
+        'cache-control': 'no-store',
+        'x-diagnostic-sha256': bundle.sha256,
+      })
+      response.end(bundle.content)
+      return
+    }
     if (request.method === 'GET' && pathname === '/api/runtime/registry-migration') {
       return sendJson(response, 200, await runtimeRegistryMigration.preview())
     }
@@ -4928,6 +4984,7 @@ async function shutdown() {
   shutdownStarted = true
   clearInterval(heartbeat)
   if (jobArchiveTimer) clearTimeout(jobArchiveTimer)
+  diagnosticBundles.close()
   for (const response of sseClients) response.end()
   await workflowCenter.close().catch(() => {})
   await runtimeManager.dispose().catch(() => {})

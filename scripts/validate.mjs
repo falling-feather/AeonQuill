@@ -91,6 +91,8 @@ try {
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])
     await run('durable job archive API', process.execPath, ['scripts/validate-job-archive-api.mjs'])
     await run('lazy job archive browser vertical', process.execPath, ['scripts/validate-job-archive-ui.mjs'])
+    await run('redacted diagnostic bundle API', process.execPath, ['scripts/validate-diagnostic-bundle-api.mjs'])
+    await run('diagnostic bundle browser export', process.execPath, ['scripts/validate-diagnostic-bundle-ui.mjs'])
     await run('video chain candidate manifest API', process.execPath, ['scripts/validate-video-chain-api.mjs'])
     await run('controlled custom ComfyUI execution', process.execPath, ['scripts/validate-custom-workflow-api.mjs'])
     await run('safe storage lifecycle API', process.execPath, ['scripts/validate-storage-lifecycle-api.mjs'])
