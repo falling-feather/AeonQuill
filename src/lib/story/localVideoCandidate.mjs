@@ -2,6 +2,7 @@ import { assertVideoProductionProject } from './productionPipeline.mjs'
 
 export const LOCAL_VIDEO_CANDIDATE_BINDING_SCHEMA_VERSION = 1
 export const LOCAL_VIDEO_CANDIDATE_BACKFILL_SCHEMA_VERSION = 1
+export const LOCAL_VIDEO_CANDIDATE_TARGET_SCHEMA_VERSION = 1
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,199}$/u
 const IDEMPOTENCY_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}$/u
@@ -22,6 +23,7 @@ const BINDING_KEYS = Object.freeze([
   'executionItemId',
   'submissionId',
 ])
+const TARGET_KEYS = Object.freeze(BINDING_KEYS.filter((key) => key !== 'submissionId'))
 const BACKFILL_KEYS = Object.freeze([
   'schemaVersion',
   'status',
@@ -86,6 +88,27 @@ function sameBinding(left, right) {
   return BINDING_KEYS.every((key) => left[key] === right[key])
 }
 
+export function localVideoCandidateTargetsEqual(leftInput, rightInput) {
+  const left = assertLocalVideoCandidateTarget(leftInput)
+  const right = assertLocalVideoCandidateTarget(rightInput)
+  return TARGET_KEYS.every((key) => left[key] === right[key])
+}
+
+export function localVideoCandidateTargetMatchesBinding(targetInput, bindingInput) {
+  const target = assertLocalVideoCandidateTarget(targetInput)
+  const binding = assertLocalVideoCandidateJobBinding(bindingInput)
+  return target.projectId === binding.projectId
+    && target.documentId === binding.documentId
+    && target.productionId === binding.productionId
+    && target.storyRevision === binding.storyRevision
+    && target.shotId === binding.shotId
+    && target.inputFingerprint === binding.inputFingerprint
+    && target.generationMode === binding.generationMode
+    && target.executionItemId === binding.executionItemId
+    && binding.productionRevision >= target.productionRevision
+    && binding.continuityRevision >= target.continuityRevision
+}
+
 function errorResult(code, message, key = null) {
   return { status: 'rejected', code, message, key }
 }
@@ -111,14 +134,33 @@ export function assertLocalVideoCandidateJobBinding(binding) {
   return binding
 }
 
-export function createLocalVideoCandidateJobBinding(input) {
-  if (!isRecord(input)) fail('INVALID_LOCAL_CANDIDATE_INPUT', 'Local candidate binding input must be an object')
+export function assertLocalVideoCandidateTarget(target) {
+  exactKeys(target, TARGET_KEYS, 'candidateTarget')
+  if (target.schemaVersion !== LOCAL_VIDEO_CANDIDATE_TARGET_SCHEMA_VERSION) {
+    fail('UNSUPPORTED_LOCAL_CANDIDATE_TARGET', 'candidateTarget schema is unsupported')
+  }
+  safeId(target.projectId, 'candidateTarget.projectId')
+  safeId(target.documentId, 'candidateTarget.documentId')
+  safeId(target.productionId, 'candidateTarget.productionId')
+  revision(target.productionRevision, 'candidateTarget.productionRevision')
+  revision(target.continuityRevision, 'candidateTarget.continuityRevision')
+  revision(target.storyRevision, 'candidateTarget.storyRevision')
+  safeId(target.shotId, 'candidateTarget.shotId')
+  safeId(target.inputFingerprint, 'candidateTarget.inputFingerprint')
+  if (!['fast', 'quality'].includes(target.generationMode)) {
+    fail('INVALID_LOCAL_CANDIDATE_MODE', 'candidateTarget.generationMode is unsupported')
+  }
+  safeId(target.executionItemId, 'candidateTarget.executionItemId')
+  return target
+}
+
+export function createLocalVideoCandidateTarget(input) {
+  if (!isRecord(input)) fail('INVALID_LOCAL_CANDIDATE_INPUT', 'Local candidate target input must be an object')
   const production = assertVideoProductionProject(input.production)
   safeId(input.projectId, 'input.projectId')
   safeId(input.documentId, 'input.documentId')
   safeId(input.shotId, 'input.shotId')
   safeId(input.executionItemId, 'input.executionItemId')
-  safeId(input.submissionId, 'input.submissionId', IDEMPOTENCY_KEY_PATTERN)
   if (production.continuityGraph.storyProjectId !== input.documentId) {
     fail('LOCAL_CANDIDATE_DOCUMENT_MISMATCH', 'Production continuity graph does not belong to the workspace document')
   }
@@ -130,8 +172,8 @@ export function createLocalVideoCandidateJobBinding(input) {
   if (shot.status === 'blocked') {
     fail('LOCAL_CANDIDATE_SHOT_BLOCKED', `Shot ${input.shotId} still has unapproved required assets`)
   }
-  return assertLocalVideoCandidateJobBinding({
-    schemaVersion: LOCAL_VIDEO_CANDIDATE_BINDING_SCHEMA_VERSION,
+  return assertLocalVideoCandidateTarget({
+    schemaVersion: LOCAL_VIDEO_CANDIDATE_TARGET_SCHEMA_VERSION,
     projectId: input.projectId,
     documentId: input.documentId,
     productionId: production.id,
@@ -142,6 +184,61 @@ export function createLocalVideoCandidateJobBinding(input) {
     inputFingerprint: shot.inputFingerprint,
     generationMode: production.settings.generationMode,
     executionItemId: input.executionItemId,
+  })
+}
+
+export function localVideoCandidateTargetFromBinding(bindingInput) {
+  const binding = assertLocalVideoCandidateJobBinding(bindingInput)
+  const { submissionId: _submissionId, ...target } = binding
+  return assertLocalVideoCandidateTarget(target)
+}
+
+export function materializeLocalVideoCandidateJobBinding(targetInput, input) {
+  const target = assertLocalVideoCandidateTarget(targetInput)
+  if (!isRecord(input)) fail('INVALID_LOCAL_CANDIDATE_INPUT', 'Materialize input must be an object')
+  const production = assertVideoProductionProject(input.production)
+  const submissionId = safeId(input.submissionId, 'input.submissionId', IDEMPOTENCY_KEY_PATTERN)
+  if (production.id !== target.productionId
+    || production.continuityGraph.storyProjectId !== target.documentId) {
+    fail('LOCAL_CANDIDATE_PRODUCTION_MISMATCH', 'Candidate target does not belong to this production document')
+  }
+  if (input.requireTargetRevisions !== false
+    && (production.revision !== target.productionRevision
+      || production.continuityGraph.revision !== target.continuityRevision)) {
+    fail('LOCAL_CANDIDATE_PRODUCTION_STALE', 'Candidate target production revision is stale')
+  }
+  if (input.requireTargetRevisions === false
+    && (production.revision < target.productionRevision
+      || production.continuityGraph.revision < target.continuityRevision)) {
+    fail('LOCAL_CANDIDATE_PRODUCTION_ROLLBACK', 'Candidate target cannot be materialized against an older production revision')
+  }
+  if (production.continuityGraph.storyRevision !== target.storyRevision) {
+    fail('LOCAL_CANDIDATE_STORY_STALE', 'Candidate target story revision is stale')
+  }
+  if (production.settings.generationMode !== target.generationMode) {
+    fail('LOCAL_CANDIDATE_MODE_STALE', 'Candidate target generation mode is stale')
+  }
+  const shot = production.continuityGraph.shots.find(({ id }) => id === target.shotId)
+  if (!shot) fail('LOCAL_CANDIDATE_SHOT_NOT_FOUND', `Unknown continuity shot ${target.shotId}`)
+  if (shot.status === 'blocked') fail('LOCAL_CANDIDATE_SHOT_BLOCKED', `Shot ${target.shotId} is blocked`)
+  if (shot.inputFingerprint !== target.inputFingerprint) {
+    fail('LOCAL_CANDIDATE_INPUT_STALE', 'Candidate target input fingerprint is stale')
+  }
+  return assertLocalVideoCandidateJobBinding({
+    ...clone(target),
+    productionRevision: production.revision,
+    continuityRevision: production.continuityGraph.revision,
+    storyRevision: production.continuityGraph.storyRevision,
+    inputFingerprint: shot.inputFingerprint,
+    generationMode: production.settings.generationMode,
+    submissionId,
+  })
+}
+
+export function createLocalVideoCandidateJobBinding(input) {
+  const target = createLocalVideoCandidateTarget(input)
+  return materializeLocalVideoCandidateJobBinding(target, {
+    production: input.production,
     submissionId: input.submissionId,
   })
 }

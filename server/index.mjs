@@ -112,12 +112,22 @@ import {
 } from '../src/lib/video/h3PromptAgent.mjs'
 import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
 import {
+  assertLocalVideoCandidateBackfill,
   assertLocalVideoCandidateJobBinding,
+  assertLocalVideoCandidateTarget,
   createRejectedLocalVideoCandidateBackfill,
+  localVideoCandidateTargetMatchesBinding,
+  localVideoCandidateTargetsEqual,
   retargetLocalVideoCandidateSubmission,
 } from '../src/lib/story/localVideoCandidate.mjs'
 import {
+  assertVideoChainManifest,
+  createVideoChainManifest,
+  transitionVideoChainManifestShot,
+} from '../src/lib/story/videoChainManifest.mjs'
+import {
   authoritativeLocalVideoCandidate,
+  authoritativeLocalVideoCandidateTarget,
   promoteLocalVideoCandidateOutput,
 } from './local-video-candidate.mjs'
 
@@ -452,7 +462,7 @@ function validateVideoRequest(body) {
   }
 }
 
-function validateVideoChainRequest(body) {
+function validateVideoChainRequest(body, options = {}) {
   const allowed = new Set(['projectId', 'title', 'shots', 'transitionSeconds', 'width', 'height', 'fps'])
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key))) {
     throw Object.assign(new Error('连续长片请求字段无效'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
@@ -468,16 +478,94 @@ function validateVideoChainRequest(body) {
   if (!Array.isArray(body.shots) || body.shots.length < 2 || body.shots.length > 24) {
     throw Object.assign(new Error('连续长片需要 2–24 个镜头'), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
   }
+  const allowedShotFields = new Set([
+    'executionItemId', 'candidateTarget', 'mode', 'duration', 'prompt', 'scenario', 'aspectRatio', 'preset',
+    'modelProfile', 'seed', 'audio', 'sourceElementId', 'director', 'hasLastFrame',
+  ])
+  const executionItemIds = new Set()
+  const candidateShotIds = new Set()
+  let candidateScope = null
   const shots = body.shots.map((shot, index) => {
     if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
       throw Object.assign(new Error(`镜头 ${index + 1} 请求无效`), { code: 'INVALID_VIDEO_CHAIN_REQUEST', status: 400 })
     }
+    const unknown = Object.keys(shot).filter((key) => !allowedShotFields.has(key))
+    if (unknown.length) {
+      throw Object.assign(new Error(`镜头 ${index + 1} 含有不受支持字段：${unknown.join('、')}`), {
+        code: 'INVALID_VIDEO_CHAIN_SHOT_FIELDS',
+        status: 400,
+      })
+    }
+    let executionItemId = String(shot.executionItemId || '').trim()
+    if (!executionItemId && options.allowLegacyExecutionItems) {
+      executionItemId = `legacy-chain-item-${hashRequest('legacy-video-chain-shot', { index, shot }).slice(0, 32)}`
+    }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,199}$/u.test(executionItemId)) {
+      throw Object.assign(new Error(`镜头 ${index + 1} 缺少有效的执行项 ID`), {
+        code: 'INVALID_VIDEO_CHAIN_EXECUTION_ITEM',
+        status: 400,
+      })
+    }
+    if (executionItemIds.has(executionItemId)) {
+      throw Object.assign(new Error(`镜头 ${index + 1} 的执行项 ID 重复`), {
+        code: 'DUPLICATE_VIDEO_CHAIN_EXECUTION_ITEM',
+        status: 400,
+      })
+    }
+    executionItemIds.add(executionItemId)
+    let candidateTarget
+    if (shot.candidateTarget !== undefined) {
+      try {
+        candidateTarget = structuredClone(assertLocalVideoCandidateTarget(shot.candidateTarget))
+      } catch (error) {
+        if (!error.status) error.status = 400
+        throw error
+      }
+    }
+    if (candidateTarget) {
+      if (candidateTarget.projectId !== projectId || candidateTarget.executionItemId !== executionItemId) {
+        throw Object.assign(new Error(`镜头 ${index + 1} 的候选目标与项目或执行项不一致`), {
+          code: 'VIDEO_CHAIN_CANDIDATE_TARGET_MISMATCH',
+          status: 409,
+        })
+      }
+      if (candidateShotIds.has(candidateTarget.shotId)) {
+        throw Object.assign(new Error(`镜头 ${index + 1} 重复绑定了同一连续性镜头`), {
+          code: 'DUPLICATE_VIDEO_CHAIN_CANDIDATE_SHOT',
+          status: 409,
+        })
+      }
+      candidateShotIds.add(candidateTarget.shotId)
+      const scope = [
+        candidateTarget.projectId,
+        candidateTarget.documentId,
+        candidateTarget.productionId,
+        candidateTarget.productionRevision,
+        candidateTarget.continuityRevision,
+        candidateTarget.storyRevision,
+        candidateTarget.generationMode,
+      ].join('\0')
+      if (candidateScope !== null && candidateScope !== scope) {
+        throw Object.assign(new Error('同一连续长片的候选目标必须来自同一个制片版本'), {
+          code: 'VIDEO_CHAIN_CANDIDATE_SCOPE_MISMATCH',
+          status: 409,
+        })
+      }
+      candidateScope = scope
+    }
     const normalized = validateVideoRequest({
       ...shot,
+      candidateBinding: undefined,
       mode: index === 0 ? 'text-to-video' : 'image-to-video',
       duration: 5,
     })
-    return { ...normalized, duration: 5, hasLastFrame: false }
+    return {
+      ...normalized,
+      executionItemId,
+      ...(candidateTarget ? { candidateTarget } : {}),
+      duration: 5,
+      hasLastFrame: false,
+    }
   })
   const aspectRatio = shots[0].aspectRatio
   if (shots.some((shot) => shot.aspectRatio !== aspectRatio)) {
@@ -715,6 +803,26 @@ function hashRequest(kind, body) {
   return createHash('sha256').update(`${kind}\0${canonicalJson(body)}`, 'utf8').digest('hex')
 }
 
+function videoChainShotRequestHash(shot, index) {
+  return hashRequest('video-chain-shot-v2', {
+    index,
+    executionItemId: shot.executionItemId,
+    candidateTarget: shot.candidateTarget || null,
+    mode: index === 0 ? 'text-to-video' : 'image-to-video',
+    duration: 5,
+    prompt: shot.prompt,
+    scenario: shot.scenario,
+    aspectRatio: shot.aspectRatio,
+    preset: shot.preset,
+    modelProfile: shot.modelProfile,
+    seed: shot.seed,
+    audio: shot.audio,
+    sourceElementId: shot.sourceElementId,
+    director: shot.director,
+    hasLastFrame: false,
+  })
+}
+
 function resolveIdempotencyKey(value) {
   if (value === undefined || value === null || value === '') return `request-${randomUUID()}`
   const key = Array.isArray(value) ? value[0] : String(value)
@@ -822,6 +930,7 @@ function newJob(request, inputPath, lastFramePath, options = {}) {
     costEvents: [createEstimateCostEvent(id, 'gpu', estimateVideoMilliseconds(request), now)],
     request,
     sourceElementId: request.sourceElementId,
+    ...(options.videoChainShot ? { videoChainShot: structuredClone(options.videoChainShot) } : {}),
     inputPath,
     lastFramePath,
     logs: [{ at: now, level: 'info', message: '任务已创建' }],
@@ -962,6 +1071,15 @@ function newVideoChainJob(request, options = {}) {
     maxAttempts: 3,
     queuedAt: now,
   })
+  const videoChainManifest = createVideoChainManifest({
+    projectId: request.projectId,
+    shots: request.shots.map((shot, index) => ({
+      executionItemId: shot.executionItemId,
+      requestHash: videoChainShotRequestHash(shot, index),
+      ...(shot.candidateTarget ? { candidateTarget: shot.candidateTarget } : {}),
+    })),
+    now,
+  })
   return {
     id,
     kind: 'video-chain',
@@ -973,14 +1091,16 @@ function newVideoChainJob(request, options = {}) {
     detail: '等待连续长片编排器',
     createdAt: now,
     updatedAt: now,
-    workflowVersion: 'aeonquill-video-chain-v1',
+    workflowVersion: 'aeonquill-video-chain-v2',
     requestHash: options.requestHash,
     retryOf: options.retryOf,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'orchestration', estimatedMilliseconds, now)],
     request,
     sourceElementId: request.projectId,
-    childJobIds: [...(options.resumeChildJobIds || [])],
+    childJobIds: [],
+    checkpointChildJobIds: [...(options.resumeChildJobIds || [])],
+    videoChainManifest,
     logs: [{
       at: now,
       level: 'info',
@@ -2479,11 +2599,92 @@ async function waitForManagedChildJob(parentJobId, childJobId, {
   }
 }
 
+async function updateVideoChainShotManifest(parentJobId, index, patch) {
+  const parent = store.get(parentJobId)
+  const videoChainManifest = transitionVideoChainManifestShot(parent.videoChainManifest, index, patch)
+  await store.update(parentJobId, { videoChainManifest })
+  return videoChainManifest
+}
+
+function videoChainChildIdentityMatches(child, parentJob, index, previousChild) {
+  const shot = parentJob.request.shots[index]
+  const entry = parentJob.videoChainManifest.shots[index]
+  const identity = child?.videoChainShot
+  if (!identity || identity.schemaVersion !== 1 || identity.index !== index
+    || identity.executionItemId !== entry.executionItemId
+    || identity.requestHash !== entry.requestHash) return false
+  const expectedIdentityKeys = [
+    'schemaVersion', 'parentJobId', 'index', 'executionItemId', 'requestHash', 'candidateTarget',
+    'predecessorJobId', 'predecessorOutputAssetId',
+  ]
+  if (Object.keys(identity).sort().join('\0') !== expectedIdentityKeys.sort().join('\0')) return false
+  const expectedTarget = entry.candidateTarget
+  if (Boolean(identity.candidateTarget) !== Boolean(expectedTarget)) return false
+  if (expectedTarget && !localVideoCandidateTargetsEqual(identity.candidateTarget, expectedTarget)) return false
+  const predecessorJobId = previousChild?.id || null
+  const predecessorOutputAssetId = previousChild?.outputVersion?.assetId || null
+  if (identity.predecessorJobId !== predecessorJobId
+    || identity.predecessorOutputAssetId !== predecessorOutputAssetId) return false
+  if (index > 0 && (!predecessorJobId || !predecessorOutputAssetId)) return false
+  const childRequestHash = videoChainShotRequestHash({
+    ...child.request,
+    executionItemId: entry.executionItemId,
+    ...(expectedTarget ? { candidateTarget: expectedTarget } : {}),
+  }, index)
+  if (childRequestHash !== entry.requestHash || childRequestHash !== videoChainShotRequestHash(shot, index)) return false
+  if (expectedTarget) {
+    if (!child.request?.candidateBinding
+      || !localVideoCandidateTargetMatchesBinding(expectedTarget, child.request.candidateBinding)) return false
+  } else if (child.request?.candidateBinding || child.localCandidateBackfill) {
+    return false
+  }
+  return true
+}
+
+async function reusableVideoChainChild(parentJob, index, childId, previousChild) {
+  if (!childId) return null
+  const child = store.get(childId)
+  if (child?.kind !== 'video' || child.status !== 'completed' || !child.outputPath || !child.outputVersion?.assetId) return null
+  if (!videoChainChildIdentityMatches(child, parentJob, index, previousChild)) return null
+  const target = parentJob.videoChainManifest.shots[index].candidateTarget
+  if (target) {
+    try {
+      authoritativeLocalVideoCandidateTarget(target, { workspaceStore }, { requireProductionRevision: false })
+      const backfill = assertLocalVideoCandidateBackfill(child.localCandidateBackfill, child.request.candidateBinding)
+      if (backfill.status !== 'ready' || backfill.jobId !== child.id) return null
+    } catch {
+      return null
+    }
+  }
+  try {
+    const outputPath = assertManagedPrivatePath(child.outputPath, assetDirectory)
+    if (!(await stat(outputPath).then(({ size }) => size > 0).catch(() => false))) return null
+    return { child, outputPath }
+  } catch {
+    return null
+  }
+}
+
+function videoChainFailure(error) {
+  const code = String(error?.code || 'VIDEO_CHAIN_SHOT_FAILED')
+    .toUpperCase()
+    .replace(/[^A-Z0-9._:-]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+    .slice(0, 120) || 'VIDEO_CHAIN_SHOT_FAILED'
+  return {
+    code,
+    message: redactSensitiveText(error?.message || '连续长片镜头执行失败').slice(0, 1_000),
+  }
+}
+
 async function runVideoChainJob(jobId, { signal }) {
   const job = store.get(jobId)
   if (!job) return
-  const childJobIds = [...(job.childJobIds || [])]
+  assertVideoChainManifest(job.videoChainManifest)
+  const childJobIds = []
+  const checkpointChildJobIds = [...(job.checkpointChildJobIds || [])]
   let activeChildJobId
+  let activeShotIndex = null
   const handoffPaths = new Set()
   try {
     await store.update(jobId, {
@@ -2493,41 +2694,49 @@ async function runVideoChainJob(jobId, { signal }) {
       detail: `锁定 ${job.request.shots.length} 镜连续 H3 生成计划`,
       error: null,
     })
-    await store.log(jobId, 'success', '连续长片计划已锁定：首镜 T2V，后续镜头末帧接力 I2V')
+    await store.log(jobId, 'success', '连续长片计划与逐镜候选清单已锁定：首镜 T2V，后续镜头末帧接力 I2V')
 
     let previousVideoPath
+    let previousChild
     for (let index = 0; index < job.request.shots.length; index += 1) {
+      activeShotIndex = index
       const shot = job.request.shots[index]
+      const manifestEntry = job.videoChainManifest.shots[index]
       const shotNumber = index + 1
       const progressStart = 2 + Math.round((index / job.request.shots.length) * 84)
       const progressEnd = 2 + Math.round(((index + 1) / job.request.shots.length) * 84)
-      const resumableChildId = childJobIds[index]
-      const resumableChild = resumableChildId ? store.get(resumableChildId) : null
-      if (resumableChild?.status === 'completed' && resumableChild.outputPath) {
-        const candidatePath = assertManagedPrivatePath(resumableChild.outputPath, assetDirectory)
-        const candidateReadable = await stat(candidatePath).then(() => true).catch(() => false)
-        if (candidateReadable) {
-          previousVideoPath = candidatePath
-          await store.update(jobId, {
-            childJobIds,
-            phase: 'recovering',
-            progress: progressEnd,
-            detail: `复用第 ${shotNumber}/${job.request.shots.length} 镜断点`,
-          })
-          await store.log(jobId, 'success', `第 ${shotNumber} 镜复用已完成断点：${resumableChildId}`)
-          continue
-        }
+      const resumableChildId = checkpointChildJobIds[index]
+      const reusable = await reusableVideoChainChild(job, index, resumableChildId, previousChild)
+      if (reusable) {
+        const childSubmissionId = reusable.child.scheduling?.idempotencyKey
+        childJobIds[index] = reusable.child.id
+        previousVideoPath = reusable.outputPath
+        previousChild = reusable.child
+        await updateVideoChainShotManifest(jobId, index, {
+          status: 'reused',
+          childJobId: reusable.child.id,
+          childSubmissionId,
+          reusedFromChildJobId: reusable.child.id,
+          localCandidateBackfill: manifestEntry.candidateTarget ? reusable.child.localCandidateBackfill : null,
+          error: null,
+        })
+        await store.update(jobId, {
+          childJobIds,
+          phase: 'recovering',
+          progress: progressEnd,
+          detail: `复用第 ${shotNumber}/${job.request.shots.length} 镜可信断点`,
+        })
+        await store.log(jobId, 'success', `第 ${shotNumber} 镜复用身份、接力来源、输出和候选回填均通过校验：${resumableChildId}`)
+        continue
       }
       if (resumableChildId) {
-        childJobIds.splice(index)
-        await store.update(jobId, { childJobIds })
-        await store.log(jobId, 'warning', `第 ${shotNumber} 镜断点不可复用，从本镜继续生成`)
+        await store.log(jobId, 'warning', `第 ${shotNumber} 镜断点身份、接力来源、输出或候选回填不完整；从本镜重新生成`)
       }
       let handoffPath
       let sourceImageDataUrl
       if (index > 0) {
-        if (!previousVideoPath) {
-          throw Object.assign(new Error(`第 ${shotNumber} 镜缺少上一镜视频资产`), { code: 'VIDEO_CHAIN_HANDOFF_MISSING' })
+        if (!previousVideoPath || !previousChild?.outputVersion?.assetId) {
+          throw Object.assign(new Error(`第 ${shotNumber} 镜缺少可信的上一镜视频资产`), { code: 'VIDEO_CHAIN_HANDOFF_MISSING' })
         }
         handoffPath = join(inputDirectory, `${job.id}-handoff-${String(index).padStart(2, '0')}.png`)
         handoffPaths.add(handoffPath)
@@ -2546,18 +2755,50 @@ async function runVideoChainJob(jobId, { signal }) {
         sourceImageDataUrl = `data:image/png;base64,${frameBytes.toString('base64')}`
       }
 
+      const childSubmissionId = `video-chain:${job.id}:shot:${index}`
+      const candidateBinding = manifestEntry.candidateTarget
+        ? authoritativeLocalVideoCandidateTarget(manifestEntry.candidateTarget, { workspaceStore }, {
+            requireProductionRevision: false,
+            submissionId: childSubmissionId,
+          }).binding
+        : undefined
+      const {
+        executionItemId: _executionItemId,
+        candidateTarget: _candidateTarget,
+        hasLastFrame: _hasLastFrame,
+        ...videoShot
+      } = shot
       const childRequest = {
-        ...shot,
+        ...videoShot,
         mode: index === 0 ? 'text-to-video' : 'image-to-video',
         duration: 5,
         ...(sourceImageDataUrl ? { sourceImageDataUrl } : {}),
+        ...(candidateBinding ? { candidateBinding } : {}),
       }
       const childResult = await createVideoJob(childRequest, undefined, {
-        idempotencyKey: `video-chain:${job.id}:shot:${index}`,
+        idempotencyKey: childSubmissionId,
         priority: 52,
+        videoChainShot: {
+          schemaVersion: 1,
+          parentJobId: job.id,
+          index,
+          executionItemId: manifestEntry.executionItemId,
+          requestHash: manifestEntry.requestHash,
+          candidateTarget: manifestEntry.candidateTarget ? structuredClone(manifestEntry.candidateTarget) : null,
+          predecessorJobId: previousChild?.id || null,
+          predecessorOutputAssetId: previousChild?.outputVersion?.assetId || null,
+        },
       })
       activeChildJobId = childResult.job.id
-      if (!childJobIds.includes(activeChildJobId)) childJobIds.push(activeChildJobId)
+      childJobIds[index] = activeChildJobId
+      await updateVideoChainShotManifest(jobId, index, {
+        status: 'queued',
+        childJobId: activeChildJobId,
+        childSubmissionId,
+        reusedFromChildJobId: null,
+        localCandidateBackfill: null,
+        error: null,
+      })
       await store.update(jobId, {
         childJobIds,
         activeChildJobId,
@@ -2565,7 +2806,7 @@ async function runVideoChainJob(jobId, { signal }) {
         progress: progressStart,
         detail: `正在生成第 ${shotNumber}/${job.request.shots.length} 镜`,
       })
-      await store.log(jobId, 'info', `第 ${shotNumber} 镜已提交：${activeChildJobId}`)
+      await store.log(jobId, 'info', `第 ${shotNumber} 镜已提交：${activeChildJobId}${candidateBinding ? '；完成后自动回填目标镜头候选池' : ''}`)
       if (handoffPath) {
         await unlink(handoffPath).catch(() => {})
         handoffPaths.delete(handoffPath)
@@ -2577,12 +2818,28 @@ async function runVideoChainJob(jobId, { signal }) {
         progressStart,
         progressEnd,
       })
-      previousVideoPath = completedChild.outputPath
+      await updateVideoChainShotManifest(jobId, index, {
+        status: 'completed',
+        childJobId: completedChild.id,
+        childSubmissionId,
+        reusedFromChildJobId: null,
+        localCandidateBackfill: manifestEntry.candidateTarget ? completedChild.localCandidateBackfill : null,
+        error: null,
+      })
+      previousVideoPath = assertManagedPrivatePath(completedChild.outputPath, assetDirectory)
+      previousChild = completedChild
       await store.log(jobId, 'success', `第 ${shotNumber} 镜完成；${shotNumber < job.request.shots.length ? '末帧将用于下一镜接力' : '准备进入成片'}`)
     }
 
+    const completedManifest = assertVideoChainManifest(store.get(jobId).videoChainManifest)
+    const orderedChildJobIds = completedManifest.shots.map((entry) => {
+      if (!['completed', 'reused'].includes(entry.status) || !entry.childJobId) {
+        throw Object.assign(new Error(`第 ${entry.index + 1} 镜尚未完成，不能进入成片`), { code: 'VIDEO_CHAIN_MANIFEST_INCOMPLETE' })
+      }
+      return entry.childJobId
+    })
     const finalCutResult = await createFinalCutJob({
-      sourceJobIds: childJobIds,
+      sourceJobIds: orderedChildJobIds,
       projectId: job.request.projectId,
       title: job.request.title,
       transitionSeconds: job.request.transitionSeconds,
@@ -2620,7 +2877,7 @@ async function runVideoChainJob(jobId, { signal }) {
       outputVersion: finalCut.outputVersion,
       finalCutMetadata: finalCut.finalCutMetadata,
       delivery: finalCut.delivery,
-      childJobIds,
+      childJobIds: orderedChildJobIds,
       activeChildJobId: undefined,
       finalCutJobId: finalCut.id,
       completedAt: Date.now(),
@@ -2642,6 +2899,19 @@ async function runVideoChainJob(jobId, { signal }) {
       })
       await store.log(jobId, 'warning', '连续长片编排已由用户取消')
       return
+    }
+    if (activeShotIndex !== null) {
+      const entry = latest?.videoChainManifest?.shots?.[activeShotIndex]
+      if (entry && !['completed', 'reused', 'failed'].includes(entry.status)) {
+        await updateVideoChainShotManifest(jobId, activeShotIndex, {
+          status: 'failed',
+          childJobId: entry.childJobId,
+          childSubmissionId: entry.childSubmissionId,
+          reusedFromChildJobId: null,
+          localCandidateBackfill: null,
+          error: videoChainFailure(error),
+        }).catch(() => {})
+      }
     }
     if (signal.reason?.code === 'JOB_TIMEOUT') throw error
     await store.update(jobId, {
@@ -2930,6 +3200,7 @@ async function createVideoJob(body, retrySource, options = {}) {
     priority: options.priority,
     attempt,
     retryOf: retrySource?.id,
+    videoChainShot: options.videoChainShot || retrySource?.videoChainShot,
   })
   const createdInputPaths = []
   if (request.mode === 'image-to-video' && !inputPath) {
@@ -3050,7 +3321,15 @@ async function createSoundRenderJob(body, retrySource, options = {}) {
 }
 
 async function createVideoChainJob(body, retrySource, options = {}) {
-  const request = retrySource ? validateVideoChainRequest(retrySource.request) : validateVideoChainRequest(body)
+  const request = retrySource
+    ? validateVideoChainRequest(retrySource.request, { allowLegacyExecutionItems: true })
+    : validateVideoChainRequest(body)
+  for (const shot of request.shots) {
+    if (!shot.candidateTarget) continue
+    authoritativeLocalVideoCandidateTarget(shot.candidateTarget, { workspaceStore }, {
+      requireProductionRevision: !retrySource,
+    })
+  }
   const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
   const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
   const requestHashValue = retrySource
@@ -3069,7 +3348,9 @@ async function createVideoChainJob(body, retrySource, options = {}) {
     priority: options.priority,
     attempt,
     retryOf: retrySource?.id,
-    resumeChildJobIds: retrySource?.childJobIds,
+    resumeChildJobIds: retrySource?.videoChainManifest
+      ? assertVideoChainManifest(retrySource.videoChainManifest).shots.map(({ childJobId }) => childJobId)
+      : retrySource?.childJobIds,
   })
   const added = await store.addIdempotent(job)
   if (!added.created) return { job: store.publicJob(added.job), reused: true }

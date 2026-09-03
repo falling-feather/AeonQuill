@@ -62,7 +62,10 @@ import {
   synchronizeVideoProductionProjectForStory,
   type VideoProductionProject,
 } from '../../lib/story/productionPipeline.mjs'
-import { createLocalVideoCandidateJobBinding } from '../../lib/story/localVideoCandidate.mjs'
+import {
+  createLocalVideoCandidateJobBinding,
+  createLocalVideoCandidateTarget,
+} from '../../lib/story/localVideoCandidate.mjs'
 import { flushWorkspaceModeDocument } from '../../lib/projectApi'
 import {
   cancelVideoJob,
@@ -286,6 +289,14 @@ function jobStatusLabel(job: ProcessingJob) {
   return '排队中'
 }
 
+function chainShotStatusLabel(status: NonNullable<ProcessingJob['videoChainManifest']>['shots'][number]['status']) {
+  if (status === 'completed') return '新生成完成'
+  if (status === 'reused') return '可信断点复用'
+  if (status === 'failed') return '镜头失败'
+  if (status === 'queued') return '执行中'
+  return '待执行'
+}
+
 function upsertJob(jobs: ProcessingJob[], updated: ProcessingJob) {
   const existingIndex = jobs.findIndex(({ id }) => id === updated.id)
   if (existingIndex < 0) return [updated, ...jobs]
@@ -422,10 +433,19 @@ export function SmartVideoWorkbench({
   const readyCount = checklist?.items.filter(({ status }) => status === 'ready').length ?? 0
   const blockedCount = checklist?.items.filter(({ status }) => status === 'blocked').length ?? 0
   const jobById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs])
-  const submittedJobs = useMemo(
-    () => submittedJobIds.map((id) => jobById.get(id)).filter((job): job is ProcessingJob => Boolean(job)),
-    [submittedJobIds, jobById],
-  )
+  const chainWorkspaceId = workspaceProjectId ?? projectId ?? result.project.id
+  const submittedJobs = useMemo(() => {
+    const sessionJobs = submittedJobIds.map((id) => jobById.get(id)).filter((job): job is ProcessingJob => Boolean(job))
+    const seen = new Set(sessionJobs.map(({ id }) => id))
+    const restoredChains = jobs.filter((job) => (
+      job.kind === 'video-chain'
+      && job.request
+      && 'projectId' in job.request
+      && job.request.projectId === chainWorkspaceId
+      && !seen.has(job.id)
+    )).slice(0, 8)
+    return [...sessionJobs, ...restoredChains]
+  }, [chainWorkspaceId, jobById, jobs, submittedJobIds])
   const completedShotJobs = useMemo(
     () => submittedJobs.filter((job) => ['video', 'provider-video'].includes(job.kind ?? '') && job.status === 'completed' && job.outputUrl),
     [submittedJobs],
@@ -793,18 +813,53 @@ export function SmartVideoWorkbench({
         throw new Error('当前一键连续成片以首镜文生视频启动；请切换为文生视频后重新检查清单。')
       }
       const submissions = compileConfirmedVideoRequests(current, confirmation, [])
+      const workspaceDocumentId = projectId ?? result.project.id
+      const itemById = new Map(current.items.map((item) => [item.id, item]))
+      const continuityShotByStoryShotId = new Map(result.production.continuityGraph.shots
+        .filter(({ storyShotId }) => Boolean(storyShotId))
+        .map((shot) => [shot.storyShotId as string, shot]))
+      const targetableSubmissionIds = new Set(submissions
+        .filter(({ itemId }) => {
+          const item = itemById.get(itemId)
+          const continuityShot = item ? continuityShotByStoryShotId.get(item.shotId) : undefined
+          return Boolean(workspaceProjectId && continuityShot && continuityShot.status !== 'blocked')
+        })
+        .map(({ itemId }) => itemId))
+      if (workspaceProjectId && targetableSubmissionIds.size) {
+        await flushWorkspaceModeDocument(workspaceDocumentId)
+      }
+      let candidateTargetCount = 0
       const job = await createVideoChainJob({
         projectId: workspaceProjectId ?? projectId ?? result.project.id,
         title: `${projectTitle ?? result.project.title} · 连续长片`,
-        shots: submissions.map(({ request }) => {
+        shots: submissions.map(({ itemId, request }) => {
+          const item = itemById.get(itemId)
+          const continuityShot = item ? continuityShotByStoryShotId.get(item.shotId) : undefined
+          const candidateTarget = workspaceProjectId && continuityShot && targetableSubmissionIds.has(itemId)
+            ? createLocalVideoCandidateTarget({
+                projectId: workspaceProjectId,
+                documentId: workspaceDocumentId,
+                production: result.production,
+                shotId: continuityShot.id,
+                executionItemId: itemId,
+              })
+            : undefined
           const {
             sourceImageDataUrl: _sourceImageDataUrl,
             lastFrameImageDataUrl: _lastFrameImageDataUrl,
+            candidateBinding: _candidateBinding,
             mode: _mode,
             duration: _duration,
             ...shot
           } = request
-          return { ...shot, mode: 'text-to-video' as const, duration: 5 as const }
+          if (candidateTarget) candidateTargetCount += 1
+          return {
+            ...shot,
+            executionItemId: itemId,
+            ...(candidateTarget ? { candidateTarget } : {}),
+            mode: 'text-to-video' as const,
+            duration: 5 as const,
+          }
         }),
         transitionSeconds: 0.24,
         width: 1280,
@@ -813,6 +868,9 @@ export function SmartVideoWorkbench({
       }, { priority: 35 })
       setJobs((existing) => upsertJob(existing, job))
       setSubmittedJobIds((existing) => existing.includes(job.id) ? existing : [...existing, job.id])
+      if (candidateTargetCount) {
+        setBridgeMessage(`${candidateTargetCount} 个连续长片子任务已绑定明确镜头；每镜完成后会独立入库并进入候选池。`)
+      }
     } catch (nextError) {
       setExecutionError(errorMessage(nextError))
     } finally {
@@ -1484,12 +1542,35 @@ export function SmartVideoWorkbench({
                 </div>
                 <div>
                   {submittedJobs.map((job) => (
-                    <article key={job.id}>
+                    <article key={job.id} className={job.videoChainManifest ? 'has-chain-manifest' : undefined}>
                       <span className={`is-${job.status}`}><i />{jobStatusLabel(job)}</span>
                       <code>{job.id}</code>
                       <p>{job.detail}</p>
                       <b>{job.progress}%</b>
                       {job.status === 'completed' && job.outputUrl ? <a href={job.outputUrl} target="_blank" rel="noreferrer">打开 MP4</a> : null}
+                      {job.videoChainManifest ? (
+                        <ol className="aq-video-chain-manifest" aria-label="连续长片逐镜执行清单">
+                          {job.videoChainManifest.shots.map((entry) => {
+                            const childJob = entry.childJobId ? jobById.get(entry.childJobId) : undefined
+                            const backfillLabel = entry.localCandidateBackfill?.status === 'ready'
+                              ? '候选已入库'
+                              : entry.localCandidateBackfill?.status === 'rejected'
+                                ? `候选回填拒绝 · ${entry.localCandidateBackfill.code}`
+                                : entry.candidateTarget
+                                  ? '已绑定候选目标'
+                                  : '仅生成成片镜头'
+                            return (
+                              <li key={`${entry.index}:${entry.executionItemId}`} className={`is-${entry.status}`}>
+                                <span><i />第 {entry.index + 1} 镜</span>
+                                <strong>{chainShotStatusLabel(entry.status)}</strong>
+                                <code title={entry.executionItemId}>{entry.executionItemId}</code>
+                                <small>{backfillLabel}</small>
+                                {childJob?.outputUrl ? <a href={childJob.outputUrl} target="_blank" rel="noreferrer">镜头 MP4</a> : null}
+                              </li>
+                            )
+                          })}
+                        </ol>
+                      ) : null}
                     </article>
                   ))}
                 </div>

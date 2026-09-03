@@ -253,8 +253,9 @@ async function main() {
     body: {
       projectId: workspaceProjectId,
       title: '雪夜问剑 · 30 秒 720P 成片',
-      shots: submissions.map(({ request }) => ({
+      shots: submissions.map(({ itemId, request }) => ({
         ...request,
+        executionItemId: itemId,
         duration: 5,
         mode: 'text-to-video',
       })),

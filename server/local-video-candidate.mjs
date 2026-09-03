@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises'
 import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
 import {
   assertLocalVideoCandidateJobBinding,
+  assertLocalVideoCandidateTarget,
   createReadyLocalVideoCandidateBackfill,
+  materializeLocalVideoCandidateJobBinding,
 } from '../src/lib/story/localVideoCandidate.mjs'
 
 function fail(code, message, status = 409, details = undefined) {
@@ -54,6 +56,24 @@ export function authoritativeLocalVideoCandidate(bindingInput, services, options
     fail('LOCAL_CANDIDATE_INPUT_STALE', '镜头输入已变化；旧任务不能回填当前候选')
   }
   return { stored, production, shot, binding }
+}
+
+export function authoritativeLocalVideoCandidateTarget(targetInput, services, options = {}) {
+  const target = assertLocalVideoCandidateTarget(targetInput)
+  const { stored, production } = candidateWorkspaceDocument(target, services.workspaceStore)
+  let binding
+  try {
+    binding = materializeLocalVideoCandidateJobBinding(target, {
+      production,
+      submissionId: options.submissionId || 'video-chain-target-validation',
+      requireTargetRevisions: options.requireProductionRevision !== false,
+    })
+  } catch (error) {
+    if (!error.status) error.status = error.code === 'LOCAL_CANDIDATE_SHOT_NOT_FOUND' ? 404 : 409
+    throw error
+  }
+  const shot = production.continuityGraph.shots.find(({ id }) => id === binding.shotId)
+  return { stored, production, shot, target, binding }
 }
 
 function validateExistingAsset(asset, expected) {

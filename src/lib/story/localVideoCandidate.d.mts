@@ -3,6 +3,7 @@ import type { VideoProductionProject } from './productionPipeline.mjs'
 
 export const LOCAL_VIDEO_CANDIDATE_BINDING_SCHEMA_VERSION: 1
 export const LOCAL_VIDEO_CANDIDATE_BACKFILL_SCHEMA_VERSION: 1
+export const LOCAL_VIDEO_CANDIDATE_TARGET_SCHEMA_VERSION: 1
 
 export type LocalVideoCandidateJobBinding = {
   schemaVersion: 1
@@ -18,6 +19,8 @@ export type LocalVideoCandidateJobBinding = {
   executionItemId: string
   submissionId: string
 }
+
+export type LocalVideoCandidateTarget = Omit<LocalVideoCandidateJobBinding, 'submissionId'>
 
 export type LocalVideoCandidateBackfill = {
   schemaVersion: 1
@@ -39,6 +42,31 @@ export class LocalVideoCandidateError extends Error {
 }
 
 export function assertLocalVideoCandidateJobBinding<T extends LocalVideoCandidateJobBinding>(binding: T): T
+export function assertLocalVideoCandidateTarget<T extends LocalVideoCandidateTarget>(target: T): T
+export function createLocalVideoCandidateTarget(input: {
+  projectId: string
+  documentId: string
+  production: VideoProductionProject
+  shotId: string
+  executionItemId: string
+}): LocalVideoCandidateTarget
+export function localVideoCandidateTargetFromBinding(binding: LocalVideoCandidateJobBinding): LocalVideoCandidateTarget
+export function localVideoCandidateTargetsEqual(
+  left: LocalVideoCandidateTarget,
+  right: LocalVideoCandidateTarget,
+): boolean
+export function localVideoCandidateTargetMatchesBinding(
+  target: LocalVideoCandidateTarget,
+  binding: LocalVideoCandidateJobBinding,
+): boolean
+export function materializeLocalVideoCandidateJobBinding(
+  target: LocalVideoCandidateTarget,
+  input: {
+    production: VideoProductionProject
+    submissionId: string
+    requireTargetRevisions?: boolean
+  },
+): LocalVideoCandidateJobBinding
 export function createLocalVideoCandidateJobBinding(input: {
   projectId: string
   documentId: string

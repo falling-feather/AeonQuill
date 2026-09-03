@@ -1655,6 +1655,90 @@
   text-decoration: underline;
 }
 
+.aq-video-chain-manifest {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  margin: 2px 0 0;
+  padding: 7px;
+  border: 1px solid rgba(92, 84, 196, 0.13);
+  border-radius: 7px;
+  background: rgba(92, 84, 196, 0.035);
+  list-style: none;
+}
+
+.aq-video-chain-manifest li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(110px, 1fr) minmax(105px, auto) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.aq-video-chain-manifest li > span,
+.aq-video-chain-manifest li > strong,
+.aq-video-chain-manifest li > small,
+.aq-video-chain-manifest li > a {
+  min-width: 0;
+  overflow: hidden;
+  color: #6b6f78;
+  font-size: 8px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-video-chain-manifest li > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aq-video-chain-manifest li > span i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #b3b5bd;
+}
+
+.aq-video-chain-manifest li.is-queued > span i {
+  background: #d99a2b;
+}
+
+.aq-video-chain-manifest li.is-completed > span i,
+.aq-video-chain-manifest li.is-reused > span i {
+  background: #2d9868;
+}
+
+.aq-video-chain-manifest li.is-failed > span i {
+  background: #c84b4b;
+}
+
+.aq-video-chain-manifest li.is-reused > strong {
+  color: #5751a8;
+}
+
+.aq-video-chain-manifest li.is-completed > strong {
+  color: #2d9868;
+}
+
+.aq-video-chain-manifest li.is-failed > strong {
+  color: #c84b4b;
+}
+
+.aq-video-chain-manifest li > code {
+  color: #78727d;
+}
+
+.aq-video-chain-manifest li > a {
+  color: #5751a8;
+  font-weight: 650;
+  text-decoration: none;
+}
+
 .is-spinning {
   animation: aq-video-spin 850ms linear infinite;
 }
@@ -2580,6 +2664,15 @@
   }
 
   .aq-video-submitted-ledger article p {
+    grid-column: 1 / -1;
+  }
+
+  .aq-video-chain-manifest li {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .aq-video-chain-manifest li > code,
+  .aq-video-chain-manifest li > small {
     grid-column: 1 / -1;
   }
 

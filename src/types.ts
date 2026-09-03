@@ -409,8 +409,10 @@ export type SoundRenderJobRequest = SoundRenderJobIdentity & (
 
 export type VideoChainShotRequest = Omit<
   VideoJobRequest,
-  'sourceImageDataUrl' | 'lastFrameImageDataUrl' | 'mode' | 'duration'
+  'sourceImageDataUrl' | 'lastFrameImageDataUrl' | 'mode' | 'duration' | 'candidateBinding'
 > & {
+  executionItemId: string
+  candidateTarget?: import('./lib/story/localVideoCandidate.mjs').LocalVideoCandidateTarget
   mode?: VideoGenerationMode
   duration?: 5
 }
@@ -677,6 +679,17 @@ export type ProcessingJob = {
   outputVersion?: ProcessingJobOutputVersion
   libraryAsset?: Record<string, unknown>
   localCandidateBackfill?: import('./lib/story/localVideoCandidate.mjs').LocalVideoCandidateBackfill
+  videoChainShot?: {
+    schemaVersion: 1
+    parentJobId: string
+    index: number
+    executionItemId: string
+    requestHash: string
+    candidateTarget: import('./lib/story/localVideoCandidate.mjs').LocalVideoCandidateTarget | null
+    predecessorJobId: string | null
+    predecessorOutputAssetId: string | null
+  }
+  videoChainManifest?: import('./lib/story/videoChainManifest.mjs').VideoChainManifest
   maskLibraryAsset?: Record<string, unknown>
   providerUsage?: {
     estimatedCostUsd: number
@@ -753,6 +766,7 @@ export type ProcessingJob = {
     soundRenderJobId?: string
   }
   childJobIds?: string[]
+  checkpointChildJobIds?: string[]
   activeChildJobId?: string
   finalCutJobId?: string
   delivery?: {

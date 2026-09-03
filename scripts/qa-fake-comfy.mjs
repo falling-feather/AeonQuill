@@ -23,7 +23,11 @@ async function bodyJson(request) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-export async function startFakeComfyRuntime({ objectInfo = defaultObjectInfo } = {}) {
+export async function startFakeComfyRuntime({
+  objectInfo = defaultObjectInfo,
+  output = { kind: 'image', filename: 'custom-result.png', mimeType: 'image/png', bytes: fakeComfyPng },
+  runtime = {},
+} = {}) {
   const prompts = new Map()
   const sockets = new Set()
   let promptSequence = 0
@@ -33,13 +37,13 @@ export async function startFakeComfyRuntime({ objectInfo = defaultObjectInfo } =
     if (request.method === 'GET' && url.pathname === '/system_stats') {
       return json(response, 200, {
         system: {
-          comfyui_version: '0.3.99',
-          python_version: '3.12.0',
-          pytorch_version: '2.9.0+cu130',
+          comfyui_version: runtime.comfyVersion || '0.30.2',
+          python_version: runtime.pythonVersion || '3.12.0',
+          pytorch_version: runtime.pytorchVersion || '2.9.0+cu130',
           ram_total: 32 * 1024 ** 3,
           ram_free: 24 * 1024 ** 3,
         },
-        devices: [{ name: 'Fake RTX 4060', vram_total: 8 * 1024 ** 3, vram_free: 7 * 1024 ** 3 }],
+        devices: [{ name: runtime.device || 'Fake RTX 4060', vram_total: 8 * 1024 ** 3, vram_free: 7 * 1024 ** 3 }],
       })
     }
     if (request.method === 'GET' && url.pathname === '/object_info') return json(response, 200, objectInfo)
@@ -68,7 +72,9 @@ export async function startFakeComfyRuntime({ objectInfo = defaultObjectInfo } =
       if (!record) return json(response, 200, {})
       const outputs = record.prompt.includes('missing-output')
         ? { 99: { images: [{ filename: 'wrong-node.png', subfolder: '', type: 'output' }] } }
-        : { 2: { images: [{ filename: 'custom-result.png', subfolder: '', type: 'output' }] } }
+        : output.kind === 'video'
+          ? { 99: { videos: [{ filename: output.filename, subfolder: '', type: 'output' }] } }
+          : { 2: { images: [{ filename: output.filename, subfolder: '', type: 'output' }] } }
       return json(response, 200, {
         [id]: {
           status: { completed: record.status === 'completed', messages: [] },
@@ -77,9 +83,15 @@ export async function startFakeComfyRuntime({ objectInfo = defaultObjectInfo } =
       })
     }
     if (request.method === 'GET' && url.pathname === '/view') {
-      response.writeHead(200, { 'content-type': 'image/png', 'content-length': fakeComfyPng.length })
-      response.end(fakeComfyPng)
+      response.writeHead(200, { 'content-type': output.mimeType, 'content-length': output.bytes.length })
+      response.end(output.bytes)
       return
+    }
+    if (request.method === 'POST' && url.pathname === '/upload/image') {
+      for await (const _chunk of request) {
+        // The fixture only needs to consume the bounded multipart body.
+      }
+      return json(response, 200, { name: 'fixture-upload.png', subfolder: '', type: 'input' })
     }
     if (request.method === 'POST' && url.pathname === '/interrupt') {
       interrupted += 1

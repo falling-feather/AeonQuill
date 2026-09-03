@@ -11,13 +11,20 @@ import {
 } from '../src/lib/story/productionPipeline.mjs'
 import {
   assertLocalVideoCandidateJobBinding,
+  assertLocalVideoCandidateTarget,
   createLocalVideoCandidateJobBinding,
+  createLocalVideoCandidateTarget,
+  localVideoCandidateTargetFromBinding,
+  localVideoCandidateTargetMatchesBinding,
+  localVideoCandidateTargetsEqual,
+  materializeLocalVideoCandidateJobBinding,
   reconcileLocalVideoCandidateJob,
   retargetLocalVideoCandidateSubmission,
 } from '../src/lib/story/localVideoCandidate.mjs'
 import { ProjectStore } from '../server/project-store.mjs'
 import {
   authoritativeLocalVideoCandidate,
+  authoritativeLocalVideoCandidateTarget,
   promoteLocalVideoCandidateOutput,
 } from '../server/local-video-candidate.mjs'
 
@@ -137,11 +144,30 @@ test('builds an exact local H3 candidate identity and rejects blocked or extende
   )
   const production = approveInputs(blocked)
   const binding = bindingFor(production)
+  const target = createLocalVideoCandidateTarget({
+    projectId: PROJECT_ID,
+    documentId: DOCUMENT_ID,
+    production,
+    shotId: production.continuityGraph.shots[0].id,
+    executionItemId: 'execution-item-001',
+  })
   assert.equal(binding.documentId, DOCUMENT_ID)
   assert.equal(binding.shotId, production.continuityGraph.shots[0].id)
   assert.equal(binding.inputFingerprint, production.continuityGraph.shots[0].inputFingerprint)
   assert.throws(
     () => assertLocalVideoCandidateJobBinding({ ...binding, title: '不得用标题猜测归属' }),
+    (error) => error.code === 'INVALID_LOCAL_CANDIDATE_FIELDS',
+  )
+  assert.equal(Object.hasOwn(target, 'submissionId'), false)
+  assert.deepEqual(localVideoCandidateTargetFromBinding(binding), target)
+  assert.equal(localVideoCandidateTargetsEqual(target, localVideoCandidateTargetFromBinding(binding)), true)
+  assert.equal(localVideoCandidateTargetMatchesBinding(target, binding), true)
+  assert.deepEqual(materializeLocalVideoCandidateJobBinding(target, {
+    production,
+    submissionId: binding.submissionId,
+  }), binding)
+  assert.throws(
+    () => assertLocalVideoCandidateTarget({ ...target, submissionId: binding.submissionId }),
     (error) => error.code === 'INVALID_LOCAL_CANDIDATE_FIELDS',
   )
 })
@@ -162,8 +188,13 @@ test('promotes immutable local MP4 candidates idempotently, reconciles retries, 
     ])
     await projectStore.open()
     const firstBinding = bindingFor(production)
+    const firstTarget = localVideoCandidateTargetFromBinding(firstBinding)
     const firstJob = jobFor('video-11111111-1111-4111-8111-111111111111', firstBinding)
     assert.equal(authoritativeLocalVideoCandidate(firstBinding, { workspaceStore }).shot.id, firstBinding.shotId)
+    assert.deepEqual(
+      authoritativeLocalVideoCandidateTarget(firstTarget, { workspaceStore }, { submissionId: firstBinding.submissionId }).binding,
+      firstBinding,
+    )
     const firstPromotion = await promoteLocalVideoCandidateOutput({
       job: firstJob,
       outputPath: outputOne,
@@ -193,6 +224,16 @@ test('promotes immutable local MP4 candidates idempotently, reconciles retries, 
     })
     assert.equal(firstReconciliation.status, 'ready')
     production = command(production, 'continuity.candidate.register', firstReconciliation.payload, 100)
+    const advancedBinding = authoritativeLocalVideoCandidateTarget(firstTarget, { workspaceStore }, {
+      requireProductionRevision: false,
+      submissionId: 'retry-target-11111111-1111-4111-8111-111111111111',
+    }).binding
+    assert.ok(advancedBinding.productionRevision > firstTarget.productionRevision)
+    assert.equal(localVideoCandidateTargetMatchesBinding(firstTarget, advancedBinding), true)
+    assert.throws(
+      () => authoritativeLocalVideoCandidateTarget(firstTarget, { workspaceStore }),
+      (error) => error.code === 'LOCAL_CANDIDATE_PRODUCTION_STALE',
+    )
     assert.equal(reconcileLocalVideoCandidateJob(production, completedFirst, {
       projectId: PROJECT_ID,
       documentId: DOCUMENT_ID,
