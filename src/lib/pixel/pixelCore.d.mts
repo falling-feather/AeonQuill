@@ -45,6 +45,29 @@ export type PixelLayerGroup = {
 
 export type PixelBlendMode = 'normal' | 'multiply' | 'screen' | 'add'
 
+export type PixelCollisionType = 'solid' | 'hitbox' | 'hurtbox' | 'interaction'
+
+export type PixelCollisionShape = {
+  id: string
+  name: string
+  type: PixelCollisionType
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type PixelTileRule = {
+  terrainId: string
+  bitmask: number
+}
+
+export type PixelFrameGameplay = {
+  anchor: { x: number; y: number }
+  collisions: PixelCollisionShape[]
+  tileRule: PixelTileRule | null
+}
+
 export type PixelLayer = {
   id: string
   name: string
@@ -59,6 +82,7 @@ export type PixelFrame = {
   id: string
   name: string
   durationMs: number
+  gameplay: PixelFrameGameplay
   cels: Record<string, Array<string | null>>
 }
 
@@ -82,7 +106,7 @@ export type PixelOnionSkin = {
 
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 3
+  schemaVersion: 4
   id: string
   name: string
   width: number
@@ -124,6 +148,10 @@ export type SpriteSheetCell = {
   durationMs: number
 }
 
+export type SpriteSheetFrame = SpriteSheetCell & {
+  gameplay: PixelFrameGameplay
+}
+
 export type SpriteSheetLayout = {
   width: number
   height: number
@@ -135,7 +163,7 @@ export type SpriteSheetLayout = {
 }
 
 export type SpriteSheetMetadata = {
-  schemaVersion: 3
+  schemaVersion: 4
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -145,7 +173,7 @@ export type SpriteSheetMetadata = {
   rows: number
   padding: number
   spacing: number
-  frames: SpriteSheetCell[]
+  frames: SpriteSheetFrame[]
   animations: Array<PixelAnimationTag & { frameIds: string[] }>
   layerGroups: PixelLayerGroup[]
   layers: PixelLayer[]
@@ -158,9 +186,11 @@ export class PixelContractError extends Error {
 }
 
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 3
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 4
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_BLEND_MODES: ReadonlyArray<PixelBlendMode>
+export const PIXEL_COLLISION_TYPES: ReadonlyArray<PixelCollisionType>
+export const PIXEL_TILE_NEIGHBORS: ReadonlyArray<Readonly<{ id: string; label: string; bit: number }>>
 export const PIXEL_LIMITS: Readonly<{
   maxWidth: number
   maxHeight: number
@@ -169,6 +199,7 @@ export const PIXEL_LIMITS: Readonly<{
   maxLayerGroups: number
   maxFrames: number
   maxAnimationTags: number
+  maxCollisionShapesPerFrame: number
   maxDocumentCells: number
   maxPixelsPerCommand: number
   maxBulkCellsPerCommand: number
@@ -177,6 +208,7 @@ export const PIXEL_LIMITS: Readonly<{
 
 export function assertPixelDocument(input: unknown): PixelDocument
 export function createBlankPixelArray(width: number, height: number): Array<string | null>
+export function createDefaultPixelFrameGameplay(width: number, height: number): PixelFrameGameplay
 export function createPixelDocument(input?: Partial<Omit<PixelDocument, 'kind' | 'schemaVersion'>>): PixelDocument
 export function migratePixelDocument(input: unknown): PixelDocument
 export function serializePixelDocument(document: PixelDocument, options?: { pretty?: boolean }): string

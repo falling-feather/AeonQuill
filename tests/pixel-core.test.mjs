@@ -220,17 +220,27 @@ test('switches and reorders layers and frames while keeping onion-skin settings 
   assert.deepEqual(onionRestored.document.onionSkin, original.onionSkin)
 })
 
-test('serializes schema v3 without loss and migrates v1/v2 plus the single-layer palette-index format', () => {
+test('serializes schema v4 without loss and migrates v1/v2/v3 plus the single-layer palette-index format', () => {
   const document = makeMultiLayerMultiFrameDocument()
   const serialized = serializePixelDocument(document)
   assert.equal(serializePixelDocument(deserializePixelDocument(serialized)), serialized)
 
-  const schemaTwo = structuredClone(document)
+  const schemaThree = structuredClone(document)
+  schemaThree.schemaVersion = 3
+  schemaThree.frames = schemaThree.frames.map(({ gameplay: _gameplay, ...frame }) => frame)
+  const migratedSchemaThree = migratePixelDocument(schemaThree)
+  assert.equal(migratedSchemaThree.schemaVersion, 4)
+  assert.deepEqual(migratedSchemaThree.frames.map((frame) => frame.gameplay), [
+    { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
+    { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
+  ])
+
+  const schemaTwo = structuredClone(schemaThree)
   schemaTwo.schemaVersion = 2
   delete schemaTwo.layerGroups
   schemaTwo.layers = schemaTwo.layers.map(({ groupId: _groupId, blendMode: _blendMode, ...layer }) => layer)
   const migratedSchemaTwo = migratePixelDocument(schemaTwo)
-  assert.equal(migratedSchemaTwo.schemaVersion, 3)
+  assert.equal(migratedSchemaTwo.schemaVersion, 4)
   assert.deepEqual(migratedSchemaTwo.layerGroups, [])
   assert.deepEqual(migratedSchemaTwo.layers.map((layer) => [layer.groupId, layer.blendMode]), [[null, 'normal'], [null, 'normal']])
 
@@ -238,7 +248,7 @@ test('serializes schema v3 without loss and migrates v1/v2 plus the single-layer
   schemaOne.schemaVersion = 1
   delete schemaOne.animationTags
   const migratedSchemaOne = migratePixelDocument(schemaOne)
-  assert.equal(migratedSchemaOne.schemaVersion, 3)
+  assert.equal(migratedSchemaOne.schemaVersion, 4)
   assert.deepEqual(migratedSchemaOne.animationTags, [])
 
   const migrated = migratePixelDocument({
@@ -251,10 +261,69 @@ test('serializes schema v3 without loss and migrates v1/v2 plus the single-layer
     pixels: ['1', '.', 2, 0],
     frameDurationMs: 90,
   })
-  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.schemaVersion, 4)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', null, 'color-2', null])
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
+  assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null })
+})
+
+test('frame gameplay metadata is strict, reversible, copied with frames and preserved in sprite metadata', () => {
+  let document = createPixelDocument({ width: 8, height: 6, palette })
+  assert.deepEqual(document.frames[0].gameplay, {
+    anchor: { x: 4, y: 6 },
+    collisions: [],
+    tileRule: null,
+  })
+
+  const gameplay = {
+    anchor: { x: 3, y: 5 },
+    collisions: [
+      { id: 'feet', name: 'Feet', type: 'solid', x: 2, y: 4, width: 4, height: 2 },
+      { id: 'sword', name: 'Sword', type: 'hitbox', x: 5, y: 1, width: 3, height: 2 },
+    ],
+    tileRule: { terrainId: 'grass', bitmask: 85 },
+  }
+  const patched = execute(document, 'frames.patch', { frameId: 'frame-1', patch: { gameplay } })
+  assert.deepEqual(patched.document.frames[0].gameplay, gameplay)
+  assert.deepEqual(
+    withoutRevision(applyPixelCommand(patched.document, patched.inverse).document),
+    withoutRevision(document),
+  )
+
+  const copied = execute(patched.document, 'frames.add', {
+    frame: { id: 'frame-copy', name: 'Copy', durationMs: 120 },
+    copyFromFrameId: 'frame-1',
+  })
+  assert.deepEqual(copied.document.frames[1].gameplay, gameplay)
+  assert.notEqual(copied.document.frames[1].gameplay, patched.document.frames[0].gameplay)
+
+  const blank = execute(copied.document, 'frames.add', {
+    frame: { id: 'frame-blank', name: 'Blank', durationMs: 120 },
+  })
+  assert.deepEqual(blank.document.frames[2].gameplay, {
+    anchor: { x: 4, y: 6 },
+    collisions: [],
+    tileRule: null,
+  })
+  const metadata = createSpriteSheetMetadata(blank.document, { columns: 2 })
+  assert.equal(metadata.schemaVersion, 4)
+  assert.deepEqual(metadata.frames[0].gameplay, gameplay)
+
+  const invalidCases = [
+    { ...gameplay, anchor: { x: 9, y: 5 } },
+    { ...gameplay, collisions: [...gameplay.collisions, { ...gameplay.collisions[0] }] },
+    { ...gameplay, collisions: [{ ...gameplay.collisions[0], type: 'circle' }] },
+    { ...gameplay, collisions: [{ ...gameplay.collisions[0], x: 7, width: 2 }] },
+    { ...gameplay, tileRule: { terrainId: 'grass', bitmask: 256 } },
+    { ...gameplay, hiddenPayload: true },
+  ]
+  for (const invalid of invalidCases) {
+    assert.throws(
+      () => execute(patched.document, 'frames.patch', { frameId: 'frame-1', patch: { gameplay: invalid } }),
+      (error) => error instanceof PixelContractError,
+    )
+  }
 })
 
 test('layer groups and blend modes are strict, reversible, and share one deterministic RGBA truth', () => {
@@ -444,6 +513,7 @@ test('produces bounded sprite-sheet layout, metadata and RGBA pixels in document
 
   const metadata = createSpriteSheetMetadata(document, { columns: 2, padding: 1, spacing: 1 })
   assert.equal(metadata.kind, 'aeonquill.sprite-sheet')
+  assert.equal(metadata.schemaVersion, 4)
   assert.deepEqual(metadata.frames.map((frame) => frame.durationMs), [120, 240, 360])
 
   const rendered = renderSpriteSheetRgba(document, { columns: 2, padding: 1, spacing: 1 })

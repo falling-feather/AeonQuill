@@ -1,4 +1,4 @@
-import type { PixelDocument } from './pixelCore.mjs'
+import type { PixelCollisionShape, PixelDocument, PixelTileRule } from './pixelCore.mjs'
 
 export type PixelDirectionId = 'south' | 'south-west' | 'west' | 'north-west' | 'north' | 'north-east' | 'east' | 'south-east'
 
@@ -7,7 +7,6 @@ export type PixelGameOptions = {
   padding?: number
   spacing?: number
   baseName?: string
-  anchor?: { x?: number; y?: number }
   directionFrameIds?: Partial<Record<PixelDirectionId, string>>
   mapWidth?: number
   mapHeight?: number
@@ -25,7 +24,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 3
+  schemaVersion: 4
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -40,6 +39,8 @@ export type PixelGameManifest = {
     durationMs: number
     atlas: { x: number; y: number; width: number; height: number }
     anchor: { x: number; y: number }
+    collisions: PixelCollisionShape[]
+    tileRule: PixelTileRule | null
   }>
   directions: Array<{ id: PixelDirectionId; label: string; frameId: string; frameIndex: number }>
   tilemap: {

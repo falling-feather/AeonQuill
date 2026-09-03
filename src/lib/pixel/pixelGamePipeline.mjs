@@ -57,7 +57,7 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
   const document = assertPixelDocument(documentInput)
   const options = assertRecord(optionsInput, 'options')
   assertKnownFields(options, new Set([
-    'columns', 'padding', 'spacing', 'baseName', 'anchor', 'directionFrameIds',
+    'columns', 'padding', 'spacing', 'baseName', 'directionFrameIds',
     'mapWidth', 'mapHeight', 'mapFrameIds', 'animationName', 'animationTagId',
   ]), 'options')
   const frameIds = new Set(document.frames.map((frame) => frame.id))
@@ -67,12 +67,6 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
   const spacing = assertInteger(options.spacing ?? 1, 'options.spacing', 0, 64)
   const mapWidth = assertInteger(options.mapWidth ?? fallbackMap.width, 'options.mapWidth', 1, 256)
   const mapHeight = assertInteger(options.mapHeight ?? fallbackMap.height, 'options.mapHeight', 1, 256)
-  const anchorInput = options.anchor === undefined ? {} : assertRecord(options.anchor, 'options.anchor')
-  assertKnownFields(anchorInput, new Set(['x', 'y']), 'options.anchor')
-  const anchor = {
-    x: assertInteger(anchorInput.x ?? Math.floor(document.width / 2), 'options.anchor.x', 0, document.width),
-    y: assertInteger(anchorInput.y ?? document.height, 'options.anchor.y', 0, document.height),
-  }
   const directionInput = options.directionFrameIds === undefined
     ? {}
     : assertRecord(options.directionFrameIds, 'options.directionFrameIds')
@@ -107,7 +101,6 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
     padding,
     spacing,
     baseName: safePixelFilename(options.baseName ?? document.name),
-    anchor,
     directionFrameIds,
     mapWidth,
     mapHeight,
@@ -133,7 +126,9 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
       name: frame.name,
       durationMs: frame.durationMs,
       atlas: { x: cell.x, y: cell.y, width: cell.width, height: cell.height },
-      anchor: { ...options.anchor },
+      anchor: { ...frame.gameplay.anchor },
+      collisions: frame.gameplay.collisions.map((collision) => ({ ...collision })),
+      tileRule: frame.gameplay.tileRule ? { ...frame.gameplay.tileRule } : null,
     }
   })
   const directions = PIXEL_DIRECTIONS.map((direction) => {
@@ -156,7 +151,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     : null
   const tileIds = new Map(layout.cells.map((cell) => [cell.frameId, cell.index + 1]))
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: 'aeonquill.pixel-game-bundle',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -195,6 +190,10 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
 }
 
 function createTiledTileset(manifest, baseName) {
+  const terrainIds = [...new Set(manifest.frames
+    .map((frame) => frame.tileRule?.terrainId)
+    .filter(Boolean))]
+  const wangBits = [1, 2, 4, 8, 16, 32, 64, 128]
   return {
     columns: manifest.atlas.columns,
     image: manifest.image,
@@ -216,7 +215,55 @@ function createTiledTileset(manifest, baseName) {
         { name: 'anchorX', type: 'int', value: frame.anchor.x },
         { name: 'anchorY', type: 'int', value: frame.anchor.y },
         { name: 'durationMs', type: 'int', value: frame.durationMs },
+        ...(frame.tileRule ? [
+          { name: 'terrainId', type: 'string', value: frame.tileRule.terrainId },
+          { name: 'terrainBitmask', type: 'int', value: frame.tileRule.bitmask },
+        ] : []),
       ],
+      ...(frame.collisions.length > 0 ? {
+        objectgroup: {
+          draworder: 'index',
+          id: index + 1,
+          name: `${frame.name} Collisions`,
+          objects: frame.collisions.map((collision, collisionIndex) => ({
+            class: collision.type,
+            height: collision.height,
+            id: collisionIndex + 1,
+            name: collision.name,
+            rotation: 0,
+            type: collision.type,
+            visible: true,
+            width: collision.width,
+            x: collision.x,
+            y: collision.y,
+            properties: [{ name: 'aeonquillId', type: 'string', value: collision.id }],
+          })),
+          opacity: 1,
+          type: 'objectgroup',
+          visible: true,
+          x: 0,
+          y: 0,
+        },
+      } : {}),
+    })),
+    wangsets: terrainIds.map((terrainId) => ({
+      name: terrainId,
+      tile: -1,
+      type: 'mixed',
+      colors: [{
+        color: '#8A71FF',
+        name: terrainId,
+        probability: 1,
+        tile: -1,
+      }],
+      wangtiles: manifest.frames.flatMap((frame, tileid) => (
+        frame.tileRule?.terrainId === terrainId
+          ? [{
+              tileid,
+              wangid: wangBits.map((bit) => (frame.tileRule.bitmask & bit) === bit ? 1 : 0),
+            }]
+          : []
+      )),
     })),
   }
 }
@@ -263,7 +310,28 @@ function createViewerHtml(manifest) {
 <title>AEONQUILL Pixel Game Preview</title><style>
 html{color-scheme:dark;font-family:system-ui,sans-serif;background:#101216;color:#f7f8fb}body{margin:0;padding:24px;display:grid;gap:20px}header{display:flex;justify-content:space-between;align-items:end}h1{font-size:22px;margin:0}small{color:#a1abff}main{display:grid;grid-template-columns:minmax(280px,1fr) minmax(240px,360px);gap:20px}.panel{background:#171a22;border:1px solid #333849;padding:16px}canvas{width:100%;image-rendering:pixelated;background:repeating-conic-gradient(#252936 0 25%,#1d202a 0 50%) 0/24px 24px}button{background:#6d7dff;color:#fff;border:0;padding:9px 12px;cursor:pointer}.directions{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.directions button{background:#2b3040}.meta{font:12px ui-monospace,monospace;color:#c8ccef;white-space:pre-wrap}@media(max-width:720px){main{grid-template-columns:1fr}}
 </style></head><body><header><div><small>AEONQUILL / PIXEL</small><h1>游戏资产交付预览</h1></div><button id="play">暂停动画</button></header><main><section class="panel"><canvas id="view"></canvas></section><aside class="panel"><div class="directions" id="directions"></div><p class="meta" id="meta"></p></aside></main>
-<script>const manifest=${data};const image=new Image();image.src=manifest.image;const canvas=document.querySelector('#view');const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;canvas.width=manifest.canvas.width;canvas.height=manifest.canvas.height;let playing=true,index=0,timer=0,last=0,manual=null;const frames=new Map(manifest.frames.map(f=>[f.id,f]));function draw(frame){ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,frame.atlas.x,frame.atlas.y,frame.atlas.width,frame.atlas.height,0,0,canvas.width,canvas.height);document.querySelector('#meta').textContent=frame.name+' · '+frame.durationMs+'ms\\n锚点 '+frame.anchor.x+','+frame.anchor.y+'\\n图块 '+manifest.tilemap.width+'×'+manifest.tilemap.height;}function loop(now){const seq=manifest.animation.frames;if(image.complete&&seq.length){const ref=manual?frames.get(manual):frames.get(seq[index].id);draw(ref);if(playing&&!manual&&now-last>=seq[index].durationMs){last=now;index=(index+1)%seq.length;}}requestAnimationFrame(loop)}document.querySelector('#play').onclick=e=>{playing=!playing;manual=null;e.target.textContent=playing?'暂停动画':'播放动画'};const list=document.querySelector('#directions');manifest.directions.forEach(d=>{const b=document.createElement('button');b.textContent=d.label;b.onclick=()=>{manual=d.frameId;playing=false;document.querySelector('#play').textContent='播放动画'};list.append(b)});image.onload=()=>requestAnimationFrame(loop);</script></body></html>`
+<script>
+const manifest=${data};
+const image=new Image();image.src=manifest.image;
+const canvas=document.querySelector('#view');const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;
+canvas.width=manifest.canvas.width;canvas.height=manifest.canvas.height;
+let playing=true,index=0,last=0,manual=null;
+const frames=new Map(manifest.frames.map(f=>[f.id,f]));
+const collisionColors={solid:'#FFB020',hitbox:'#FF4D6D',hurtbox:'#4CC9F0',interaction:'#6EE7B7'};
+function draw(frame){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(image,frame.atlas.x,frame.atlas.y,frame.atlas.width,frame.atlas.height,0,0,canvas.width,canvas.height);
+  frame.collisions.forEach(shape=>{ctx.strokeStyle=collisionColors[shape.type]||'#FFFFFF';ctx.lineWidth=.6;ctx.strokeRect(shape.x+.3,shape.y+.3,Math.max(.4,shape.width-.6),Math.max(.4,shape.height-.6));});
+  const ax=Math.min(canvas.width-.25,Math.max(.25,frame.anchor.x));const ay=Math.min(canvas.height-.25,Math.max(.25,frame.anchor.y));
+  ctx.strokeStyle='#B596FF';ctx.lineWidth=.5;ctx.beginPath();ctx.moveTo(Math.max(0,ax-1.5),ay);ctx.lineTo(Math.min(canvas.width,ax+1.5),ay);ctx.moveTo(ax,Math.max(0,ay-1.5));ctx.lineTo(ax,Math.min(canvas.height,ay+1.5));ctx.stroke();
+  const tile=frame.tileRule?'\\nTerrain '+frame.tileRule.terrainId+' · mask '+frame.tileRule.bitmask:'\\nTerrain 未设置';
+  document.querySelector('#meta').textContent=frame.name+' · '+frame.durationMs+'ms\\n锚点 '+frame.anchor.x+','+frame.anchor.y+'\\n碰撞区 '+frame.collisions.length+tile+'\\n图块 '+manifest.tilemap.width+'×'+manifest.tilemap.height;
+}
+function loop(now){const seq=manifest.animation.frames;if(image.complete&&seq.length){const ref=manual?frames.get(manual):frames.get(seq[index].id);draw(ref);if(playing&&!manual&&now-last>=seq[index].durationMs){last=now;index=(index+1)%seq.length;}}requestAnimationFrame(loop)}
+document.querySelector('#play').onclick=e=>{playing=!playing;manual=null;e.target.textContent=playing?'暂停动画':'播放动画'};
+const list=document.querySelector('#directions');manifest.directions.forEach(d=>{const b=document.createElement('button');b.textContent=d.label;b.onclick=()=>{manual=d.frameId;playing=false;document.querySelector('#play').textContent='播放动画'};list.append(b)});
+image.onload=()=>requestAnimationFrame(loop);
+</script></body></html>`
 }
 
 export function createPixelGameExportBundle(documentInput, optionsInput = {}) {

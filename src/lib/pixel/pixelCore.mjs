@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 3
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 4
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -10,6 +10,7 @@ export const PIXEL_LIMITS = Object.freeze({
   maxLayerGroups: 32,
   maxFrames: 256,
   maxAnimationTags: 64,
+  maxCollisionShapesPerFrame: 8,
   maxDocumentCells: 16_777_216,
   maxPixelsPerCommand: 65_536,
   maxBulkCellsPerCommand: 1_048_576,
@@ -36,7 +37,11 @@ const DOCUMENT_FIELDS = new Set([
 const PALETTE_FIELDS = new Set(['id', 'name', 'color'])
 const LAYER_GROUP_FIELDS = new Set(['id', 'name', 'visible', 'locked'])
 const LAYER_FIELDS = new Set(['id', 'name', 'visible', 'locked', 'opacity', 'groupId', 'blendMode'])
-const FRAME_FIELDS = new Set(['id', 'name', 'durationMs', 'cels'])
+const FRAME_FIELDS = new Set(['id', 'name', 'durationMs', 'cels', 'gameplay'])
+const FRAME_GAMEPLAY_FIELDS = new Set(['anchor', 'collisions', 'tileRule'])
+const ANCHOR_FIELDS = new Set(['x', 'y'])
+const COLLISION_FIELDS = new Set(['id', 'name', 'type', 'x', 'y', 'width', 'height'])
+const TILE_RULE_FIELDS = new Set(['terrainId', 'bitmask'])
 const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
 const COMMAND_FIELDS = new Set(['schemaVersion', 'id', 'actor', 'type', 'baseRevision', 'payload'])
@@ -85,6 +90,18 @@ const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{8}$/
 const ANIMATION_DIRECTIONS = new Set(['forward', 'reverse', 'ping-pong'])
 export const PIXEL_BLEND_MODES = Object.freeze(['normal', 'multiply', 'screen', 'add'])
 const PIXEL_BLEND_MODE_SET = new Set(PIXEL_BLEND_MODES)
+export const PIXEL_COLLISION_TYPES = Object.freeze(['solid', 'hitbox', 'hurtbox', 'interaction'])
+const PIXEL_COLLISION_TYPE_SET = new Set(PIXEL_COLLISION_TYPES)
+export const PIXEL_TILE_NEIGHBORS = Object.freeze([
+  Object.freeze({ id: 'north', label: '北', bit: 1 }),
+  Object.freeze({ id: 'north-east', label: '东北', bit: 2 }),
+  Object.freeze({ id: 'east', label: '东', bit: 4 }),
+  Object.freeze({ id: 'south-east', label: '东南', bit: 8 }),
+  Object.freeze({ id: 'south', label: '南', bit: 16 }),
+  Object.freeze({ id: 'south-west', label: '西南', bit: 32 }),
+  Object.freeze({ id: 'west', label: '西', bit: 64 }),
+  Object.freeze({ id: 'north-west', label: '西北', bit: 128 }),
+])
 
 const DEFAULT_PALETTE = Object.freeze([
   Object.freeze({ id: 'ink', name: 'Ink', color: '#171821FF' }),
@@ -223,6 +240,52 @@ function assertLayer(input, path, groupIds) {
   return layer
 }
 
+export function createDefaultPixelFrameGameplay(width, height) {
+  assertInteger(width, 'width', { min: 1, max: PIXEL_LIMITS.maxWidth })
+  assertInteger(height, 'height', { min: 1, max: PIXEL_LIMITS.maxHeight })
+  return {
+    anchor: { x: Math.floor(width / 2), y: height },
+    collisions: [],
+    tileRule: null,
+  }
+}
+
+function assertFrameGameplay(input, path, documentWidth, documentHeight) {
+  const gameplay = assertRecord(input, path)
+  assertKnownFields(gameplay, FRAME_GAMEPLAY_FIELDS, path)
+  const anchor = assertRecord(gameplay.anchor, `${path}.anchor`)
+  assertKnownFields(anchor, ANCHOR_FIELDS, `${path}.anchor`)
+  assertInteger(anchor.x, `${path}.anchor.x`, { min: 0, max: documentWidth })
+  assertInteger(anchor.y, `${path}.anchor.y`, { min: 0, max: documentHeight })
+
+  if (!Array.isArray(gameplay.collisions) || gameplay.collisions.length > PIXEL_LIMITS.maxCollisionShapesPerFrame) {
+    fail('INVALID_COLLISIONS', `${path}.collisions must contain 0-${PIXEL_LIMITS.maxCollisionShapesPerFrame} shapes`)
+  }
+  gameplay.collisions.forEach((collisionInput, index) => {
+    const collisionPath = `${path}.collisions[${index}]`
+    const collision = assertRecord(collisionInput, collisionPath)
+    assertKnownFields(collision, COLLISION_FIELDS, collisionPath)
+    assertId(collision.id, `${collisionPath}.id`)
+    assertString(collision.name, `${collisionPath}.name`, { min: 1, max: 48 })
+    if (!PIXEL_COLLISION_TYPE_SET.has(collision.type)) {
+      fail('INVALID_COLLISION_TYPE', `${collisionPath}.type is unsupported`, { type: collision.type })
+    }
+    const x = assertInteger(collision.x, `${collisionPath}.x`, { min: 0, max: documentWidth - 1 })
+    const y = assertInteger(collision.y, `${collisionPath}.y`, { min: 0, max: documentHeight - 1 })
+    assertInteger(collision.width, `${collisionPath}.width`, { min: 1, max: documentWidth - x })
+    assertInteger(collision.height, `${collisionPath}.height`, { min: 1, max: documentHeight - y })
+  })
+  assertUniqueIds(gameplay.collisions, `${path}.collisions`)
+
+  if (gameplay.tileRule !== null) {
+    const tileRule = assertRecord(gameplay.tileRule, `${path}.tileRule`)
+    assertKnownFields(tileRule, TILE_RULE_FIELDS, `${path}.tileRule`)
+    assertId(tileRule.terrainId, `${path}.tileRule.terrainId`)
+    assertInteger(tileRule.bitmask, `${path}.tileRule.bitmask`, { min: 0, max: 255 })
+  }
+  return gameplay
+}
+
 function assertAnimationTag(input, path, frameIds, frameOrder) {
   const tag = assertRecord(input, path)
   assertKnownFields(tag, ANIMATION_TAG_FIELDS, path)
@@ -318,6 +381,7 @@ export function assertPixelDocument(input) {
     assertId(frame.id, `${path}.id`)
     assertString(frame.name, `${path}.name`, { min: 1, max: 80 })
     assertInteger(frame.durationMs, `${path}.durationMs`, { min: 20, max: 60_000 })
+    assertFrameGameplay(frame.gameplay, `${path}.gameplay`, document.width, document.height)
     const cels = assertRecord(frame.cels, `${path}.cels`)
     for (const key of Object.keys(cels)) {
       if (!layerIds.has(key)) fail('UNKNOWN_LAYER', `${path}.cels.${key} references an unknown layer`, { layerId: key })
@@ -376,7 +440,7 @@ export function createPixelDocument(input = {}) {
       groupId: layer.groupId ?? null,
       blendMode: layer.blendMode ?? 'normal',
     }))
-  const frames = options.frames === undefined
+  const frameInputs = options.frames === undefined
     ? [{
         id: 'frame-1',
         name: 'Frame 1',
@@ -384,6 +448,10 @@ export function createPixelDocument(input = {}) {
         cels: Object.fromEntries(layers.map((layer) => [layer.id, createBlankPixelArray(width, height)])),
       }]
     : options.frames
+  const frames = frameInputs.map((frame) => ({
+    ...frame,
+    gameplay: frame.gameplay ?? createDefaultPixelFrameGameplay(width, height),
+  }))
   const document = {
     kind: PIXEL_DOCUMENT_KIND,
     schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
@@ -469,6 +537,20 @@ export function migratePixelDocument(input) {
     assertPixelDocument(input)
     return cloneJson(input)
   }
+  if (isRecord(input) && input.schemaVersion === 3) {
+    const legacy = assertRecord(input, 'schemaThreeDocument')
+    assertKnownFields(legacy, DOCUMENT_FIELDS, 'schemaThreeDocument')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      frames: legacy.frames.map((frame) => ({
+        ...frame,
+        gameplay: createDefaultPixelFrameGameplay(legacy.width, legacy.height),
+      })),
+    }
+    assertPixelDocument(migrated)
+    return migrated
+  }
   if (isRecord(input) && input.schemaVersion === 2) {
     const legacy = assertRecord(input, 'schemaTwoDocument')
     const schemaTwoFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'layerGroups'))
@@ -478,6 +560,10 @@ export function migratePixelDocument(input) {
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
       layerGroups: [],
       layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
+      frames: legacy.frames.map((frame) => ({
+        ...frame,
+        gameplay: createDefaultPixelFrameGameplay(legacy.width, legacy.height),
+      })),
     }
     assertPixelDocument(migrated)
     return migrated
@@ -491,6 +577,10 @@ export function migratePixelDocument(input) {
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
       layerGroups: [],
       layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
+      frames: legacy.frames.map((frame) => ({
+        ...frame,
+        gameplay: createDefaultPixelFrameGameplay(legacy.width, legacy.height),
+      })),
       animationTags: [],
     }
     assertPixelDocument(migrated)
@@ -768,10 +858,13 @@ export function assertPixelCommand(input, documentInput) {
     case 'frames.add': {
       assertKnownFields(payload, new Set(['frame', 'index', 'copyFromFrameId']), 'command.payload')
       const frame = assertRecord(payload.frame, 'command.payload.frame')
-      assertKnownFields(frame, new Set(['id', 'name', 'durationMs']), 'command.payload.frame')
+      assertKnownFields(frame, new Set(['id', 'name', 'durationMs', 'gameplay']), 'command.payload.frame')
       assertId(frame.id, 'command.payload.frame.id')
       assertString(frame.name, 'command.payload.frame.name', { min: 1, max: 80 })
       assertInteger(frame.durationMs, 'command.payload.frame.durationMs', { min: 20, max: 60_000 })
+      if (frame.gameplay !== undefined) {
+        assertFrameGameplay(frame.gameplay, 'command.payload.frame.gameplay', document.width, document.height)
+      }
       if (document.frames.some((item) => item.id === frame.id)) fail('DUPLICATE_ID', `Frame ${frame.id} already exists`)
       if (document.frames.length >= PIXEL_LIMITS.maxFrames) fail('LIMIT_EXCEEDED', 'Maximum frame count reached')
       if (payload.index !== undefined) assertIndex(payload.index, 'command.payload.index', document.frames.length)
@@ -811,10 +904,13 @@ export function assertPixelCommand(input, documentInput) {
       assertId(payload.frameId, 'command.payload.frameId')
       if (!document.frames.some((frame) => frame.id === payload.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${payload.frameId}`)
       const patch = assertRecord(payload.patch, 'command.payload.patch')
-      assertKnownFields(patch, new Set(['name', 'durationMs']), 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name', 'durationMs', 'gameplay']), 'command.payload.patch')
       if (Object.keys(patch).length === 0) fail('EMPTY_PATCH', 'Frame patch must change at least one field')
       if (patch.name !== undefined) assertString(patch.name, 'command.payload.patch.name', { min: 1, max: 80 })
       if (patch.durationMs !== undefined) assertInteger(patch.durationMs, 'command.payload.patch.durationMs', { min: 20, max: 60_000 })
+      if (patch.gameplay !== undefined) {
+        assertFrameGameplay(patch.gameplay, 'command.payload.patch.gameplay', document.width, document.height)
+      }
       break
     }
     case 'frames.duration.set': {
@@ -1121,7 +1217,9 @@ export function applyPixelCommand(documentInput, commandInput) {
         layer.id,
         source ? cloneJson(source.cels[layer.id]) : createBlankPixelArray(next.width, next.height),
       ]))
-      next.frames.splice(index, 0, { ...cloneJson(payload.frame), cels })
+      const gameplay = payload.frame.gameplay
+        ?? (source ? source.gameplay : createDefaultPixelFrameGameplay(next.width, next.height))
+      next.frames.splice(index, 0, { ...cloneJson(payload.frame), gameplay: cloneJson(gameplay), cels })
       next.activeFrameId = payload.frame.id
       inverseType = 'frames.remove'
       inversePayload = { frameId: payload.frame.id }
@@ -1360,7 +1458,7 @@ export function createSpriteSheetMetadata(documentInput, options = {}) {
 function createSpriteSheetMetadataFromLayout(document, layout) {
   const animationSequences = new Map(document.animationTags.map((tag) => [tag.id, resolveAnimationTagFrames(document, tag)]))
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: 'aeonquill.sprite-sheet',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -1370,7 +1468,10 @@ function createSpriteSheetMetadataFromLayout(document, layout) {
     rows: layout.rows,
     padding: layout.padding,
     spacing: layout.spacing,
-    frames: layout.cells.map((cell) => ({ ...cell })),
+    frames: layout.cells.map((cell) => ({
+      ...cell,
+      gameplay: cloneJson(document.frames.find((frame) => frame.id === cell.frameId).gameplay),
+    })),
     animations: document.animationTags.map((tag) => ({
       ...cloneJson(tag),
       frameIds: animationSequences.get(tag.id),

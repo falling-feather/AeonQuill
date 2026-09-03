@@ -43,7 +43,7 @@ test('fixed RGBA conversion is deterministic and matches the checked contract ha
   const second = convertRgbaToPixelDocument(fixedRgba, options)
   assert.deepEqual(first, second)
   const digest = createHash('sha256').update(serializePixelDocument(first.document)).digest('hex')
-  assert.equal(digest, '30c530ec4bcaf46fc9494faec723781285484c5566da20f68d69d5c33b815e7d')
+  assert.equal(digest, 'cefe3e99e8dd01c49e14ed6c15ea6b320e9d28f22154a38f8a61e79969d0d0de')
   assert.deepEqual(first.report, {
     sourceWidth: 4,
     sourceHeight: 4,
@@ -220,8 +220,9 @@ test('project JSON round-trip is semantically exact and schema v0 migrates expli
     pixels: [1, 2],
     frameDurationMs: 90,
   }))
-  assert.equal(migrated.schemaVersion, 3)
+  assert.equal(migrated.schemaVersion, 4)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', 'color-2'])
+  assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 1 }, collisions: [], tileRule: null })
 })
 
 test('fixed browser project sample passes strict schema validation without embedded binary data', () => {
@@ -258,12 +259,20 @@ test('export bundle shares one sprite layout fact across PNG pixels and metadata
   assert.equal(bundle.frame.mime, PIXEL_PNG_MIME)
   assert.equal(bundle.sprite.mime, PIXEL_PNG_MIME)
   assert.equal(bundle.metadata.mime, PIXEL_METADATA_MIME)
-  assert.deepEqual(bundle.layout.cells, bundle.metadata.value.frames)
+  assert.deepEqual(
+    bundle.layout.cells,
+    bundle.metadata.value.frames.map(({ gameplay: _gameplay, ...frame }) => frame),
+  )
   assert.deepEqual(JSON.parse(bundle.metadata.text), bundle.metadata.value)
   assert.equal(bundle.sprite.width, bundle.layout.width)
   assert.equal(bundle.sprite.height, bundle.layout.height)
   assert.equal(bundle.sprite.pixels.length, bundle.layout.width * bundle.layout.height * 4)
   assert.deepEqual(bundle.metadata.value.frames.map((frame) => frame.frameId), ['idle', 'blink', 'turn'])
   assert.deepEqual(bundle.metadata.value.frames.map((frame) => frame.durationMs), [80, 130, 210])
+  assert.deepEqual(bundle.metadata.value.frames.map((frame) => frame.gameplay.anchor), [
+    { x: 1, y: 1 },
+    { x: 1, y: 1 },
+    { x: 1, y: 1 },
+  ])
   assert.equal(pixelDocumentsSemanticallyEqual(document, deserializePixelProject(bundle.project.text)), true)
 })

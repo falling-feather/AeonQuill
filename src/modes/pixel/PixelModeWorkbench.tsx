@@ -6,6 +6,7 @@ import {
   ArrowLeft as ArrowLeftSmall,
   Copy,
   Compass,
+  Crosshair,
   Download,
   Eraser,
   Eye,
@@ -50,11 +51,14 @@ import {
 import {
   PixelContractError,
   PIXEL_BLEND_MODES,
+  PIXEL_COLLISION_TYPES,
   PIXEL_PROJECT_EXTENSION,
   PIXEL_PROJECT_MIME,
+  PIXEL_TILE_NEIGHBORS,
   applyPixelCommand,
   convertRgbaToPixelDocument,
   createBlankPixelArray,
+  createDefaultPixelFrameGameplay,
   createPixelExportBundle,
   createPixelGameExportBundle,
   createPixelCommand,
@@ -76,10 +80,13 @@ import {
   type PixelCommandType,
   type PixelAnimationDirection,
   type PixelBlendMode,
+  type PixelCollisionShape,
+  type PixelCollisionType,
   type PixelConversionReport,
   type PixelDitherMode,
   type PixelDocument,
   type PixelFitMode,
+  type PixelFrameGameplay,
   type PixelPoint,
   type PixelRect,
   type RgbaImage,
@@ -104,6 +111,26 @@ const PIXEL_BLEND_LABELS: Record<PixelBlendMode, string> = {
   screen: '滤色',
   add: '线性加亮',
 }
+
+const PIXEL_COLLISION_LABELS: Record<PixelCollisionType, string> = {
+  solid: '实体',
+  hitbox: '攻击区',
+  hurtbox: '受击区',
+  interaction: '交互区',
+}
+
+const PIXEL_COLLISION_COLORS: Record<PixelCollisionType, string> = {
+  solid: '#FFB020',
+  hitbox: '#FF4D6D',
+  hurtbox: '#4CC9F0',
+  interaction: '#32B884',
+}
+
+const PIXEL_TILE_GRID = [
+  'north-west', 'north', 'north-east',
+  'west', 'center', 'east',
+  'south-west', 'south', 'south-east',
+] as const
 
 type HistoryState = {
   document: PixelDocument
@@ -195,6 +222,7 @@ export function createDefaultPixelProject(input: { id?: string; name?: string } 
       id: `frame-${frameIndex + 1}`,
       name: `姿态 ${frameIndex + 1}`,
       durationMs: 140,
+      gameplay: createDefaultPixelFrameGameplay(16, 16),
       cels: { silhouette, light },
     }
   })
@@ -294,6 +322,7 @@ export function PixelModeWorkbench({
   const [mirrorHorizontal, setMirrorHorizontal] = useState(false)
   const [mirrorVertical, setMirrorVertical] = useState(false)
   const [gridVisible, setGridVisible] = useState(true)
+  const [gameOverlayVisible, setGameOverlayVisible] = useState(true)
   const [zoom, setZoom] = useState(1)
   const [selection, setSelection] = useState<PixelRect | null>(null)
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
@@ -411,6 +440,50 @@ export function PixelModeWorkbench({
     dragContextRef.current = null
     setStatus(message)
   }, [replaceHistory, stopPlayback])
+
+  const patchActiveFrameGameplay = useCallback((
+    mutate: (gameplay: PixelFrameGameplay) => void,
+    successMessage: string,
+  ) => {
+    const current = historyRef.current.document
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    if (!frame) {
+      setStatus('当前帧不可用')
+      return false
+    }
+    const gameplay = structuredClone(frame.gameplay)
+    mutate(gameplay)
+    const succeeded = apply('frames.patch', { frameId: frame.id, patch: { gameplay } })
+    if (succeeded) setStatus(successMessage)
+    return succeeded
+  }, [apply])
+
+  const patchActiveCollision = useCallback((collisionId: string, patch: Partial<PixelCollisionShape>) => (
+    patchActiveFrameGameplay((gameplay) => {
+      const collision = gameplay.collisions.find((item) => item.id === collisionId)
+      if (collision) Object.assign(collision, patch)
+    }, '碰撞区已更新 · 可撤销')
+  ), [patchActiveFrameGameplay])
+
+  const addActiveCollision = useCallback(() => {
+    const current = historyRef.current.document
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    if (!frame) return
+    const width = Math.min(4, current.width)
+    const height = Math.min(4, current.height)
+    const id = uniqueId('collision', frame.gameplay.collisions.map((collision) => collision.id), current.revision)
+    patchActiveFrameGameplay((gameplay) => {
+      gameplay.collisions.push({
+        id,
+        name: `碰撞区 ${gameplay.collisions.length + 1}`,
+        type: 'solid',
+        x: Math.max(0, Math.floor((current.width - width) / 2)),
+        y: Math.max(0, current.height - height),
+        width,
+        height,
+      })
+    }, '已添加逐帧碰撞区 · 可撤销')
+  }, [patchActiveFrameGameplay])
 
   const loadImageSource = useCallback(async (file: File) => {
     setIsImporting(true)
@@ -574,7 +647,36 @@ export function PixelModeWorkbench({
       document.width,
       document.height,
     )
-  }, [displayedFrameId, document, isPlaying, strokePreviewRevision])
+    if (gameOverlayVisible) {
+      const frame = document.frames.find((item) => item.id === displayedFrameId)
+      if (frame) {
+        context.save()
+        for (const collision of frame.gameplay.collisions) {
+          context.fillStyle = `${PIXEL_COLLISION_COLORS[collision.type]}33`
+          context.strokeStyle = PIXEL_COLLISION_COLORS[collision.type]
+          context.lineWidth = 0.5
+          context.fillRect(collision.x, collision.y, collision.width, collision.height)
+          context.strokeRect(
+            collision.x + 0.25,
+            collision.y + 0.25,
+            Math.max(0.5, collision.width - 0.5),
+            Math.max(0.5, collision.height - 0.5),
+          )
+        }
+        const anchorX = Math.min(document.width - 0.25, Math.max(0.25, frame.gameplay.anchor.x))
+        const anchorY = Math.min(document.height - 0.25, Math.max(0.25, frame.gameplay.anchor.y))
+        context.strokeStyle = '#9A7BFF'
+        context.lineWidth = 0.55
+        context.beginPath()
+        context.moveTo(Math.max(0, anchorX - 1.75), anchorY)
+        context.lineTo(Math.min(document.width, anchorX + 1.75), anchorY)
+        context.moveTo(anchorX, Math.max(0, anchorY - 1.75))
+        context.lineTo(anchorX, Math.min(document.height, anchorY + 1.75))
+        context.stroke()
+        context.restore()
+      }
+    }
+  }, [displayedFrameId, document, gameOverlayVisible, isPlaying, strokePreviewRevision])
 
   const pixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget
@@ -884,6 +986,7 @@ export function PixelModeWorkbench({
   const selectedLayerGroup = selectedLayer.groupId === null
     ? null
     : document.layerGroups.find((group) => group.id === selectedLayer.groupId) ?? null
+  const activeFrame = document.frames.find((frame) => frame.id === document.activeFrameId) ?? document.frames[0]
   const selectedColor = document.palette.find((color) => color.id === activeColorId) ?? document.palette[0]
   const selectionPreview = useMemo(() => {
     if (!dragDraft) return selection
@@ -1077,7 +1180,6 @@ export function PixelModeWorkbench({
         spacing: 1,
         mapWidth,
         mapHeight,
-        anchor: { x: Math.floor(current.width / 2), y: current.height },
         animationTagId: current.animationTags.some((tag) => tag.id === activeAnimationTagId)
           ? activeAnimationTagId ?? undefined
           : current.animationTags[0]?.id,
@@ -1429,6 +1531,13 @@ export function PixelModeWorkbench({
                 onClick={() => setGridVisible((value) => !value)}
                 title="显示像素网格"
               ><Grid3X3 size={15} /><span>网格</span></button>
+              <button
+                type="button"
+                className={gameOverlayVisible ? 'is-active' : ''}
+                aria-pressed={gameOverlayVisible}
+                onClick={() => setGameOverlayVisible((value) => !value)}
+                title="显示锚点与碰撞区"
+              ><Crosshair size={15} /><span>游戏辅助线</span></button>
               <span className="aq-pixel-control-divider" />
               <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))} aria-label="缩小画布">
                 <ZoomOut size={15} />
@@ -1894,6 +2003,169 @@ export function PixelModeWorkbench({
               ><ArrowDown size={14} /> 下移</button>
             </div>
           </div>
+          <section className="aq-pixel-gameplay-editor" aria-label="当前帧游戏元数据">
+            <div className="aq-pixel-gameplay-heading">
+              <span><Crosshair size={15} /> 游戏元数据</span>
+              <small>{activeFrame.name}</small>
+            </div>
+            <div className="aq-pixel-anchor-editor">
+              <span>逐帧锚点</span>
+              {(['x', 'y'] as const).map((axis) => (
+                <label key={axis}>
+                  <span>{axis.toUpperCase()}</span>
+                  <input
+                    key={`${activeFrame.id}-anchor-${axis}-${activeFrame.gameplay.anchor[axis]}`}
+                    aria-label={`锚点 ${axis.toUpperCase()}`}
+                    type="number"
+                    min={0}
+                    max={axis === 'x' ? document.width : document.height}
+                    defaultValue={activeFrame.gameplay.anchor[axis]}
+                    onBlur={(event) => {
+                      const value = event.currentTarget.valueAsNumber
+                      const limit = axis === 'x' ? document.width : document.height
+                      if (!Number.isSafeInteger(value) || value < 0 || value > limit) {
+                        event.currentTarget.value = String(activeFrame.gameplay.anchor[axis])
+                        setStatus(`锚点 ${axis.toUpperCase()} 必须是 0—${limit} 的整数`)
+                        return
+                      }
+                      if (value !== activeFrame.gameplay.anchor[axis]) {
+                        patchActiveFrameGameplay((gameplay) => { gameplay.anchor[axis] = value }, '逐帧锚点已更新 · 可撤销')
+                      }
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="aq-pixel-collision-editor">
+              <div className="aq-pixel-gameplay-subheading">
+                <span>碰撞区 <small>{activeFrame.gameplay.collisions.length}/8</small></span>
+                <button
+                  type="button"
+                  aria-label="添加碰撞区"
+                  disabled={activeFrame.gameplay.collisions.length >= 8}
+                  onClick={addActiveCollision}
+                ><Plus size={13} /> 添加</button>
+              </div>
+              {activeFrame.gameplay.collisions.length > 0 ? (
+                <div className="aq-pixel-collision-list">
+                  {activeFrame.gameplay.collisions.map((collision) => (
+                    <article key={collision.id} style={{ '--aq-collision-color': PIXEL_COLLISION_COLORS[collision.type] } as CSSProperties}>
+                      <div className="aq-pixel-collision-main">
+                        <span aria-hidden="true" />
+                        <input
+                          key={`${collision.id}-${collision.name}`}
+                          aria-label={`${collision.name}名称`}
+                          defaultValue={collision.name}
+                          maxLength={48}
+                          onBlur={(event) => {
+                            const name = event.currentTarget.value.trim()
+                            if (!name) {
+                              event.currentTarget.value = collision.name
+                              setStatus('碰撞区名称不能为空')
+                            } else if (name !== collision.name) patchActiveCollision(collision.id, { name })
+                          }}
+                        />
+                        <select
+                          aria-label={`${collision.name}类型`}
+                          value={collision.type}
+                          onChange={(event) => patchActiveCollision(collision.id, { type: event.currentTarget.value as PixelCollisionType })}
+                        >
+                          {PIXEL_COLLISION_TYPES.map((type) => <option key={type} value={type}>{PIXEL_COLLISION_LABELS[type]}</option>)}
+                        </select>
+                        <button
+                          type="button"
+                          aria-label={`删除碰撞区 ${collision.name}`}
+                          onClick={() => patchActiveFrameGameplay((gameplay) => {
+                            gameplay.collisions = gameplay.collisions.filter((item) => item.id !== collision.id)
+                          }, '碰撞区已删除 · 可撤销')}
+                        ><Trash2 size={12} /></button>
+                      </div>
+                      <div className="aq-pixel-collision-geometry">
+                        {(['x', 'y', 'width', 'height'] as const).map((field) => (
+                          <label key={field}>
+                            <span>{field === 'width' ? 'W' : field === 'height' ? 'H' : field.toUpperCase()}</span>
+                            <input
+                              key={`${collision.id}-${field}-${collision[field]}`}
+                              aria-label={`${collision.name} ${field}`}
+                              type="number"
+                              min={field === 'width' || field === 'height' ? 1 : 0}
+                              max={field === 'x' || field === 'width' ? document.width : document.height}
+                              defaultValue={collision[field]}
+                              onBlur={(event) => {
+                                const value = event.currentTarget.valueAsNumber
+                                if (!Number.isSafeInteger(value) || value < 0) {
+                                  event.currentTarget.value = String(collision[field])
+                                  setStatus('碰撞区几何参数必须是有效整数')
+                                  return
+                                }
+                                if (value !== collision[field] && !patchActiveCollision(collision.id, { [field]: value })) {
+                                  event.currentTarget.value = String(collision[field])
+                                }
+                              }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : <p className="aq-pixel-gameplay-empty">当前帧尚未设置碰撞区；导出仍会保留空数组。</p>}
+            </div>
+            <div className="aq-pixel-tile-rule-editor">
+              <div className="aq-pixel-gameplay-subheading">
+                <span>8 邻域 Tileset</span>
+                <button
+                  type="button"
+                  aria-pressed={activeFrame.gameplay.tileRule !== null}
+                  className={activeFrame.gameplay.tileRule ? 'is-active' : ''}
+                  onClick={() => patchActiveFrameGameplay((gameplay) => {
+                    gameplay.tileRule = gameplay.tileRule ? null : { terrainId: 'terrain-1', bitmask: 0 }
+                  }, activeFrame.gameplay.tileRule ? '当前帧地形规则已停用 · 可撤销' : '当前帧地形规则已启用 · 可撤销')}
+                >{activeFrame.gameplay.tileRule ? '停用' : '启用'}</button>
+              </div>
+              {activeFrame.gameplay.tileRule ? (
+                <div className="aq-pixel-tile-rule-body">
+                  <label>
+                    <span>Terrain ID</span>
+                    <input
+                      key={`${activeFrame.id}-${activeFrame.gameplay.tileRule.terrainId}`}
+                      aria-label="Terrain ID"
+                      defaultValue={activeFrame.gameplay.tileRule.terrainId}
+                      maxLength={64}
+                      onBlur={(event) => {
+                        const terrainId = event.currentTarget.value.trim()
+                        if (terrainId !== activeFrame.gameplay.tileRule?.terrainId && !patchActiveFrameGameplay((gameplay) => {
+                          if (gameplay.tileRule) gameplay.tileRule.terrainId = terrainId
+                        }, '地形标识已更新 · 可撤销')) event.currentTarget.value = activeFrame.gameplay.tileRule?.terrainId ?? ''
+                      }}
+                    />
+                  </label>
+                  <div className="aq-pixel-neighbor-grid" aria-label="8 邻域位掩码">
+                    {PIXEL_TILE_GRID.map((neighborId) => {
+                      if (neighborId === 'center') return <span key={neighborId} title="当前图块">本格</span>
+                      const neighbor = PIXEL_TILE_NEIGHBORS.find((item) => item.id === neighborId)
+                      if (!neighbor) return null
+                      const enabled = (activeFrame.gameplay.tileRule?.bitmask ?? 0) & neighbor.bit
+                      return (
+                        <button
+                          type="button"
+                          key={neighbor.id}
+                          className={enabled ? 'is-active' : ''}
+                          aria-pressed={Boolean(enabled)}
+                          aria-label={`${neighbor.label}邻居`}
+                          title={`${neighbor.label} · bit ${neighbor.bit}`}
+                          onClick={() => patchActiveFrameGameplay((gameplay) => {
+                            if (gameplay.tileRule) gameplay.tileRule.bitmask ^= neighbor.bit
+                          }, `Tileset ${neighbor.label}邻居规则已切换 · 可撤销`)}
+                        >{neighbor.label}</button>
+                      )
+                    })}
+                  </div>
+                  <output>Mask {activeFrame.gameplay.tileRule.bitmask}</output>
+                </div>
+              ) : <p className="aq-pixel-gameplay-empty">按帧启用后，可生成 Tiled WangSet 与确定性 8 邻域规则。</p>}
+            </div>
+          </section>
           <div className="aq-pixel-sprite-summary">
             <span>Sprite Sheet</span>
             <strong>{spriteMetadata.width} × {spriteMetadata.height}</strong>
