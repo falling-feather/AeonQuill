@@ -114,6 +114,20 @@ import {
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
 import type { LibraryAssetInsertion } from '../../lib/libraryApi'
+import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
+import {
+  approveCreativePlan,
+  createCreativePlan,
+  executeApprovedCreativePlan,
+  previewCreativePlan,
+  type CreativePlan,
+  type CreativePlanPreview,
+  type CreativePlanReceipt,
+} from '../../lib/agent/creativePlan.mjs'
+import {
+  commitWorkspaceCreativePlan,
+  listWorkspaceCreativePlanReceipts,
+} from '../../lib/projectApi'
 import {
   PixelBrowserError,
   decodePixelImageFile,
@@ -249,6 +263,7 @@ export type PixelSpriteSheetPayload = {
 export type PixelModeWorkbenchProps = {
   initialDocument?: PixelDocument
   projectId?: string
+  workspaceProjectId?: string
   projectName?: string
   className?: string
   onBack?: () => void
@@ -376,6 +391,7 @@ function terrainPreviewColor(terrainId: string) {
 export function PixelModeWorkbench({
   initialDocument,
   projectId = 'aeonquill-pixel-starter',
+  workspaceProjectId,
   projectName = '光羽练习',
   className = '',
   onBack,
@@ -404,6 +420,13 @@ export function PixelModeWorkbench({
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
+  const [agentPlanReview, setAgentPlanReview] = useState<{
+    plan: CreativePlan
+    preview: CreativePlanPreview
+  } | null>(null)
+  const [agentPlanBusy, setAgentPlanBusy] = useState(false)
+  const [agentPlanError, setAgentPlanError] = useState<string | null>(null)
+  const [latestAgentReceipt, setLatestAgentReceipt] = useState<CreativePlanReceipt | null>(null)
   const [importSettings, setImportSettings] = useState<PixelImportSettings>({
     targetWidth: 32,
     targetHeight: 32,
@@ -658,6 +681,17 @@ export function PixelModeWorkbench({
   useEffect(() => {
     onDocumentChange?.(document)
   }, [document, onDocumentChange])
+
+  useEffect(() => {
+    if (!workspaceProjectId) return
+    let disposed = false
+    void listWorkspaceCreativePlanReceipts(workspaceProjectId, { documentId: projectId, limit: 1 })
+      .then((receipts) => {
+        if (!disposed) setLatestAgentReceipt(receipts[0] ?? null)
+      })
+      .catch(() => undefined)
+    return () => { disposed = true }
+  }, [projectId, workspaceProjectId])
 
   const activeAnimationTag = document.animationTags.find((tag) => tag.id === activeAnimationTagId)
     ?? document.animationTags[0]
@@ -1382,13 +1416,78 @@ export function PixelModeWorkbench({
         setStatus('本地智能清理未发现孤立噪点或单像素针孔')
         return
       }
-      if (apply('pixels.patch', { frameId: frame.id, layerId: layer.id, pixels: cleanup.pixels })) {
-        setStatus(`智能清理完成：移除 ${cleanup.report.isolatedRemoved} 个孤点，填补 ${cleanup.report.pinholesFilled} 个针孔 · 1 个撤销单元`)
-      }
+      const createdAt = Date.now()
+      const plan = createCreativePlan({
+        id: `pixel-plan-${crypto.randomUUID()}`,
+        projectId: workspaceProjectId ?? projectId,
+        documentId: current.id,
+        modeId: 'pixel',
+        baseRevision: current.revision,
+        title: '像素图层智能清理',
+        objective: `检查“${frame.name} / ${layer.name}”中的孤立噪点与单像素针孔，预览后再写入。`,
+        source: { kind: 'deterministic-local', agentRole: 'pixel-cleanup-agent', modelId: null, requestHash: null },
+        steps: [{
+          id: `pixel-step-${crypto.randomUUID()}`,
+          toolId: 'pixel.pixels.patch',
+          summary: `移除 ${cleanup.report.isolatedRemoved} 个孤点，填补 ${cleanup.report.pinholesFilled} 个针孔`,
+          input: { frameId: frame.id, layerId: layer.id, pixels: cleanup.pixels },
+          sourceAssets: [],
+        }],
+        createdAt,
+      })
+      const preview = previewCreativePlan(current, plan, { workspaceRevision: current.revision })
+      setAgentPlanError(null)
+      setAgentPlanReview({ plan, preview })
+      setStatus('智能清理计划已生成；批准前不会修改像素正文')
     } catch (error) {
       setStatus(readablePixelError(error, '智能清理失败'))
     }
-  }, [apply])
+  }, [projectId, workspaceProjectId])
+
+  const rejectAgentPlan = useCallback(() => {
+    if (agentPlanBusy) return
+    setAgentPlanReview(null)
+    setAgentPlanError(null)
+    setStatus('已拒绝智能清理计划；像素正文保持不变')
+  }, [agentPlanBusy])
+
+  const approveAgentPlanReview = useCallback(async () => {
+    if (!agentPlanReview || agentPlanBusy) return
+    setAgentPlanBusy(true)
+    setAgentPlanError(null)
+    stopPlayback()
+    try {
+      const current = historyRef.current
+      const command = agentPlanReview.preview.commands[0] as PixelCommand
+      const localResult = applyPixelCommand(current.document, command)
+      const approved = await approveCreativePlan(agentPlanReview.plan)
+      let next: PixelDocument
+      let receipt: CreativePlanReceipt
+      if (workspaceProjectId) {
+        const result = await commitWorkspaceCreativePlan(approved)
+        next = migratePixelDocument(JSON.parse(result.document.value))
+        receipt = result.receipt
+      } else {
+        const result = await executeApprovedCreativePlan(current.document, approved, {
+          workspaceRevision: current.document.revision,
+        })
+        next = migratePixelDocument(result.document)
+        receipt = result.receipt
+      }
+      replaceHistory({
+        document: next,
+        undo: [...current.undo, localResult.inverse],
+        redo: [],
+      })
+      setLatestAgentReceipt(receipt)
+      setAgentPlanReview(null)
+      setStatus('智能清理已批准并提交 · 1 个撤销单元 · 执行回执已保存')
+    } catch (error) {
+      setAgentPlanError(readablePixelError(error, '智能清理计划提交失败'))
+    } finally {
+      setAgentPlanBusy(false)
+    }
+  }, [agentPlanBusy, agentPlanReview, replaceHistory, stopPlayback, workspaceProjectId])
 
   const ensureEightDirectionSlots = useCallback(() => {
     const directions = [
@@ -3361,6 +3460,15 @@ export function PixelModeWorkbench({
           </div>
         </aside>
       </div>
+      <AgentPlanReviewDialog
+        plan={agentPlanReview?.plan ?? null}
+        preview={agentPlanReview?.preview ?? null}
+        busy={agentPlanBusy}
+        error={agentPlanError}
+        latestReceipt={latestAgentReceipt}
+        onApprove={approveAgentPlanReview}
+        onReject={rejectAgentPlan}
+      />
     </section>
   )
 }

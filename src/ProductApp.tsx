@@ -36,6 +36,7 @@ import {
   saveWorkspaceCatalog,
   saveWorkspaceModeDocument,
   serializeSmartVideoDocument,
+  takeWorkspaceCreativePlanCommit,
   previewWorkspaceProjectPackage,
   previewWorkspaceProjectPackageFile,
   restoreWorkspaceRecoveryPoint,
@@ -1710,12 +1711,14 @@ export default function ProductApp() {
       : undefined
     const storageKey = pixelStorageKey(catalogDocumentId)
     const usesLegacyBridge = !catalogDocumentId
+    const agentCommit = catalogDocumentId ? takeWorkspaceCreativePlanCommit(catalogDocumentId) : null
     if (!isMeaningfulPixelDraft(next)) {
       const serialized = serializePixelDocument(next)
       if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
       try { localStorage.setItem(storageKey, serialized) } catch { /* surfaced after the first meaningful edit */ }
       if (usesLegacyBridge) queuePixelBridgeSave(serialized)
       setPixelDraft({ status: 'empty', document: next })
+      if (agentCommit) commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
       return
     }
     const serialized = serializePixelDocument(next)
@@ -1736,7 +1739,9 @@ export default function ProductApp() {
           error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
         })
     if (catalogDocumentId && activeWorkspaceProjectId) {
-      if (bridgeReadyRef.current) {
+      if (agentCommit) {
+        commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+      } else if (bridgeReadyRef.current) {
         void saveWorkspaceModeDocument({
           projectId: activeWorkspaceProjectId,
           documentId: catalogDocumentId,
@@ -1759,12 +1764,14 @@ export default function ProductApp() {
         })
       }
       try {
-        commitProjectCatalog(touchProjectDocument(
-          projectCatalogRef.current,
-          activeWorkspaceProjectId,
-          catalogDocumentId,
-          { title: next.name, revision: next.revision },
-        ))
+        if (!agentCommit) {
+          commitProjectCatalog(touchProjectDocument(
+            projectCatalogRef.current,
+            activeWorkspaceProjectId,
+            catalogDocumentId,
+            { title: next.name, revision: next.revision },
+          ))
+        }
       } catch (error) {
         setProjectCatalogError(error instanceof Error ? error.message : '像素文档索引更新失败')
       }
@@ -1784,6 +1791,7 @@ export default function ProductApp() {
       : undefined
     const storageKey = videoStorageKey(catalogDocumentId)
     const usesLegacyBridge = !catalogDocumentId
+    const agentCommit = catalogDocumentId ? takeWorkspaceCreativePlanCommit(catalogDocumentId) : null
     const session = smartVideoSessionFromResult(result)
     const serialized = serializeSmartVideoSession(session)
     if (usesLegacyBridge) clientStateDirtyRef.current.add('smart-video-session')
@@ -1803,11 +1811,14 @@ export default function ProductApp() {
           error: '智能视频计划仍在当前页面，但浏览器存储失败且本机桥接离线；刷新后无法恢复。',
         })
     if (catalogDocumentId && activeWorkspaceProjectId) {
+      if (agentCommit) {
+        commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+      }
       const catalogDocument = projectCatalogRef.current.projects
         .find(({ id }) => id === activeWorkspaceProjectId)
         ?.documents.find(({ id }) => id === catalogDocumentId)
-      const documentRevision = Math.max(0, catalogDocument?.revision ?? 0) + 1
-      if (bridgeReadyRef.current) {
+      const documentRevision = agentCommit?.revision ?? (Math.max(0, catalogDocument?.revision ?? 0) + 1)
+      if (!agentCommit && bridgeReadyRef.current) {
         void saveWorkspaceModeDocument({
           projectId: activeWorkspaceProjectId,
           documentId: catalogDocumentId,
@@ -1828,12 +1839,14 @@ export default function ProductApp() {
         })
       }
       try {
-        commitProjectCatalog(touchProjectDocument(
-          projectCatalogRef.current,
-          activeWorkspaceProjectId,
-          catalogDocumentId,
-          { title: result.project.title, revision: documentRevision },
-        ))
+        if (!agentCommit) {
+          commitProjectCatalog(touchProjectDocument(
+            projectCatalogRef.current,
+            activeWorkspaceProjectId,
+            catalogDocumentId,
+            { title: result.project.title, revision: documentRevision },
+          ))
+        }
       } catch (error) {
         setProjectCatalogError(error instanceof Error ? error.message : '智能视频文档索引更新失败')
       }
@@ -1853,6 +1866,11 @@ export default function ProductApp() {
   const handleBalancedDocumentChange = useCallback((document: CanvasDocument) => {
     if (!activeWorkspaceProjectId || activeModeDocumentMode !== 'balanced' || !activeModeDocumentId) return
     try {
+      const agentCommit = takeWorkspaceCreativePlanCommit(activeModeDocumentId)
+      if (agentCommit) {
+        commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+        return
+      }
       commitProjectCatalog(touchProjectDocument(
         projectCatalogRef.current,
         activeWorkspaceProjectId,
@@ -2163,6 +2181,7 @@ export default function ProductApp() {
           key={requestedProjectId ?? 'pixel-legacy'}
           initialDocument={pixelEntry.hasMemoryDocument ? pixelDraft.document : undefined}
           projectId={requestedProjectId}
+          workspaceProjectId={activeWorkspaceProjectId ?? undefined}
           projectName={activeWorkspaceProject?.title}
           onBack={goHome}
           onDocumentChange={handlePixelChange}
@@ -2258,6 +2277,7 @@ export default function ProductApp() {
           initialResult={videoSession.status === 'ready' ? videoSession.result : undefined}
           projectId={requestedProjectId}
           workspaceProjectId={activeWorkspaceProjectId ?? undefined}
+          workspaceRevision={activeModeDocument?.revision}
           projectTitle={activeWorkspaceProject?.title}
           runtime={smartVideoRuntime}
           onBack={goHome}

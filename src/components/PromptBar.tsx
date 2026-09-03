@@ -41,7 +41,7 @@ export function PromptBar({ onSubmit }: PromptBarProps) {
           onChange={(event) => setValue(event.target.value)}
         />
         <button type="submit" className="prompt-submit" disabled={!value.trim()}>
-          执行 <ArrowUpRight size={16} strokeWidth={1.8} />
+          预览 <ArrowUpRight size={16} strokeWidth={1.8} />
         </button>
       </form>
     </div>

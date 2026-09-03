@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 
 import { createCanvasDocument } from '../src/lib/canvasCore.mjs'
+import { approveCreativePlan, createCreativePlan } from '../src/lib/agent/creativePlan.mjs'
 import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
 import {
   addProjectDocument,
@@ -60,6 +61,48 @@ function initialPixelDocument(created) {
       revision: 0,
     })),
   }
+}
+
+function initialBalancedDocument(created) {
+  return {
+    projectId: created.project.id,
+    documentId: created.document.id,
+    modeId: 'balanced',
+    revision: 0,
+    value: JSON.stringify(createCanvasDocument({
+      id: created.document.id,
+      title: created.document.title,
+      elements: [],
+      camera: { x: 0, y: 0, zoom: 1 },
+      now: 1_000,
+    })),
+  }
+}
+
+function balancedAgentPlan(created, overrides = {}) {
+  return createCreativePlan({
+    id: overrides.id ?? 'agent-plan-balanced-1',
+    projectId: created.project.id,
+    documentId: created.document.id,
+    modeId: 'balanced',
+    baseRevision: overrides.baseRevision ?? 0,
+    title: overrides.title ?? '添加受控便签',
+    objective: '通过同一画布工具建立可撤销便签。',
+    source: { kind: 'deterministic-local', agentRole: 'layout-director', modelId: null, requestHash: null },
+    steps: overrides.steps ?? [{
+      id: 'agent-step-balanced-1',
+      toolId: 'canvas.elements.add',
+      summary: '在画布中添加一张便签',
+      input: { elements: [{
+        id: 'agent-note-1', kind: 'note', name: 'Agent note', x: 20, y: 30,
+        width: 180, height: 120, rotation: 0, opacity: 1, radius: 0,
+        fill: '#FFF4C2', stroke: '#E7CE75', content: '受控计划', locked: false,
+        visible: true, zIndex: 1,
+      }] },
+      sourceAssets: [],
+    }],
+    createdAt: 3_000,
+  })
 }
 
 test('catalog and revision-zero mode body initialize atomically and retry idempotently', async () => {
@@ -157,6 +200,93 @@ test('revision-zero catalog-only entries are backfilled without advancing the ca
     assert.equal(recovered.catalog.revision, created.catalog.revision)
     assert.equal(recovered.document.revision, 0)
     assert.equal(store.getModeDocument(created.document.id).documentId, created.document.id)
+  })
+})
+
+test('approved Agent plan atomically advances body, catalog and immutable receipt with idempotent replay', async () => {
+  await withStore(async (store) => {
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: 'Agent 画布', initialModeId: 'balanced',
+    }, { now: 1_000, projectId: 'project-agent', documentId: 'document-agent' })
+    store.initializeModeDocument(created.catalog, initialBalancedDocument(created), {
+      baseRevision: 0,
+      now: 2_000,
+    })
+    const approved = await approveCreativePlan(balancedAgentPlan(created), { approvedAt: 4_000 })
+    const committed = await store.commitApprovedCreativePlan(approved, { now: 5_000 })
+
+    assert.equal(committed.replayed, false)
+    assert.equal(committed.document.revision, 1)
+    assert.equal(JSON.parse(committed.document.value).elements[0].id, 'agent-note-1')
+    const catalog = store.getCatalog().catalog
+    assert.equal(catalog.projects[0].documents[0].revision, 1)
+    assert.equal(store.listAgentPlanReceipts(created.project.id).length, 1)
+    assert.equal(store.listAgentPlanReceipts(created.project.id, { documentId: created.document.id })[0].planId, approved.plan.id)
+    assert.equal(store.listRecoveryPoints(created.project.id).some(({ reason }) => reason === 'before-agent-plan'), true)
+
+    const replay = await store.commitApprovedCreativePlan(approved, { now: 6_000 })
+    assert.equal(replay.replayed, true)
+    assert.equal(replay.document.revision, 1)
+    assert.equal(store.listAgentPlanReceipts(created.project.id).length, 1)
+  })
+})
+
+test('stale, tampered and unknown Agent plans leave body, catalog and receipt set unchanged', async () => {
+  await withStore(async (store) => {
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: 'Agent 拒绝门', initialModeId: 'balanced',
+    }, { now: 1_000, projectId: 'project-agent-reject', documentId: 'document-agent-reject' })
+    store.initializeModeDocument(created.catalog, initialBalancedDocument(created), {
+      baseRevision: 0,
+      now: 2_000,
+    })
+    const stale = await approveCreativePlan(balancedAgentPlan(created, {
+      id: 'agent-plan-stale', baseRevision: 1,
+    }), { approvedAt: 4_000 })
+    await assert.rejects(
+      () => store.commitApprovedCreativePlan(stale, { now: 5_000 }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'REVISION_CONFLICT',
+    )
+
+    const tampered = await approveCreativePlan(balancedAgentPlan(created, {
+      id: 'agent-plan-tampered',
+    }), { approvedAt: 4_000 })
+    tampered.plan.steps[0].input.elements[0].content = '审批后被篡改'
+    await assert.rejects(
+      () => store.commitApprovedCreativePlan(tampered, { now: 5_000 }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'PLAN_APPROVAL_MISMATCH',
+    )
+
+    const unknown = await approveCreativePlan(balancedAgentPlan(created, {
+      id: 'agent-plan-unknown',
+      steps: [{ id: 'agent-step-unknown', toolId: 'canvas.document.reset', summary: '越权重置', input: {}, sourceAssets: [] }],
+    }), { approvedAt: 4_000 })
+    await assert.rejects(
+      () => store.commitApprovedCreativePlan(unknown, { now: 5_000 }),
+      (error) => error instanceof WorkspaceStoreError && ['ACTOR_FORBIDDEN', 'UNKNOWN_FIELD'].includes(error.code),
+    )
+
+    const crossProject = await approveCreativePlan(createCreativePlan({
+      ...balancedAgentPlan(created, { id: 'agent-plan-cross-project' }),
+      projectId: 'another-project',
+    }), { approvedAt: 4_000 })
+    await assert.rejects(
+      () => store.commitApprovedCreativePlan(crossProject, { now: 5_000 }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_PROJECT_NOT_FOUND',
+    )
+
+    const crossMode = await approveCreativePlan(createCreativePlan({
+      ...balancedAgentPlan(created, { id: 'agent-plan-cross-mode' }),
+      modeId: 'pixel',
+    }), { approvedAt: 4_000 })
+    await assert.rejects(
+      () => store.commitApprovedCreativePlan(crossMode, { now: 5_000 }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_MODE_MISMATCH',
+    )
+
+    assert.equal(store.getModeDocument(created.document.id).revision, 0)
+    assert.equal(store.getCatalog().catalog.projects[0].documents[0].revision, 0)
+    assert.deepEqual(store.listAgentPlanReceipts(created.project.id), [])
   })
 })
 

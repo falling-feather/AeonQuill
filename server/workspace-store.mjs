@@ -4,12 +4,19 @@ import { DatabaseSync } from 'node:sqlite'
 import { join, resolve } from 'node:path'
 
 import { assertCanvasDocument } from '../src/lib/canvasCore.mjs'
+import {
+  CreativePlanError,
+  assertApprovedCreativePlan,
+  assertCreativePlanReceipt,
+  executeApprovedCreativePlan,
+} from '../src/lib/agent/creativePlan.mjs'
 import { deserializePixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
 import { collectJobReferenceIds } from './job-archive.mjs'
 import {
   assertProjectCatalog,
   createProjectCatalog,
   serializeProjectCatalog,
+  touchProjectDocument,
 } from '../src/lib/project/projectCatalog.mjs'
 import { assertGenerationPlan, assertStoryProject } from '../src/lib/story/storyProject.mjs'
 import {
@@ -213,6 +220,22 @@ function rowToRecovery(row) {
   }
 }
 
+function parseStoredModeDocument(document) {
+  if (document.modeId === 'pixel') return deserializePixelDocument(document.value)
+  return parseJsonObject(document.value, `${document.modeId} document`)
+}
+
+function rowToAgentPlanReceipt(row) {
+  if (!row) return null
+  let receipt
+  try {
+    receipt = assertCreativePlanReceipt(JSON.parse(row.receiptJson))
+  } catch {
+    fail('AGENT_PLAN_RECEIPT_CORRUPT', 'Stored Agent plan receipt failed strict validation', 500)
+  }
+  return clone(receipt)
+}
+
 export class WorkspaceStore {
   constructor(rootDirectory) {
     this.rootDirectory = resolve(rootDirectory)
@@ -257,6 +280,20 @@ export class WorkspaceStore {
       );
       CREATE INDEX IF NOT EXISTS recovery_points_project ON recovery_points(project_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS recovery_points_document ON recovery_points(document_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS agent_plan_receipts (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        mode_id TEXT NOT NULL,
+        base_revision INTEGER NOT NULL,
+        result_revision INTEGER NOT NULL,
+        plan_sha256 TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS agent_plan_receipts_project ON agent_plan_receipts(project_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS agent_plan_receipts_document ON agent_plan_receipts(document_id, created_at DESC, id DESC);
     `)
     const existing = this.database.prepare('SELECT key FROM workspace_meta WHERE key = ?').get('project-catalog')
     if (!existing) {
@@ -371,6 +408,9 @@ export class WorkspaceStore {
     const liveDocuments = new Set(catalog.projects.flatMap((project) => project.documents.map((document) => document.id)))
     for (const row of this.database.prepare('SELECT document_id AS documentId FROM mode_documents').all()) {
       if (!liveDocuments.has(row.documentId)) this.database.prepare('DELETE FROM mode_documents WHERE document_id = ?').run(row.documentId)
+    }
+    for (const row of this.database.prepare('SELECT document_id AS documentId FROM agent_plan_receipts').all()) {
+      if (!liveDocuments.has(row.documentId)) this.database.prepare('DELETE FROM agent_plan_receipts WHERE document_id = ?').run(row.documentId)
     }
     const liveProjects = new Set(catalog.projects.map((project) => project.id))
     for (const row of this.database.prepare('SELECT DISTINCT project_id AS projectId FROM recovery_points').all()) {
@@ -549,6 +589,167 @@ export class WorkspaceStore {
     return this.getModeDocument(documentId)
   }
 
+  getAgentPlanReceiptByPlanId(planId) {
+    this.assertOpen()
+    assertId(planId, 'planId')
+    return rowToAgentPlanReceipt(this.database.prepare(`
+      SELECT receipt_json AS receiptJson FROM agent_plan_receipts WHERE plan_id = ?
+    `).get(planId))
+  }
+
+  listAgentPlanReceipts(projectId, options = {}) {
+    this.assertOpen()
+    assertId(projectId, 'projectId')
+    const documentId = options.documentId === undefined ? null : assertId(options.documentId, 'documentId')
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 && options.limit <= 100 ? options.limit : 20
+    const rows = documentId
+      ? this.database.prepare(`
+          SELECT receipt_json AS receiptJson FROM agent_plan_receipts
+          WHERE project_id = ? AND document_id = ?
+          ORDER BY created_at DESC, id DESC LIMIT ?
+        `).all(projectId, documentId, limit)
+      : this.database.prepare(`
+          SELECT receipt_json AS receiptJson FROM agent_plan_receipts
+          WHERE project_id = ?
+          ORDER BY created_at DESC, id DESC LIMIT ?
+        `).all(projectId, limit)
+    return rows.map(rowToAgentPlanReceipt)
+  }
+
+  async commitApprovedCreativePlan(approvedInput, options = {}) {
+    this.assertOpen()
+    let approved
+    try {
+      approved = await assertApprovedCreativePlan(approvedInput)
+    } catch (error) {
+      if (error instanceof CreativePlanError) {
+        const status = ['REVISION_CONFLICT', 'PLAN_APPROVAL_MISMATCH'].includes(error.code) ? 409 : 400
+        fail(error.code, error.message, status, error.details)
+      }
+      throw error
+    }
+    const plan = approved.plan
+    const priorReceipt = this.getAgentPlanReceiptByPlanId(plan.id)
+    if (priorReceipt) {
+      if (
+        priorReceipt.planSha256 !== approved.approval.planSha256
+        || priorReceipt.projectId !== plan.projectId
+        || priorReceipt.documentId !== plan.documentId
+        || priorReceipt.modeId !== plan.modeId
+      ) {
+        fail('AGENT_PLAN_ID_CONFLICT', 'Agent plan id is already bound to a different approved plan', 409)
+      }
+      return { catalog: this.getCatalog().catalog, document: this.getModeDocument(plan.documentId), receipt: priorReceipt, replayed: true }
+    }
+
+    const catalogRecord = this.getCatalog()
+    const { project, document: registration } = projectDocument(catalogRecord.catalog, plan.projectId, plan.documentId)
+    if (registration.modeId !== plan.modeId) fail('WORKSPACE_MODE_MISMATCH', 'Agent plan mode does not match the workspace document', 409)
+    const currentDocument = this.getModeDocument(plan.documentId)
+    if (!currentDocument || currentDocument.projectId !== plan.projectId || currentDocument.modeId !== plan.modeId) {
+      fail('WORKSPACE_DOCUMENT_NOT_FOUND', 'Agent plan target document is not available', 404)
+    }
+    if (currentDocument.revision !== plan.baseRevision) {
+      fail('REVISION_CONFLICT', `Agent plan expects revision ${plan.baseRevision}, current revision is ${currentDocument.revision}`, 409)
+    }
+
+    const committedAt = options.now ?? Date.now()
+    assertRevision(committedAt, 'now')
+    let executed
+    try {
+      executed = await executeApprovedCreativePlan(parseStoredModeDocument(currentDocument), approved, {
+        workspaceRevision: currentDocument.revision,
+        committedAt,
+      })
+    } catch (error) {
+      if (error instanceof CreativePlanError) {
+        const status = ['REVISION_CONFLICT', 'PLAN_APPROVAL_MISMATCH'].includes(error.code) ? 409 : 400
+        fail(error.code, error.message, status, error.details)
+      }
+      throw error
+    }
+    const nextValue = normalizeModeDocument(plan.modeId, JSON.stringify(executed.document), plan.documentId)
+    const nextCatalog = touchProjectDocument(
+      catalogRecord.catalog,
+      plan.projectId,
+      plan.documentId,
+      { revision: executed.receipt.resultRevision },
+      { now: committedAt },
+    )
+    const nextCatalogValue = serializeProjectCatalog(nextCatalog)
+
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      const racedReceipt = this.database.prepare(`
+        SELECT receipt_json AS receiptJson FROM agent_plan_receipts WHERE plan_id = ?
+      `).get(plan.id)
+      if (racedReceipt) {
+        const receipt = rowToAgentPlanReceipt(racedReceipt)
+        if (receipt.planSha256 !== approved.approval.planSha256) {
+          fail('AGENT_PLAN_ID_CONFLICT', 'Agent plan id was committed with a different approval', 409)
+        }
+        this.database.exec('ROLLBACK')
+        return { catalog: this.getCatalog().catalog, document: this.getModeDocument(plan.documentId), receipt, replayed: true }
+      }
+      const racedCatalog = this.getCatalog()
+      const racedDocument = this.getModeDocument(plan.documentId)
+      if (
+        racedCatalog.catalog.revision !== catalogRecord.catalog.revision
+        || !racedDocument
+        || racedDocument.revision !== currentDocument.revision
+        || racedDocument.value !== currentDocument.value
+      ) {
+        fail('REVISION_CONFLICT', 'Workspace changed while the Agent plan was awaiting commit', 409)
+      }
+      this.insertRecoveryPoint({
+        project,
+        document: currentDocument,
+        catalogRevision: catalogRecord.catalog.revision,
+        reason: 'before-agent-plan',
+        createdAt: committedAt,
+      })
+      this.writeCatalogTransaction({
+        catalog: nextCatalog,
+        currentCatalog: catalogRecord.catalog,
+        serialized: nextCatalogValue,
+        now: committedAt,
+        source: 'agent-plan',
+      })
+      const update = this.database.prepare(`
+        UPDATE mode_documents SET revision = ?, value_json = ?, updated_at = ?
+        WHERE document_id = ? AND revision = ?
+      `).run(executed.receipt.resultRevision, nextValue, committedAt, plan.documentId, currentDocument.revision)
+      if (update.changes !== 1) fail('REVISION_CONFLICT', 'Agent plan target changed before the document update', 409)
+      this.database.prepare(`
+        INSERT INTO agent_plan_receipts
+          (id, plan_id, project_id, document_id, mode_id, base_revision, result_revision,
+           plan_sha256, receipt_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        executed.receipt.id,
+        executed.receipt.planId,
+        executed.receipt.projectId,
+        executed.receipt.documentId,
+        executed.receipt.modeId,
+        executed.receipt.baseRevision,
+        executed.receipt.resultRevision,
+        executed.receipt.planSha256,
+        JSON.stringify(executed.receipt),
+        committedAt,
+      )
+      this.database.exec('COMMIT')
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+    return {
+      catalog: this.getCatalog().catalog,
+      document: this.getModeDocument(plan.documentId),
+      receipt: clone(executed.receipt),
+      replayed: false,
+    }
+  }
+
   shouldCreateAutoRecovery(documentId, now, force) {
     if (force) return true
     const row = this.database.prepare(`
@@ -646,6 +847,7 @@ export class WorkspaceStore {
       catalog: 0,
       currentDocuments: 0,
       recoveryPoints: 0,
+      agentPlanReceipts: 0,
     }
     const catalog = this.database.prepare('SELECT value_json AS value FROM workspace_meta WHERE key = ?').get('project-catalog')
     if (catalog?.value) {
@@ -660,6 +862,10 @@ export class WorkspaceStore {
       collectStorageReferences(row.projectJson, projectAssetIds, jobAssetFilenames)
       collectStorageReferences(row.bodyJson, projectAssetIds, jobAssetFilenames)
       sources.recoveryPoints += 1
+    }
+    for (const row of this.database.prepare('SELECT receipt_json AS value FROM agent_plan_receipts').all()) {
+      collectStorageReferences(row.value, projectAssetIds, jobAssetFilenames)
+      sources.agentPlanReceipts += 1
     }
     return {
       projectAssetIds: [...projectAssetIds].sort(),

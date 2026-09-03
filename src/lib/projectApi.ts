@@ -1,4 +1,8 @@
 import type { CanvasDocument } from './canvasCore'
+import type {
+  ApprovedCreativePlan,
+  CreativePlanReceipt,
+} from './agent/creativePlan.mjs'
 import type { ProjectCatalog } from './project'
 import {
   assertGenerationPlan,
@@ -219,6 +223,7 @@ export async function saveWorkspaceCatalog(catalog: ProjectCatalog, baseRevision
 
 const workspaceDocumentRevisions = new Map<string, number | null>()
 const workspaceDocumentWrites = new Map<string, Promise<WorkspaceModeDocument>>()
+const workspaceCreativePlanCommits = new Map<string, { catalog: ProjectCatalog; revision: number }>()
 
 export async function initializeWorkspaceModeDocument(input: {
   catalog: ProjectCatalog
@@ -293,6 +298,46 @@ export function saveWorkspaceModeDocument(input: {
 export async function flushWorkspaceModeDocument(documentId: string) {
   const pending = workspaceDocumentWrites.get(documentId)
   if (pending) await pending
+}
+
+export async function commitWorkspaceCreativePlan(approvedPlan: ApprovedCreativePlan) {
+  await flushWorkspaceModeDocument(approvedPlan.plan.documentId)
+  const payload = await api<{
+    catalog: ProjectCatalog
+    document: WorkspaceModeDocument
+    receipt: CreativePlanReceipt
+    replayed: boolean
+  }>('/api/workspace/agent-plans/commit', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ approvedPlan }),
+  })
+  workspaceDocumentRevisions.set(payload.document.documentId, payload.document.revision)
+  workspaceCreativePlanCommits.set(payload.document.documentId, {
+    catalog: payload.catalog,
+    revision: payload.document.revision,
+  })
+  return payload
+}
+
+export function takeWorkspaceCreativePlanCommit(documentId: string) {
+  const committed = workspaceCreativePlanCommits.get(documentId) ?? null
+  workspaceCreativePlanCommits.delete(documentId)
+  return committed
+}
+
+export async function listWorkspaceCreativePlanReceipts(
+  projectId: string,
+  options: { documentId?: string; limit?: number } = {},
+) {
+  const query = new URLSearchParams()
+  if (options.documentId) query.set('documentId', options.documentId)
+  if (options.limit !== undefined) query.set('limit', String(options.limit))
+  const suffix = query.size ? `?${query.toString()}` : ''
+  const payload = await api<{ receipts: CreativePlanReceipt[] }>(
+    `/api/workspace/projects/${encodeURIComponent(projectId)}/agent-plan-receipts${suffix}`,
+  )
+  return payload.receipts
 }
 
 export async function listWorkspaceRecoveryPoints(projectId: string) {

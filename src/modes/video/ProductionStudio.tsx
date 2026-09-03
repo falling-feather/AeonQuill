@@ -64,6 +64,14 @@ export type ApprovedProductionStorySource = {
   defaultShotSeconds: number
 }
 
+export type ProductionAgentPlanRequest = {
+  title: string
+  objective: string
+  summary: string
+  toolId: 'video.proposal.accept'
+  input: { cardId: string }
+}
+
 type ProductionStudioProps = {
   active: boolean
   runtimeLabel: string
@@ -77,6 +85,7 @@ type ProductionStudioProps = {
   jobs: ProcessingJob[]
   onJobTracked: (job: ProcessingJob) => void
   onPrepareLocalShot?: (continuityShotId: string) => void
+  onReviewAgentPlan?: (request: ProductionAgentPlanRequest) => void
 }
 
 type ContinuitySlotView = {
@@ -135,7 +144,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot, onReviewAgentPlan }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -1007,7 +1016,20 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
               {card.status === 'proposed' ? (
                 <footer>
                   <button type="button" onClick={() => execute('proposal.reject', { cardId: card.id }, '变更卡已拒绝；正式节点未改变。')}>拒绝</button>
-                  <button type="button" className="is-accept" onClick={() => execute('proposal.accept', { cardId: card.id }, '变更卡已接受；节点进入审批，下游已失效。')}>接受变更</button>
+                  <button type="button" className="is-accept" onClick={() => {
+                    if (onReviewAgentPlan) {
+                      onReviewAgentPlan({
+                        title: `批准变更卡 · ${card.title}`.slice(0, 120),
+                        objective: `复核“${card.title}”后，将提案写入正式节点并按依赖关系使下游结果失效。`,
+                        summary: `接受“${card.title}”并推进节点审批`,
+                        toolId: 'video.proposal.accept',
+                        input: { cardId: card.id },
+                      })
+                      setNotice('变更卡已进入受控计划预览；批准前正式节点保持不变。')
+                    } else {
+                      execute('proposal.accept', { cardId: card.id }, '变更卡已接受；节点进入审批，下游已失效。')
+                    }
+                  }}>接受变更</button>
                 </footer>
               ) : null}
             </article>

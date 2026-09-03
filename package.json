@@ -21,6 +21,7 @@
     "benchmark:product-performance": "npm run build && node scripts/benchmark-product-performance.mjs --profile=formal --assert",
     "validate:project-center": "node scripts/validate-project-center.mjs",
     "validate:project-initialization": "npm run build && node scripts/validate-project-initialization.mjs",
+    "validate:agent-plan": "npm run build && node scripts/validate-agent-plan-ui.mjs",
     "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "validate:workflow-center": "npm run build && node scripts/validate-workflow-center-ui.mjs",
     "validate:custom-workflow": "node scripts/validate-custom-workflow-api.mjs",

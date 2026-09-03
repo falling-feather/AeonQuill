@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -67,7 +67,23 @@ import {
   createLocalVideoCandidateJobBinding,
   createLocalVideoCandidateTarget,
 } from '../../lib/story/localVideoCandidate.mjs'
-import { flushWorkspaceModeDocument } from '../../lib/projectApi'
+import {
+  commitWorkspaceCreativePlan,
+  deserializeSmartVideoDocument,
+  flushWorkspaceModeDocument,
+  listWorkspaceCreativePlanReceipts,
+} from '../../lib/projectApi'
+import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
+import {
+  approveCreativePlan,
+  createCreativePlan,
+  executeApprovedCreativePlan,
+  previewCreativePlan,
+  type CreativePlan,
+  type CreativePlanPreview,
+  type CreativePlanReceipt,
+  type SmartVideoModeDocument,
+} from '../../lib/agent/creativePlan.mjs'
 import {
   cancelVideoJob,
   createFinalCutJob,
@@ -83,7 +99,11 @@ import {
 } from '../../lib/videoApi'
 import type { ProcessingJob, RuntimeStatus } from '../../types'
 import type { LibraryAssetInsertion } from '../../lib/libraryApi'
-import { ProductionStudio, type ApprovedProductionStorySource } from './ProductionStudio'
+import {
+  ProductionStudio,
+  type ApprovedProductionStorySource,
+  type ProductionAgentPlanRequest,
+} from './ProductionStudio'
 import './smart-video-workbench.css'
 
 export type SmartVideoRuntimeSummary = {
@@ -100,6 +120,7 @@ export type SmartVideoWorkbenchProps = {
   initialResult?: SmartVideoPlanResult
   projectId?: string
   workspaceProjectId?: string
+  workspaceRevision?: number
   projectTitle?: string
   runtime?: SmartVideoRuntimeSummary
   onBack?: () => void
@@ -279,6 +300,7 @@ export function SmartVideoWorkbench({
   initialResult,
   projectId,
   workspaceProjectId,
+  workspaceRevision,
   projectTitle,
   runtime = { state: 'offline', label: 'ComfyUI 休眠', detail: '生成阶段才会按策略启动' },
   onBack,
@@ -315,7 +337,26 @@ export function SmartVideoWorkbench({
   const [latestJobIdByItem, setLatestJobIdByItem] = useState<Record<string, string>>({})
   const [submittedJobIds, setSubmittedJobIds] = useState<string[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<VideoWorkspaceSection>('production')
+  const [agentPlanReview, setAgentPlanReview] = useState<{
+    plan: CreativePlan
+    preview: CreativePlanPreview
+  } | null>(null)
+  const [agentPlanBusy, setAgentPlanBusy] = useState(false)
+  const [agentPlanError, setAgentPlanError] = useState<string | null>(null)
+  const [latestAgentReceipt, setLatestAgentReceipt] = useState<CreativePlanReceipt | null>(null)
   const consumedLibraryAssetRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!workspaceProjectId) return
+    const documentId = projectId ?? result.project.id
+    let disposed = false
+    void listWorkspaceCreativePlanReceipts(workspaceProjectId, { documentId, limit: 1 })
+      .then((receipts) => {
+        if (!disposed) setLatestAgentReceipt(receipts[0] ?? null)
+      })
+      .catch(() => undefined)
+    return () => { disposed = true }
+  }, [projectId, result.project.id, workspaceProjectId])
 
   function revealWorkspace(section: VideoWorkspaceSection) {
     setActiveWorkspace(section)
@@ -880,6 +921,95 @@ export function SmartVideoWorkbench({
     onPlanReady?.(next)
   }
 
+  const reviewProductionAgentPlan = useCallback((request: ProductionAgentPlanRequest) => {
+    try {
+      const documentId = projectId ?? result.project.id
+      const baseRevision = workspaceRevision ?? result.production.revision
+      const modeDocument: SmartVideoModeDocument = {
+        schemaVersion: 2,
+        project: result.project,
+        plan: result.plan,
+        production: result.production,
+      }
+      const createdAt = Date.now()
+      const plan = createCreativePlan({
+        id: `video-plan-${crypto.randomUUID()}`,
+        projectId: workspaceProjectId ?? documentId,
+        documentId,
+        modeId: 'smart-video',
+        baseRevision,
+        title: request.title,
+        objective: request.objective,
+        source: { kind: 'deterministic-local', agentRole: 'production-supervisor', modelId: null, requestHash: null },
+        steps: [{
+          id: `video-step-${crypto.randomUUID()}`,
+          toolId: request.toolId,
+          summary: request.summary,
+          input: request.input,
+          sourceAssets: [],
+        }],
+        createdAt,
+      })
+      const preview = previewCreativePlan(modeDocument, plan, { workspaceRevision: baseRevision })
+      setAgentPlanError(null)
+      setAgentPlanReview({ plan, preview })
+    } catch (nextError) {
+      setExecutionError(errorMessage(nextError))
+    }
+  }, [projectId, result, workspaceProjectId, workspaceRevision])
+
+  const rejectAgentPlan = useCallback(() => {
+    if (agentPlanBusy) return
+    setAgentPlanReview(null)
+    setAgentPlanError(null)
+    setBridgeMessage('已拒绝受控计划；正式制片节点与下游状态保持不变。')
+  }, [agentPlanBusy])
+
+  const approveAgentPlanReview = useCallback(async () => {
+    if (!agentPlanReview || agentPlanBusy) return
+    setAgentPlanBusy(true)
+    setAgentPlanError(null)
+    try {
+      const currentRevision = workspaceRevision ?? result.production.revision
+      if (currentRevision !== agentPlanReview.plan.baseRevision) {
+        throw new Error(`计划基于 r${agentPlanReview.plan.baseRevision}，当前正文已是 r${currentRevision}；请重新生成计划。`)
+      }
+      const before: SmartVideoModeDocument = {
+        schemaVersion: 2,
+        project: result.project,
+        plan: result.plan,
+        production: result.production,
+      }
+      const approved = await approveCreativePlan(agentPlanReview.plan)
+      let nextDocument: SmartVideoModeDocument
+      let receipt: CreativePlanReceipt
+      if (workspaceProjectId) {
+        const committed = await commitWorkspaceCreativePlan(approved)
+        nextDocument = deserializeSmartVideoDocument(committed.document.value)
+        receipt = committed.receipt
+      } else {
+        const committed = await executeApprovedCreativePlan(before, approved, { workspaceRevision: currentRevision })
+        nextDocument = deserializeSmartVideoDocument(JSON.stringify(committed.document))
+        receipt = committed.receipt
+      }
+      const next = {
+        project: nextDocument.project,
+        plan: nextDocument.plan,
+        production: nextDocument.production,
+      }
+      setResult(next)
+      invalidateExecution()
+      onPlanReady?.(next)
+      setLatestAgentReceipt(receipt)
+      setAgentPlanReview(null)
+      setBridgeMessage('变更卡已通过受控计划写入；恢复点与 SHA-256 执行回执已保存。')
+    } catch (nextError) {
+      setAgentPlanError(errorMessage(nextError))
+    } finally {
+      setAgentPlanBusy(false)
+    }
+  }, [agentPlanBusy, agentPlanReview, onPlanReady, result, workspaceProjectId, workspaceRevision])
+
   const prepareLocalCandidateShot = (continuityShotId: string) => {
     const continuityShot = result.production.continuityGraph.shots.find(({ id }) => id === continuityShotId)
     const storyShotId = continuityShot?.storyShotId
@@ -984,6 +1114,7 @@ export function SmartVideoWorkbench({
           jobs={jobs}
           onJobTracked={(job) => setJobs((existing) => upsertJob(existing, job))}
           onPrepareLocalShot={prepareLocalCandidateShot}
+          onReviewAgentPlan={reviewProductionAgentPlan}
         />
         {activeWorkspace !== 'production' ? (
           <>
@@ -1591,6 +1722,15 @@ export function SmartVideoWorkbench({
           </button>
         </footer>
       )}
+      <AgentPlanReviewDialog
+        plan={agentPlanReview?.plan ?? null}
+        preview={agentPlanReview?.preview ?? null}
+        busy={agentPlanBusy}
+        error={agentPlanError}
+        latestReceipt={latestAgentReceipt}
+        onApprove={approveAgentPlanReview}
+        onReject={rejectAgentPlan}
+      />
     </section>
   )
 }

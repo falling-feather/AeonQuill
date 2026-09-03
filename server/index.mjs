@@ -4412,6 +4412,33 @@ const server = createServer(async (request, response) => {
       })
       return sendJson(response, 201, initialized)
     }
+    if (request.method === 'POST' && pathname === '/api/workspace/agent-plans/commit') {
+      const body = await readJsonBody(request, 512 * 1024)
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).length !== 1
+        || !('approvedPlan' in body)
+      ) {
+        return sendError(response, 400, 'INVALID_AGENT_PLAN_COMMIT_REQUEST', '受控智能体计划提交字段无效')
+      }
+      const result = await workspaceStore.commitApprovedCreativePlan(body.approvedPlan)
+      return sendJson(response, result.replayed ? 200 : 201, result)
+    }
+    const agentPlanReceiptsMatch = /^\/api\/workspace\/projects\/([^/]+)\/agent-plan-receipts$/u.exec(pathname)
+    if (request.method === 'GET' && agentPlanReceiptsMatch) {
+      const projectId = decodeURIComponent(agentPlanReceiptsMatch[1])
+      const documentId = url.searchParams.get('documentId') || undefined
+      const rawLimit = url.searchParams.get('limit')
+      const limit = rawLimit === null ? 20 : Number(rawLimit)
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        return sendError(response, 400, 'INVALID_AGENT_PLAN_RECEIPT_LIMIT', '智能体回执数量必须介于 1—100')
+      }
+      return sendJson(response, 200, {
+        receipts: workspaceStore.listAgentPlanReceipts(projectId, { documentId, limit }),
+      })
+    }
     const workspacePackageMatch = /^\/api\/workspace\/projects\/([^/]+)\/package$/u.exec(pathname)
     const workspacePackagePreviewMatch = /^\/api\/workspace\/projects\/([^/]+)\/package\/preview$/u.exec(pathname)
     if (request.method === 'GET' && workspacePackagePreviewMatch) {

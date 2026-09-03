@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './styles.css'
 import { CheckCircle2, X } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
+import { AgentPlanReviewDialog } from './components/AgentPlanReviewDialog'
 import { ImageLab, type ImageLabResult } from './components/ImageLab'
 import { Inspector } from './components/Inspector'
 import { PixelEditor } from './components/PixelEditor'
@@ -59,9 +60,20 @@ import {
 import {
   downloadLocalProjectPackage,
   importLocalProjectPackage,
+  commitWorkspaceCreativePlan,
+  listWorkspaceCreativePlanReceipts,
   loadLocalProject,
   saveLocalProject,
 } from './lib/projectApi'
+import {
+  approveCreativePlan,
+  createCreativePlan,
+  executeApprovedCreativePlan,
+  previewCreativePlan,
+  type CreativePlan,
+  type CreativePlanPreview,
+  type CreativePlanReceipt,
+} from './lib/agent/creativePlan.mjs'
 
 function cloneElements(elements: CanvasElement[]) {
   return elements.map((element) => ({
@@ -115,6 +127,114 @@ function makeId(prefix: string) {
 
 function getMaxZ(elements: CanvasElement[]) {
   return Math.max(0, ...elements.map((element) => element.zIndex))
+}
+
+function createCanvasElement(
+  tool: Exclude<ToolId, 'select' | 'pan' | 'image'>,
+  point: { x: number; y: number },
+  content: string | undefined,
+  zIndex: number,
+  id: string,
+): CanvasElement {
+  if (tool === 'frame') {
+    return {
+      id,
+      kind: 'frame',
+      name: '新画框',
+      x: point.x - 180,
+      y: point.y - 130,
+      width: 360,
+      height: 260,
+      rotation: 0,
+      opacity: 1,
+      radius: 8,
+      fill: '#ffffff',
+      stroke: '#aeb4c0',
+      locked: false,
+      visible: true,
+      zIndex,
+    }
+  }
+  if (tool === 'text') {
+    return {
+      id,
+      kind: 'text',
+      name: '文字',
+      x: point.x - 100,
+      y: point.y - 32,
+      width: 200,
+      height: 64,
+      rotation: 0,
+      opacity: 1,
+      radius: 0,
+      fill: '#17181c',
+      stroke: 'transparent',
+      content: content || '输入一段文字',
+      locked: false,
+      visible: true,
+      zIndex,
+    }
+  }
+  if (tool === 'note') {
+    return {
+      id,
+      kind: 'note',
+      name: '便签',
+      x: point.x - 105,
+      y: point.y - 85,
+      width: 210,
+      height: 170,
+      rotation: -1,
+      opacity: 1,
+      radius: 0,
+      fill: '#cbb7ff',
+      stroke: '#cbb7ff',
+      content: content || '写下一个新想法',
+      locked: false,
+      visible: true,
+      zIndex,
+    }
+  }
+  if (tool === 'shape') {
+    return {
+      id,
+      kind: 'shape',
+      name: '圆角形状',
+      x: point.x - 70,
+      y: point.y - 70,
+      width: 140,
+      height: 140,
+      rotation: 0,
+      opacity: 1,
+      radius: 24,
+      fill: '#6465f1',
+      stroke: '#4e4fce',
+      locked: false,
+      visible: true,
+      zIndex,
+    }
+  }
+  return {
+    id,
+    kind: 'pixel',
+    name: '像素角色',
+    x: point.x - 110,
+    y: point.y - 110,
+    width: 220,
+    height: 220,
+    rotation: 0,
+    opacity: 1,
+    radius: 10,
+    fill: '#ffffff',
+    stroke: '#d5d8df',
+    pixels: [...defaultSpritePixels],
+    palette: [...defaultPixelPalette],
+    pixelWidth: 12,
+    pixelHeight: 12,
+    locked: false,
+    visible: true,
+    zIndex,
+  }
 }
 
 const processingLabels: Record<ImageLabMode, string> = {
@@ -195,6 +315,13 @@ function App({
   const [saveStatus, setSaveStatus] = useState<'saving' | 'saved'>('saved')
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [agentPlanReview, setAgentPlanReview] = useState<{
+    plan: CreativePlan
+    preview: CreativePlanPreview
+  } | null>(null)
+  const [agentPlanBusy, setAgentPlanBusy] = useState(false)
+  const [agentPlanError, setAgentPlanError] = useState<string | null>(null)
+  const [latestAgentReceipt, setLatestAgentReceipt] = useState<CreativePlanReceipt | null>(null)
   const [historyCounts, setHistoryCounts] = useState({ past: 0, future: 0 })
   const pastRef = useRef<CanvasDocument[]>([])
   const futureRef = useRef<CanvasDocument[]>([])
@@ -206,6 +333,17 @@ function App({
   const jobStatusRef = useRef(new Map<string, ProcessingJob['status']>())
   const appliedImageJobIdsRef = useRef(new Set<string>())
   const consumedLibraryAssetRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!workspaceProjectId) return
+    let disposed = false
+    void listWorkspaceCreativePlanReceipts(workspaceProjectId, { documentId: projectId, limit: 1 })
+      .then((receipts) => {
+        if (!disposed) setLatestAgentReceipt(receipts[0] ?? null)
+      })
+      .catch(() => undefined)
+    return () => { disposed = true }
+  }, [projectId, workspaceProjectId])
 
   const replaceDocument = useCallback((next: CanvasDocument) => {
     const validated = assertCanvasDocument(next)
@@ -464,104 +602,7 @@ function App({
       if (tool === 'select' || tool === 'pan' || tool === 'image') return
       const zIndex = getMaxZ(elementsRef.current) + 1
       const id = makeId(tool)
-      let element: CanvasElement
-      if (tool === 'frame') {
-        element = {
-          id,
-          kind: 'frame',
-          name: '新画框',
-          x: point.x - 180,
-          y: point.y - 130,
-          width: 360,
-          height: 260,
-          rotation: 0,
-          opacity: 1,
-          radius: 8,
-          fill: '#ffffff',
-          stroke: '#aeb4c0',
-          locked: false,
-          visible: true,
-          zIndex,
-        }
-      } else if (tool === 'text') {
-        element = {
-          id,
-          kind: 'text',
-          name: '文字',
-          x: point.x - 100,
-          y: point.y - 32,
-          width: 200,
-          height: 64,
-          rotation: 0,
-          opacity: 1,
-          radius: 0,
-          fill: '#17181c',
-          stroke: 'transparent',
-          content: content || '输入一段文字',
-          locked: false,
-          visible: true,
-          zIndex,
-        }
-      } else if (tool === 'note') {
-        element = {
-          id,
-          kind: 'note',
-          name: '便签',
-          x: point.x - 105,
-          y: point.y - 85,
-          width: 210,
-          height: 170,
-          rotation: -1,
-          opacity: 1,
-          radius: 0,
-          fill: '#cbb7ff',
-          stroke: '#cbb7ff',
-          content: content || '写下一个新想法',
-          locked: false,
-          visible: true,
-          zIndex,
-        }
-      } else if (tool === 'shape') {
-        element = {
-          id,
-          kind: 'shape',
-          name: '圆角形状',
-          x: point.x - 70,
-          y: point.y - 70,
-          width: 140,
-          height: 140,
-          rotation: 0,
-          opacity: 1,
-          radius: 24,
-          fill: '#6465f1',
-          stroke: '#4e4fce',
-          locked: false,
-          visible: true,
-          zIndex,
-        }
-      } else {
-        element = {
-          id,
-          kind: 'pixel',
-          name: '像素角色',
-          x: point.x - 110,
-          y: point.y - 110,
-          width: 220,
-          height: 220,
-          rotation: 0,
-          opacity: 1,
-          radius: 10,
-          fill: '#ffffff',
-          stroke: '#d5d8df',
-          pixels: [...defaultSpritePixels],
-          palette: [...defaultPixelPalette],
-          pixelWidth: 12,
-          pixelHeight: 12,
-          locked: false,
-          visible: true,
-          zIndex,
-        }
-      }
+      const element = createCanvasElement(tool, point, content, zIndex, id)
       commitCanvasTool('canvas.elements.add', { elements: [element] }, 'user')
       setSelectedIds([id])
       setActiveTool('select')
@@ -708,19 +749,6 @@ function App({
     setActiveTool('select')
     setJobs([])
     showToast('已恢复示例画布')
-  }, [commitCanvasTool, showToast])
-
-  const arrangeElements = useCallback(() => {
-    const movable = elementsRef.current.filter((element) => element.kind !== 'connector' && !element.locked)
-    const positions = new Map(
-      movable.map((element, index) => [
-        element.id,
-        { x: 190 + (index % 3) * 320, y: 130 + Math.floor(index / 3) * 330 },
-      ]),
-    )
-    const updates = movable.map((element) => ({ id: element.id, patch: positions.get(element.id)! }))
-    if (updates.length) commitCanvasTool('canvas.elements.patch', { updates }, 'user')
-    showToast('已整理可移动元件')
   }, [commitCanvasTool, showToast])
 
   const openImageTool = useCallback(
@@ -1333,6 +1361,18 @@ function App({
     [commitElements, imageLab, showToast],
   )
 
+  const openAgentPlan = useCallback((plan: CreativePlan) => {
+    try {
+      const preview = previewCreativePlan(documentRef.current, plan, {
+        workspaceRevision: documentRef.current.revision,
+      })
+      setAgentPlanError(null)
+      setAgentPlanReview({ plan, preview })
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '智能体计划无法生成预览')
+    }
+  }, [showToast])
+
   const runPrompt = useCallback(
     (prompt: string) => {
       const center = getViewportCenter()
@@ -1340,7 +1380,34 @@ function App({
         (element) => element.id === selectedIds[0] && element.kind === 'image',
       )
       if (/排列|整理|对齐/.test(prompt)) {
-        arrangeElements()
+        const movable = elementsRef.current.filter((element) => element.kind !== 'connector' && !element.locked)
+        if (!movable.length) {
+          showToast('当前没有可整理的元件')
+          return
+        }
+        const updates = movable.map((element, index) => ({
+          id: element.id,
+          patch: { x: 190 + (index % 3) * 320, y: 130 + Math.floor(index / 3) * 330 },
+        }))
+        const createdAt = Date.now()
+        openAgentPlan(createCreativePlan({
+          id: makeId('plan'),
+          projectId: workspaceProjectId ?? projectId,
+          documentId: projectId,
+          modeId: 'balanced',
+          baseRevision: documentRef.current.revision,
+          title: '整理画布元件',
+          objective: prompt.slice(0, 2_000),
+          source: { kind: 'deterministic-local', agentRole: 'layout-director', modelId: null, requestHash: null },
+          steps: [{
+            id: makeId('step'),
+            toolId: 'canvas.elements.patch',
+            summary: `按三列网格重新排列 ${updates.length} 个可移动元件`,
+            input: { updates },
+            sourceAssets: [],
+          }],
+          createdAt,
+        }))
       } else if (/去背景|抠图|移除背景/.test(prompt) && selectedImage) {
         openImageTool(selectedImage.id, 'remove-background')
       } else if (/裁剪|画幅/.test(prompt) && selectedImage) {
@@ -1351,21 +1418,96 @@ function App({
         openImageTool(selectedImage.id, 'adjust')
       } else if (/像素/.test(prompt) && selectedImage) {
         openImageTool(selectedImage.id, 'pixelate')
-      } else if (/像素/.test(prompt)) {
-        createAt('pixel', center)
-        showToast('已创建像素角色，可双击编辑')
-      } else if (/文字|标题/.test(prompt)) {
-        createAt('text', center, prompt.replace(/添加|创建|文字|标题/g, '').trim() || '新的文字')
-      } else if (/形状|方块|圆形|圆/.test(prompt)) {
-        createAt('shape', center)
       } else {
-        const noteContent = prompt.replace(/添加|创建|一张|紫色|便签/g, '').trim() || '新的想法'
-        createAt('note', center, noteContent)
-        showToast('已将指令变成便签')
+        const tool: Exclude<ToolId, 'select' | 'pan' | 'image'> = /像素/.test(prompt)
+          ? 'pixel'
+          : /文字|标题/.test(prompt)
+            ? 'text'
+            : /形状|方块|圆形|圆/.test(prompt)
+              ? 'shape'
+              : 'note'
+        const content = tool === 'text'
+          ? prompt.replace(/添加|创建|文字|标题/g, '').trim() || '新的文字'
+          : tool === 'note'
+            ? prompt.replace(/添加|创建|一张|紫色|便签/g, '').trim() || '新的想法'
+            : undefined
+        const id = makeId(tool)
+        const element = createCanvasElement(
+          tool,
+          center,
+          content,
+          getMaxZ(elementsRef.current) + 1,
+          id,
+        )
+        const createdAt = Date.now()
+        openAgentPlan(createCreativePlan({
+          id: makeId('plan'),
+          projectId: workspaceProjectId ?? projectId,
+          documentId: projectId,
+          modeId: 'balanced',
+          baseRevision: documentRef.current.revision,
+          title: tool === 'pixel' ? '创建像素元件' : tool === 'text' ? '创建文字元件' : tool === 'shape' ? '创建形状元件' : '创建便签元件',
+          objective: prompt.slice(0, 2_000),
+          source: { kind: 'deterministic-local', agentRole: 'canvas-assistant', modelId: null, requestHash: null },
+          steps: [{
+            id: makeId('step'),
+            toolId: 'canvas.elements.add',
+            summary: `在当前视口中心创建“${element.name}”`,
+            input: { elements: [element] },
+            sourceAssets: [],
+          }],
+          createdAt,
+        }))
       }
     },
-    [arrangeElements, createAt, getViewportCenter, openImageTool, selectedIds, showToast],
+    [getViewportCenter, openAgentPlan, openImageTool, projectId, selectedIds, showToast, workspaceProjectId],
   )
+
+  const rejectAgentPlan = useCallback(() => {
+    if (agentPlanBusy) return
+    setAgentPlanReview(null)
+    setAgentPlanError(null)
+  }, [agentPlanBusy])
+
+  const approveAgentPlanReview = useCallback(async () => {
+    if (!agentPlanReview || agentPlanBusy) return
+    setAgentPlanBusy(true)
+    setAgentPlanError(null)
+    try {
+      const before = documentRef.current
+      const approved = await approveCreativePlan(agentPlanReview.plan)
+      let next: CanvasDocument
+      let receipt: CreativePlanReceipt
+      if (workspaceProjectId) {
+        const result = await commitWorkspaceCreativePlan(approved)
+        next = assertCanvasDocument(JSON.parse(result.document.value))
+        receipt = result.receipt
+      } else {
+        const result = await executeApprovedCreativePlan(before, approved, { workspaceRevision: before.revision })
+        next = assertCanvasDocument(result.document)
+        receipt = result.receipt
+      }
+      pastRef.current = [...pastRef.current, cloneCanvasDocument(before)].slice(-80)
+      futureRef.current = []
+      replaceDocument(next)
+      syncHistoryCounts()
+      const addedIds = agentPlanReview.plan.steps.flatMap((step) => {
+        const value = step.input.elements
+        return Array.isArray(value)
+          ? value.flatMap((element) => element && typeof element === 'object' && 'id' in element && typeof element.id === 'string' ? [element.id] : [])
+          : []
+      })
+      if (addedIds.length) setSelectedIds(addedIds)
+      setActiveTool('select')
+      setLatestAgentReceipt(receipt)
+      setAgentPlanReview(null)
+      showToast('智能体计划已批准并写入，执行回执已保存')
+    } catch (error) {
+      setAgentPlanError(error instanceof Error ? error.message : '智能体计划提交失败')
+    } finally {
+      setAgentPlanBusy(false)
+    }
+  }, [agentPlanBusy, agentPlanReview, replaceDocument, showToast, syncHistoryCounts, workspaceProjectId])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1564,6 +1706,16 @@ function App({
           onJobUpdate={updateJob}
         />
       ) : null}
+
+      <AgentPlanReviewDialog
+        plan={agentPlanReview?.plan ?? null}
+        preview={agentPlanReview?.preview ?? null}
+        busy={agentPlanBusy}
+        error={agentPlanError}
+        latestReceipt={latestAgentReceipt}
+        onApprove={approveAgentPlanReview}
+        onReject={rejectAgentPlan}
+      />
 
       {toast ? (
         <div className="toast" role="status">
