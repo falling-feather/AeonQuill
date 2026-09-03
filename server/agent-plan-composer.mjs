@@ -282,6 +282,24 @@ export async function composeWorkspaceCreativePlan(options) {
   integer(request.baseRevision, 'baseRevision')
   const instruction = instructionText(request.instruction)
   if (!options.workspaceStore || !options.agentAdapter) fail('AGENT_PLAN_COMPOSER_UNAVAILABLE', '计划编译服务不可用', 503)
+  const modeToolGuides = TOOL_GUIDES[request.modeId]
+  const exposedToolIds = options.allowedToolIds === undefined
+    ? modeToolGuides.map((entry) => entry.split(' — ', 1)[0])
+    : options.allowedToolIds
+  if (
+    !Array.isArray(exposedToolIds)
+    || exposedToolIds.length < 1
+    || new Set(exposedToolIds).size !== exposedToolIds.length
+  ) {
+    fail('AGENT_PLAN_COMPOSER_INVALID_POLICY', '文本计划内部工具策略无效', 500)
+  }
+  const availableToolIds = new Set(modeToolGuides.map((entry) => entry.split(' — ', 1)[0]))
+  if (exposedToolIds.some((toolId) => typeof toolId !== 'string' || !availableToolIds.has(toolId))) {
+    fail('AGENT_PLAN_COMPOSER_INVALID_POLICY', '文本计划内部工具策略包含未登记能力', 500)
+  }
+  const toolGuide = modeToolGuides.filter((entry) => exposedToolIds.includes(entry.split(' — ', 1)[0]))
+  const agentRole = options.agentRole ?? 'cross-mode-planner'
+  id(agentRole, 'agentRole')
 
   const before = readAuthority(options.workspaceStore, request)
   const context = buildCreativePlanContext(request.modeId, before.value)
@@ -289,18 +307,22 @@ export async function composeWorkspaceCreativePlan(options) {
     modeId: request.modeId,
     instruction,
     context,
-    toolGuide: TOOL_GUIDES[request.modeId],
+    toolGuide,
   })
 
   const after = readAuthority(options.workspaceStore, request)
   if (after.stored.value !== before.stored.value) {
     fail('REVISION_CONFLICT', '模型返回期间权威正文发生变化，请重新请求', 409)
   }
-  const allowedTools = new Set(TOOL_GUIDES[request.modeId].map((entry) => entry.split(' — ', 1)[0]))
+  const allowedTools = new Set(exposedToolIds)
   for (const step of composed.candidate.steps) {
     if (!allowedTools.has(step.toolId)) fail('AGENT_PLAN_TOOL_NOT_EXPOSED', `文本智能体不能使用工具 ${step.toolId}`, 400)
     enforceModelToolBoundary(request.modeId, instruction, step)
   }
+  options.candidateGuard?.(composed.candidate, {
+    request: structuredClone(request),
+    context: structuredClone(context),
+  })
 
   const now = options.now?.() ?? Date.now()
   const idFactory = options.idFactory ?? randomUUID
@@ -317,7 +339,7 @@ export async function composeWorkspaceCreativePlan(options) {
       objective: composed.candidate.objective,
       source: {
         kind: 'byok-text',
-        agentRole: 'cross-mode-planner',
+        agentRole,
         modelId: composed.adapter.model,
         requestHash: composed.requestHash,
       },

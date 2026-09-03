@@ -105,6 +105,7 @@ import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
 import { composeWorkspaceCreativePlan } from './agent-plan-composer.mjs'
+import { composeWorkspaceVideoSupervisorTurn } from './video-supervisor.mjs'
 import { GenerationAdapterService } from './generation-adapter.mjs'
 import { StorageLifecycleService, STORAGE_LIFECYCLE_VERSION } from './storage-lifecycle.mjs'
 import { createDiagnosticReport, DiagnosticBundleService } from './diagnostic-bundle.mjs'
@@ -4416,6 +4417,15 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && pathname === '/api/workspace/agent-plans/compose') {
       const body = await readJsonBody(request, 32 * 1024)
       const result = await composeWorkspaceCreativePlan({
+        request: body,
+        workspaceStore,
+        agentAdapter: agentAdapters,
+      })
+      return sendJson(response, 200, result)
+    }
+    if (request.method === 'POST' && pathname === '/api/workspace/video-supervisor/next') {
+      const body = await readJsonBody(request, 16 * 1024)
+      const result = await composeWorkspaceVideoSupervisorTurn({
         request: body,
         workspaceStore,
         agentAdapter: agentAdapters,

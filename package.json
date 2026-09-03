@@ -23,6 +23,7 @@
     "validate:project-initialization": "npm run build && node scripts/validate-project-initialization.mjs",
     "validate:agent-plan": "npm run build && node scripts/validate-agent-plan-ui.mjs",
     "validate:agent-planner": "npm run build && node scripts/validate-agent-planner-ui.mjs",
+    "validate:video-supervisor": "npm run build && node scripts/validate-video-supervisor-ui.mjs",
     "validate:asset-library": "npm run build && node scripts/validate-asset-library-ui.mjs",
     "validate:workflow-center": "npm run build && node scripts/validate-workflow-center-ui.mjs",
     "validate:custom-workflow": "node scripts/validate-custom-workflow-api.mjs",

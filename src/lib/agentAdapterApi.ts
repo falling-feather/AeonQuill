@@ -1,5 +1,6 @@
 import type { VideoProductionProject } from './story/productionPipeline.mjs'
 import type { CreativePlan } from './agent/creativePlan.mjs'
+import type { VideoSupervisorDecision } from './story/videoSupervisor.mjs'
 import { ensureLocalSession } from './videoApi'
 
 export const AGENT_ADAPTER_STATUS_EVENT = 'aeonquill:agent-adapter-status'
@@ -60,6 +61,17 @@ export type CreativePlanComposeResult = {
     includes: string[]
     excludes: string[]
   }
+}
+
+export type VideoSupervisorTurnResult = {
+  schemaVersion: 1
+  decision: VideoSupervisorDecision
+  plan: CreativePlan | null
+  preview: CreativePlanComposeResult['preview'] | null
+  adapter: CreativePlanComposeResult['adapter'] | null
+  usage: CreativePlanComposeResult['usage']
+  elapsedMs: number
+  contextDisclosure: CreativePlanComposeResult['contextDisclosure'] | null
 }
 
 export class AgentAdapterApiError extends Error {
@@ -138,6 +150,18 @@ export function requestCreativePlan(input: {
   instruction: string
 }) {
   return api<CreativePlanComposeResult>('/api/workspace/agent-plans/compose', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function requestVideoSupervisorTurn(input: {
+  projectId: string
+  documentId: string
+  baseRevision: number
+}) {
+  return api<VideoSupervisorTurnResult>('/api/workspace/video-supervisor/next', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),

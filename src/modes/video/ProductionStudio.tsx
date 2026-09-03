@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Bot,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -44,12 +45,15 @@ import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib
 import type { LibraryAsset, LibraryAssetInsertion } from '../../lib/libraryApi'
 import { flushWorkspaceModeDocument } from '../../lib/projectApi'
 import { cancelVideoJob, createSoundRenderJob, retryVideoJob } from '../../lib/videoApi'
+import type { CreativePlan } from '../../lib/agent/creativePlan.mjs'
+import { evaluateVideoSupervisor, type VideoSupervisorDecision } from '../../lib/story/videoSupervisor.mjs'
 import {
   AGENT_ADAPTER_STATUS_EVENT,
   clearTextAgentAdapter,
   configureTextAgentAdapter,
   fetchAgentAdapterStatus,
   requestAgentProposal,
+  requestVideoSupervisorTurn,
   type AgentAdapterStatus,
 } from '../../lib/agentAdapterApi'
 import { GenerationAdaptersPanel, type VideoCandidateContext } from './GenerationAdaptersPanel'
@@ -78,6 +82,7 @@ type ProductionStudioProps = {
   runtimeLabel: string
   workspaceProjectId?: string
   workspaceDocumentId?: string
+  workspaceRevision?: number
   project: VideoProductionProject
   onProjectChange: (project: VideoProductionProject) => void
   onBridgeToStory: (source: ApprovedProductionStorySource) => void
@@ -87,6 +92,7 @@ type ProductionStudioProps = {
   onJobTracked: (job: ProcessingJob) => void
   onPrepareLocalShot?: (continuityShotId: string) => void
   onReviewAgentPlan?: (request: ProductionAgentPlanRequest) => void
+  onReviewSupervisorPlan?: (plan: CreativePlan) => void
 }
 
 type ContinuitySlotView = {
@@ -126,6 +132,18 @@ function formatProductionHours(lowMinutes: number, highMinutes: number) {
   return `${Math.round(lowMinutes / 60)}–${Math.round(highMinutes / 60)} 小时`
 }
 
+function supervisorActionLabel(decision: VideoSupervisorDecision) {
+  if (decision.status === 'text-turn-ready') return '运行至下一审批点'
+  if (decision.status === 'project-paused') return '全链路已暂停'
+  if (decision.status === 'node-paused') return '节点已暂停'
+  if (decision.status === 'node-review') return '前往节点审批'
+  if (decision.status === 'change-card-review') return '前往变更卡'
+  if (decision.status === 'node-failed') return '检查失败节点'
+  if (decision.status === 'runtime-required') return '前往真实执行节点'
+  if (decision.status === 'completed') return '全部节点已完成'
+  return '检查依赖门'
+}
+
 function downloadProject(project: VideoProductionProject) {
   const blob = new Blob([serializeVideoProductionProject(project, { pretty: true })], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
@@ -145,7 +163,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot, onReviewAgentPlan }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, workspaceRevision, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot, onReviewAgentPlan, onReviewSupervisorPlan }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -174,6 +192,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
   const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
   const [adapterNotice, setAdapterNotice] = useState('密钥只驻留本次 sidecar 内存，关闭应用即清除。')
+  const [supervisorBusy, setSupervisorBusy] = useState(false)
+  const [supervisorNotice, setSupervisorNotice] = useState('督导会读取权威生产状态，每轮只运行到下一个人工或真实媒体门。')
   const [adapterForm, setAdapterForm] = useState<{
     providerLabel: string
     endpoint: string
@@ -192,6 +212,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
 
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId) ?? project.nodes[0]
   const progress = useMemo(() => productionProgress(project), [project])
+  const supervisorDecision = useMemo(() => evaluateVideoSupervisor(project), [project])
   const continuitySummary = useMemo(() => continuityGraphSummary(project.continuityGraph), [project.continuityGraph])
   const continuityShot = project.continuityGraph.shots.find(({ id }) => id === continuityShotId) ?? project.continuityGraph.shots[0] ?? null
   const continuitySlots = useMemo<ContinuitySlotView[]>(() => {
@@ -687,6 +708,39 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
     }
   }
 
+  const runSupervisorTurn = async () => {
+    if (!workspaceProjectId || !workspaceDocumentId || workspaceRevision === undefined) {
+      setSupervisorNotice('当前智能视频正文尚未完成工作区登记，无法启动权威督导。')
+      return
+    }
+    if (supervisorDecision.modelCallRequired && !adapterStatus.text.configured) {
+      setSupervisorNotice('当前轮需要文本模型；请先在右侧配置本次运行使用的 BYOK 文本 API。')
+      return
+    }
+    setSupervisorBusy(true)
+    try {
+      await flushWorkspaceModeDocument(workspaceDocumentId)
+      const result = await requestVideoSupervisorTurn({
+        projectId: workspaceProjectId,
+        documentId: workspaceDocumentId,
+        baseRevision: workspaceRevision,
+      })
+      if (result.decision.node) setSelectedNodeId(result.decision.node.id)
+      if (result.plan) {
+        if (!onReviewSupervisorPlan) throw new Error('当前页面没有接入共享计划审批面，督导结果已丢弃。')
+        onReviewSupervisorPlan(result.plan)
+        setSupervisorNotice(`${result.decision.node?.title ?? '当前角色'}已生成一轮只读计划；批准前权威正文不变。`)
+      } else {
+        setSupervisorNotice(result.decision.message)
+        setNotice(result.decision.message)
+      }
+    } catch (error) {
+      setSupervisorNotice(messageOf(error))
+    } finally {
+      setSupervisorBusy(false)
+    }
+  }
+
   const bridgeToStory = () => {
     try {
       onBridgeToStory(createApprovedStorySource(project))
@@ -762,6 +816,37 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
             onClick={() => execute(project.globalPaused ? 'project.resume' : 'project.pause', {}, project.globalPaused ? '全链路已恢复。' : '全链路已安全暂停。')}
           >{project.globalPaused ? <Play size={15} /> : <Pause size={15} />}{project.globalPaused ? '恢复全链路' : '暂停全链路'}</button>
           <button type="button" className="is-primary" onClick={runNext} disabled={project.globalPaused || hasReviewGate}><Play size={15} /> {hasReviewGate ? '等待节点审批' : '运行下一节点'}</button>
+        </section>
+
+        <section className={`aq-production-supervisor is-${supervisorDecision.status}`} aria-label="制片督导">
+          <div className="aq-production-supervisor-mark"><Bot size={19} /></div>
+          <div className="aq-production-supervisor-copy">
+            <span>可干预多轮督导 · {supervisorDecision.approvedNodes}/{supervisorDecision.totalNodes}</span>
+            <strong>{supervisorDecision.node ? `${supervisorDecision.node.order}. ${supervisorDecision.node.title}` : '生产图检查'}</strong>
+            <p>{supervisorDecision.message}</p>
+            <small role="status" aria-live="polite">{supervisorNotice}</small>
+          </div>
+          <div className="aq-production-supervisor-boundary">
+            <span>{supervisorDecision.modelCallRequired ? '本轮调用 BYOK 文本模型' : '本轮不调用模型'}</span>
+            <small>到审批、暂停、失败或真实媒体门即停止</small>
+          </div>
+          <button
+            type="button"
+            className="is-supervisor"
+            onClick={() => void runSupervisorTurn()}
+            disabled={
+              supervisorBusy
+              || !workspaceProjectId
+              || !workspaceDocumentId
+              || workspaceRevision === undefined
+              || supervisorDecision.status === 'project-paused'
+              || supervisorDecision.status === 'completed'
+              || (supervisorDecision.modelCallRequired && !adapterStatus.text.configured)
+            }
+          >
+            {supervisorBusy ? <Loader2 size={15} className="is-spinning" /> : <Bot size={15} />}
+            {supervisorBusy ? '正在读取并规划' : supervisorActionLabel(supervisorDecision)}
+          </button>
         </section>
 
         <div className="aq-production-track-wrap">

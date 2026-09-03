@@ -1128,6 +1128,7 @@ export function SmartVideoWorkbench({
           runtimeLabel={liveRuntimeLabel}
           workspaceProjectId={workspaceProjectId}
           workspaceDocumentId={projectId ?? result.project.id}
+          workspaceRevision={workspaceRevision}
           project={result.production}
           onProjectChange={updateProductionProject}
           onBridgeToStory={bridgeProductionSource}
@@ -1137,6 +1138,7 @@ export function SmartVideoWorkbench({
           onJobTracked={(job) => setJobs((existing) => upsertJob(existing, job))}
           onPrepareLocalShot={prepareLocalCandidateShot}
           onReviewAgentPlan={reviewProductionAgentPlan}
+          onReviewSupervisorPlan={openAgentPlan}
         />
         {activeWorkspace !== 'production' ? (
           <>
