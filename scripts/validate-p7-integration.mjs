@@ -218,6 +218,9 @@ async function validatePixelGameUi(baseUrl) {
     await page.getByRole('button', { name: /游戏资产包/u }).click()
     await waitForDownloads(downloads, 10)
     await page.getByText(/游戏资产包完成/u).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: /引擎桥接包/u }).click()
+    await waitForDownloads(downloads, 16)
+    await page.getByText(/引擎桥接包完成/u).waitFor({ state: 'visible' })
     const byFilename = new Map(downloads.map((download) => [download.suggestedFilename(), download]))
     const filenames = [...byFilename.keys()]
     assert.equal(filenames.some((name) => name.endsWith('.aeonpixel.json')), true)
@@ -230,6 +233,11 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(filenames.some((name) => name.endsWith('-clip.json')), true)
     assert.equal(filenames.some((name) => name.endsWith('-terrain-preview.png')), true)
     assert.equal(filenames.some((name) => name.endsWith('-terrain-preview.json')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-engine-bridge.json')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-godot-import.gd')), true)
+    assert.equal(filenames.some((name) => /^AeonQuillPixelImporter_[0-9a-f]{8}\.cs$/u.test(name)), true)
+    assert.equal(filenames.some((name) => name.startsWith('$') && name.endsWith('-character.png')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-engine-README.md')), true)
 
     const readDownload = async (suffix) => {
       const entry = [...byFilename.entries()].find(([name]) => name.endsWith(suffix))
@@ -247,8 +255,16 @@ async function validatePixelGameUi(baseUrl) {
     const clipSprite = await readDownload('-clip.png')
     const terrainManifest = JSON.parse((await readDownload('-terrain-preview.json')).toString('utf8'))
     const terrainSprite = await readDownload('-terrain-preview.png')
+    const engineManifest = JSON.parse((await readDownload('-engine-bridge.json')).toString('utf8'))
+    const godotImporter = (await readDownload('-godot-import.gd')).toString('utf8')
+    const unityImporterEntry = [...byFilename.entries()].find(([name]) => /^AeonQuillPixelImporter_[0-9a-f]{8}\.cs$/u.test(name))
+    assert.ok(unityImporterEntry, 'Missing deterministic Unity importer')
+    const unityImporter = (await readFile(await unityImporterEntry[1].path())).toString('utf8')
+    const rpgMakerCharacter = await readDownload('-character.png')
+    const engineReadme = (await readDownload('-engine-README.md')).toString('utf8')
     assert.deepEqual([...clipSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.deepEqual([...terrainSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+    assert.deepEqual([...rpgMakerCharacter.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.equal(project.schemaVersion, 5)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
     assert.equal(project.paletteCycles.some((cycle) => cycle.name === '灵光轮转' && cycle.stepDurationMs === 80 && cycle.direction === 'ping-pong'), true)
@@ -298,6 +314,41 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(terrainManifest.cells[4].expectedBitmask, 7)
     assert.equal(terrainManifest.cells[4].matchedBitmask, 7)
     assert.equal(terrainManifest.cells[4].exact, true)
+    assert.equal(engineManifest.schemaVersion, 1)
+    assert.equal(engineManifest.kind, 'aeonquill.pixel-engine-bridge')
+    assert.equal(engineManifest.sourceDocumentId, project.id)
+    assert.equal(engineManifest.sourceRevision, project.revision)
+    assert.equal(engineManifest.sourceSchemaVersion, project.schemaVersion)
+    assert.equal(engineManifest.files.sprite.endsWith('-sprite-sheet.png'), true)
+    assert.equal(engineManifest.files.godotImporter.endsWith('-godot-import.gd'), true)
+    assert.equal(/^AeonQuillPixelImporter_[0-9a-f]{8}\.cs$/u.test(engineManifest.files.unityImporter), true)
+    assert.equal(engineManifest.files.rpgMakerCharacter.startsWith('$'), true)
+    assert.equal(engineManifest.frames.length, 8)
+    assert.equal(engineManifest.animations.some((animation) => animation.name === '八方演武'), true)
+    assert.equal(engineManifest.animationEvents.some((event) => event.name === '剑鸣'), true)
+    assert.equal(engineManifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
+    assert.equal(engineManifest.godot.durationFps, 1000)
+    assert.equal(engineManifest.unity.pixelsPerUnit, 16)
+    assert.equal(engineManifest.unity.yConversion, 'atlasHeight - top - height')
+    assert.deepEqual(engineManifest.unity.texture, {
+      filterMode: 'Point', mipmaps: false, compression: 'Uncompressed', wrapMode: 'Clamp',
+    })
+    assert.deepEqual(engineManifest.rpgMakerMz.layout, {
+      columns: 3, rows: 4, rowOrder: ['south', 'west', 'east', 'north'],
+    })
+    assert.equal(engineManifest.rpgMakerMz.cells.length, 12)
+    assert.equal(engineManifest.rpgMakerMz.cells.every((cell) => cell.repeated === true), true)
+    assert.match(godotImporter, /SpriteFrames\.new\(\)/u)
+    assert.match(godotImporter, /set_animation_speed\(animation_name, 1000\.0\)/u)
+    assert.match(godotImporter, /ResourceSaver\.save/u)
+    assert.match(unityImporter, /SpriteDataProviderFactories/u)
+    assert.match(unityImporter, /texture\.height - frame\.atlas\.y - frame\.atlas\.height/u)
+    assert.match(unityImporter, /mipmapEnabled = false/u)
+    assert.match(unityImporter, /FilterMode\.Point/u)
+    assert.match(engineReadme, /docs\.godotengine\.org/u)
+    assert.match(engineReadme, /docs\.unity3d\.com/u)
+    assert.match(engineReadme, /rpgmakerofficial\.com/u)
+    assert.match(engineReadme, /不会被脚本执行/u)
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -320,13 +371,13 @@ async function validatePixelGameUi(baseUrl) {
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel terrain inference, palette cycles, events, clip bundle and ten-file delivery',
+      label: 'pixel terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel terrain inference, palette cycles, events, clip bundle and ten-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel terrain inference, palette cycles, events, clip bundle and sixteen-download engine delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

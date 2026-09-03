@@ -116,6 +116,74 @@ export type PixelTerrainPreviewExportBundle = {
   manifest: { filename: string; mime: 'application/json'; text: string; value: PixelTerrainPreviewMetadata }
 }
 
+export type PixelEngineBridgeOptions = PixelGameOptions & {
+  pixelsPerUnit?: number
+  rpgMakerFrameIds?: Partial<Record<'south' | 'west' | 'east' | 'north', string[]>>
+}
+
+export type PixelEngineBridgeManifest = {
+  schemaVersion: 1
+  kind: 'aeonquill.pixel-engine-bridge'
+  sourceDocumentId: string
+  sourceRevision: number
+  sourceSchemaVersion: number
+  files: {
+    sprite: string
+    manifest: string
+    godotImporter: string
+    godotOutput: string
+    unityImporter: string
+    rpgMakerCharacter: string
+    readme: string
+  }
+  coordinateSystem: { origin: 'top-left'; unit: 'pixel' }
+  frames: PixelGameManifest['frames']
+  animations: PixelGameAnimation[]
+  animationEvents: PixelDocument['animationEvents']
+  directions: PixelGameManifest['directions']
+  tilemap: PixelGameManifest['tilemap']
+  layerGroups: PixelDocument['layerGroups']
+  layers: PixelDocument['layers']
+  palette: PixelDocument['palette']
+  paletteCycles: PixelDocument['paletteCycles']
+  godot: {
+    target: 'Godot 4.x'
+    durationFps: 1000
+    outputResource: string
+    importer: string
+  }
+  unity: {
+    target: 'Unity 2021.2+'
+    pixelsPerUnit: number
+    yConversion: 'atlasHeight - top - height'
+    texture: { filterMode: 'Point'; mipmaps: false; compression: 'Uncompressed'; wrapMode: 'Clamp' }
+    importer: string
+    stableIdPolicy: 'reuse-existing-name-id'
+  }
+  rpgMakerMz: {
+    target: 'RPG Maker MZ'
+    layout: { columns: 3; rows: 4; rowOrder: Array<'south' | 'west' | 'east' | 'north'> }
+    image: string
+    cells: Array<{
+      row: number
+      column: number
+      direction: 'south' | 'west' | 'east' | 'north'
+      directionLabel: string
+      frameId: string
+      repeated: boolean
+    }>
+  }
+}
+
+export type PixelEngineBridgeExportBundle = {
+  sprite: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  manifest: { filename: string; mime: 'application/json'; text: string; value: PixelEngineBridgeManifest }
+  godotImporter: { filename: string; mime: 'text/x-gdscript'; text: string }
+  unityImporter: { filename: string; mime: 'text/x-csharp'; text: string }
+  rpgMakerCharacter: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  readme: { filename: string; mime: 'text/markdown'; text: string }
+}
+
 export class PixelGamePipelineError extends Error {
   code: string
   details?: unknown
@@ -151,3 +219,7 @@ export function createPixelTerrainPreviewExportBundle(
   document: PixelDocument,
   options?: PixelTerrainPreviewOptions & { baseName?: string },
 ): PixelTerrainPreviewExportBundle
+export function createPixelEngineBridgeExportBundle(
+  document: PixelDocument,
+  options?: PixelEngineBridgeOptions,
+): PixelEngineBridgeExportBundle

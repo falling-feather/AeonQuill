@@ -1,14 +1,14 @@
-# 光阴砚 AEONQUILL — 逐帧游戏元数据、调色板循环与动画事件
+# 光阴砚 AEONQUILL — 逐帧游戏元数据、Terrain 与三引擎交付
 
 > 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、调色板循环、动画事件及游戏交付的可复核事实。
 >
-> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，以及 `PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付。
+> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，`PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付，以及 `PIXEL-009 / V0.7.45` 建立的 Godot 4、Unity 2021.2+ 与 RPG Maker MZ 同源桥接包。
 >
 > **最后一次更新时间**：2026-09-03
 >
 > **更新者**：主开发、像素模式责任域、前端与游戏资产责任域
 >
-> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`
+> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`、`PIXEL-009 / V0.7.45`
 
 ---
 
@@ -26,7 +26,7 @@
 - 复制帧时复制独立元数据，空白帧使用安全默认；
 - Tiled tile object group 与 mixed WangSet，以及离线可视预览。
 
-本检查点不提供任意多边形/圆形碰撞、嵌套碰撞层、基于像素轮廓的自动碰撞生成、Dual-grid 推导、动画事件、Godot/Unity/RPG Maker 原生导入器或双向编辑。上述能力继续作为后续独立任务。
+`PIXEL-006` 本身不提供任意多边形/圆形碰撞、嵌套碰撞层、基于像素轮廓的自动碰撞生成、Dual-grid 推导、动画事件、引擎导入器或双向编辑；后续 `PIXEL-007` 已补入动画事件，`PIXEL-009` 已补入单向引擎桥接。任意碰撞、Dual-grid 和编辑器双向回写仍未实现。
 
 ## 2. PixelDocument schema v4
 
@@ -244,3 +244,48 @@ P7 在 D 盘隔离项目和后台系统 Edge 中建立“灵光轮转”乒乓�
 固定向量覆盖全满九宫格、斜角门控、精确命中、缺帧 Hamming 降级、同距稳定排序、RGBA 拼接、PNG/JSON 事实一致和非法输入失败关闭。P7 在 D 盘隔离项目和后台系统 Edge 中选择“转角”，得到 1 格精确、3 格降级，随后把活动帧中心规则从 Mask 5 原子更新为 Mask 7，实际下载并解析九宫格 PNG/JSON；刷新后 Mask 7 从 SQLite 正文恢复，1440×900 与 390×844 无页面级横向溢出，页面无 warning/error。
 
 本检查点不实现任意尺寸 Tilemap 绘制、地形笔刷、图块自动生成、嵌套/多 Terrain 混合、Worker 化或三引擎原生导入器；也没有启动 ComfyUI/H3、读取或改写正式项目、既有 output、D 盘正式桌面或快捷方式，或重新封装安装包。
+
+## 17. V0.7.45 三引擎桥接包
+
+`createPixelEngineBridgeExportBundle()` 不改变 PixelDocument schema，也不改写既有六文件游戏包、活动片段包或九宫格包。它复用同一次 `createPixelExportBundle()` 和 `createPixelGameManifest()` 结果，独立输出六项：
+
+1. `*-sprite-sheet.png`：与游戏交付同布局、同 RGBA 合成器的共享 Atlas；
+2. `*-engine-bridge.json`：`aeonquill.pixel-engine-bridge` schema v1；
+3. `*-godot-import.gd`：Godot 4 EditorScript；
+4. `AeonQuillPixelImporter_<稳定八位哈希>.cs`：Unity 2021.2+ Editor 脚本；
+5. `$*-character.png`：RPG Maker MZ 单角色 3×4 图；
+6. `*-engine-README.md`：安装步骤、来源和明确边界。
+
+桥接 manifest 保留源文档 ID、revision、schema、坐标系、帧 Atlas、逐帧锚点/碰撞/Terrain、所有动画及精确播放帧、动画事件、八方向映射、Tilemap、图层组/混合、调色板和循环。三个目标格式只读取这份事实；脚本不执行事件、不内嵌音频，也不把矩形碰撞或 Terrain 自动伪造成引擎节点。
+
+## 18. Godot 与 Unity 导入语义
+
+Godot 脚本在项目编辑器中运行，读取同目录桥接清单和 PNG，为每个动画创建 `SpriteFrames` 与 `AtlasTexture` 区域。动画速度固定为 `1000.0 FPS`，每帧相对时长直接使用 `durationMs`，因此绝对秒数为 `durationMs / 1000`；循环标记映射为 `LOOP_LINEAR` 或 `LOOP_NONE`，最后由 `ResourceSaver.save()` 写入同目录 `.tres`。该策略依据 [Godot SpriteFrames](https://docs.godotengine.org/en/stable/classes/class_spriteframes.html) 与 [ResourceSaver](https://docs.godotengine.org/en/stable/classes/class_resourcesaver.html) 的公开契约。
+
+Unity 脚本面向 2021.2+，要求 2D Sprite 包，用户选择桥接 JSON 后从同目录定位 Atlas。TextureImporter 固定为 Sprite/Multiple、Point、无 Mipmap、Uncompressed、Alpha transparency 与 Clamp；切片通过官方 [Sprite Editor Data Provider API](https://docs.unity3d.com/current/Manual/sprite/sprite-editor/sprite-editor-data-provider-api.html) 完成。AEONQUILL Atlas 使用左上原点，Unity Rect 使用纹理左下原点，因此纵坐标严格换算为 `texture.height - top - height`；锚点转为 `pivotX = x / width`、`pivotY = 1 - y / height`。重复导入先按 `frame.name + "__" + frame.id` 查找既有 Sprite ID，命中时复用，避免引用无故漂移；新项才生成 GUID，并同步名称/FileID 对。
+
+两份脚本都把导出后可能被手工改写的 JSON 当作不可信输入：Atlas 只允许清单同目录的 `.png` 文件名，拒绝绝对路径、目录分隔符和路径穿越；帧 ID、数组结构、图集矩形、纹理边界和时长均在生成引擎资源前复核。Unity 还会先验证有限数值、PPU、锚点和稳定名称唯一性，再改变 TextureImporter 设置；错误清单因此失败关闭，不留下可继续执行的越界切片或半导入状态。
+
+## 19. RPG Maker MZ 3×4 角色图
+
+RPG Maker MZ 单角色资源按官方 [Asset Standards](https://rpgmakerofficial.com/product/MZ_help-en/01_11_01.html) 使用 `$` 文件名前缀、3 列 pattern 与 4 行方向。行序固定为：
+
+| 行 | AEONQUILL 方向 | RPG Maker 方向 |
+| ---: | --- | --- |
+| 0 | `south` | 下 |
+| 1 | `west` | 左 |
+| 2 | `east` | 右 |
+| 3 | `north` | 上 |
+
+每个方向只接受一个或三个现有 frame ID。三个 ID 按列直接拼接；只有一个时三列重复同一帧，并在 `rpgMakerMz.cells[].repeated` 标为 `true`，不虚构不存在的步态。RGBA 逐行复制、关闭插值且保留透明像素；输出尺寸始终为 `document.width × 3` 和 `document.height × 4`。默认映射从现有八方向的四个正交方向选择一个来源帧，因此默认包的 12 格都会诚实标记为重复，用户后续可由 API 传入真实三 pattern 映射。
+
+## 20. V0.7.45 验证口径与边界
+
+- 像素核心、转换与游戏交付专项 32/32；
+- 全仓单元契约 285/285；
+- TypeScript、生产构建和 96 项默认安全基线通过；
+- P7 六阶段集成通过。
+
+固定契约验证桥接文件引用、源 revision、RPG Maker 行序/尺寸/透明 RGBA/重复来源、Godot 1000 FPS 毫秒时长与 ResourceSaver、Unity 坐标/pivot/Point/无 Mipmap/无压缩和稳定 ID 策略，以及两份导入脚本的同目录 PNG、矩形边界和空字段防护；两 pattern、未知帧、非法 PPU 和未知选项全部失败关闭。P7 在 D 盘隔离项目与后台系统 Edge 中继既有十项交付后点击“引擎桥接包”，实际产生六个新增下载；脚本解析桥接 JSON、两份导入脚本、RPG PNG 与 README，确认 schema v5 来源、8 帧、动画/事件/循环、12 格行序和公开参考一致。合计 16 次下载，刷新后正文保持恢复，1440×900 与 390×844 无页面级横向溢出，页面无 warning/error。
+
+当前机器未发现 Godot、Unity Editor 或 RPG Maker MZ 可执行文件，因此本检查点只证明生成器、脚本契约和真实浏览器交付通过，**不宣称原生编辑器导入、运行或双向往返已经实机完成**。桥接包不会自动写入任何引擎项目，也没有启动 ComfyUI/H3、读取或改写正式项目/既有 output、重封安装包或替换 D 盘正式桌面。

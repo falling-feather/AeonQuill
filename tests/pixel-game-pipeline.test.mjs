@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPixelDocument } from '../src/lib/pixel/pixelCore.mjs'
+import { createPixelDocument, renderPixelFrameRgba } from '../src/lib/pixel/pixelCore.mjs'
 import { createSmartPixelCleanupPatch } from '../src/lib/pixel/pixelTools.mjs'
 import {
   PIXEL_DIRECTIONS,
   PixelGamePipelineError,
   createPixelAnimationClipExportBundle,
+  createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
   createPixelGameManifest,
   createPixelTerrainPreviewExportBundle,
@@ -208,6 +209,88 @@ test('terrain preview reports stable fallback, renders pixels, exports facts and
   )
   assert.throws(
     () => createPixelTerrainPreviewLayout(document, { terrainId: 'stone', occupancy, surprise: true }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_FIELD',
+  )
+})
+
+test('exports a deterministic Godot, Unity and RPG Maker engine bridge from one pixel fact', () => {
+  const document = createEightFrameDocument()
+  const bundle = createPixelEngineBridgeExportBundle(document, {
+    columns: 4,
+    mapWidth: 4,
+    mapHeight: 2,
+    pixelsPerUnit: 16,
+    rpgMakerFrameIds: {
+      south: ['direction-1', 'direction-2', 'direction-3'],
+    },
+  })
+  const manifest = bundle.manifest.value
+  assert.equal(manifest.kind, 'aeonquill.pixel-engine-bridge')
+  assert.equal(manifest.schemaVersion, 1)
+  assert.equal(manifest.sourceDocumentId, document.id)
+  assert.equal(manifest.sourceRevision, document.revision)
+  assert.equal(manifest.files.sprite, bundle.sprite.filename)
+  assert.equal(manifest.files.rpgMakerCharacter, bundle.rpgMakerCharacter.filename)
+  assert.equal(manifest.unity.pixelsPerUnit, 16)
+  assert.deepEqual(manifest.unity.texture, {
+    filterMode: 'Point', mipmaps: false, compression: 'Uncompressed', wrapMode: 'Clamp',
+  })
+  assert.equal(manifest.godot.durationFps, 1000)
+  assert.deepEqual(manifest.rpgMakerMz.layout, {
+    columns: 3, rows: 4, rowOrder: ['south', 'west', 'east', 'north'],
+  })
+  assert.deepEqual(manifest.rpgMakerMz.cells.map((cell) => cell.frameId), [
+    'direction-1', 'direction-2', 'direction-3',
+    'direction-3', 'direction-3', 'direction-3',
+    'direction-7', 'direction-7', 'direction-7',
+    'direction-5', 'direction-5', 'direction-5',
+  ])
+  assert.deepEqual(manifest.rpgMakerMz.cells.map((cell) => cell.repeated), [
+    false, false, false, true, true, true, true, true, true, true, true, true,
+  ])
+  assert.equal(bundle.rpgMakerCharacter.filename, '$Hero-Eight-Way-character.png')
+  assert.equal(bundle.rpgMakerCharacter.width, document.width * 3)
+  assert.equal(bundle.rpgMakerCharacter.height, document.height * 4)
+  const expectedSouth = renderPixelFrameRgba(document, 'direction-2').slice(0, 4)
+  const secondSouthOffset = document.width * 4
+  assert.deepEqual(
+    Array.from(bundle.rpgMakerCharacter.pixels.slice(secondSouthOffset, secondSouthOffset + 4)),
+    Array.from(expectedSouth),
+  )
+  assert.match(bundle.godotImporter.text, /SpriteFrames\.new\(\)/)
+  assert.match(bundle.godotImporter.text, /_safe_sibling_filename/)
+  assert.match(bundle.godotImporter.text, /frame atlas is outside the sprite texture/)
+  assert.match(bundle.godotImporter.text, /frame duration must be between 1 and 60000 ms/)
+  assert.match(bundle.godotImporter.text, /set_animation_speed\(animation_name, 1000\.0\)/)
+  assert.match(bundle.godotImporter.text, /ResourceSaver\.save/)
+  assert.match(bundle.unityImporter.text, /SpriteDataProviderFactories/)
+  assert.match(bundle.unityImporter.text, /IsSafeSiblingFilename/)
+  assert.match(bundle.unityImporter.text, /IsFinite\(manifest\.unity\.pixelsPerUnit\)/)
+  assert.match(bundle.unityImporter.text, /Frame atlas rectangle is outside the sprite texture/)
+  assert.match(bundle.unityImporter.text, /texture\.height - frame\.atlas\.y - frame\.atlas\.height/)
+  assert.match(bundle.unityImporter.text, /existing\.TryGetValue\(stableName/)
+  assert.match(bundle.unityImporter.text, /FilterMode\.Point/)
+  assert.match(bundle.readme.text, /RPG Maker MZ/)
+  assert.match(bundle.readme.text, /rpgmakerofficial\.com/)
+  assert.equal(JSON.parse(bundle.manifest.text).animationEvents[0].id, 'step')
+})
+
+test('engine bridge rejects unsafe engine options and invalid RPG Maker pattern maps', () => {
+  const document = createEightFrameDocument()
+  assert.throws(
+    () => createPixelEngineBridgeExportBundle(document, { rpgMakerFrameIds: { south: ['direction-1', 'direction-2'] } }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_RPG_MAKER_PATTERN',
+  )
+  assert.throws(
+    () => createPixelEngineBridgeExportBundle(document, { rpgMakerFrameIds: { north: ['missing'] } }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_FRAME',
+  )
+  assert.throws(
+    () => createPixelEngineBridgeExportBundle(document, { pixelsPerUnit: 0 }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_INTEGER',
+  )
+  assert.throws(
+    () => createPixelEngineBridgeExportBundle(document, { unityProject: 'C:/unsafe' }),
     (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_FIELD',
   )
 })

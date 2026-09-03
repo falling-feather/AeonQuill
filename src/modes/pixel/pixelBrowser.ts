@@ -5,6 +5,7 @@ import {
   deserializePixelProject,
   type PixelDocument,
   type PixelAnimationClipExportBundle,
+  type PixelEngineBridgeExportBundle,
   type PixelExportBundle,
   type PixelGameExportBundle,
   type PixelTerrainPreviewExportBundle,
@@ -159,4 +160,16 @@ export async function downloadPixelAnimationClipExportBundle(bundle: PixelAnimat
 export async function downloadPixelTerrainPreviewExportBundle(bundle: PixelTerrainPreviewExportBundle) {
   downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
   downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+}
+
+export async function downloadPixelEngineBridgeExportBundle(bundle: PixelEngineBridgeExportBundle) {
+  downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
+  downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+  downloadPixelText(bundle.godotImporter.text, bundle.godotImporter.filename, bundle.godotImporter.mime)
+  downloadPixelText(bundle.unityImporter.text, bundle.unityImporter.filename, bundle.unityImporter.mime)
+  downloadPixelBlob(
+    await rgbaToPngBlob(bundle.rpgMakerCharacter.pixels, bundle.rpgMakerCharacter.width, bundle.rpgMakerCharacter.height),
+    bundle.rpgMakerCharacter.filename,
+  )
+  downloadPixelText(bundle.readme.text, bundle.readme.filename, bundle.readme.mime)
 }

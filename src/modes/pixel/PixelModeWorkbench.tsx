@@ -64,6 +64,7 @@ import {
   createDefaultPixelFrameGameplay,
   createPixelExportBundle,
   createPixelAnimationClipExportBundle,
+  createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
   createPixelTerrainPreviewExportBundle,
   createPixelCommand,
@@ -107,6 +108,7 @@ import {
   decodePixelImageFile,
   downloadPixelExportBundle,
   downloadPixelAnimationClipExportBundle,
+  downloadPixelEngineBridgeExportBundle,
   downloadPixelGameExportBundle,
   downloadPixelTerrainPreviewExportBundle,
   downloadPixelText,
@@ -1426,6 +1428,32 @@ export function PixelModeWorkbench({
     }
   }, [activeAnimationTagId])
 
+  const exportPixelEngineBridge = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const current = historyRef.current.document
+      const mapWidth = Math.max(1, Math.ceil(Math.sqrt(current.frames.length)))
+      const mapHeight = Math.max(1, Math.ceil(current.frames.length / mapWidth))
+      const bundle = createPixelEngineBridgeExportBundle(current, {
+        columns: Math.min(4, current.frames.length),
+        padding: 1,
+        spacing: 1,
+        mapWidth,
+        mapHeight,
+        pixelsPerUnit: current.height,
+        animationTagId: current.animationTags.some((tag) => tag.id === activeAnimationTagId)
+          ? activeAnimationTagId ?? undefined
+          : current.animationTags[0]?.id,
+      })
+      await downloadPixelEngineBridgeExportBundle(bundle)
+      setStatus('引擎桥接包完成：Sprite、来源清单、Godot/Unity 导入脚本、RPG Maker MZ 3×4 角色图与说明')
+    } catch (error) {
+      setStatus(readablePixelError(error, '引擎桥接包导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [activeAnimationTagId])
+
   const exportActiveAnimationClip = useCallback(async () => {
     const current = historyRef.current.document
     const tag = current.animationTags.find((item) => item.id === activeAnimationTagId) ?? current.animationTags[0]
@@ -2704,6 +2732,9 @@ export function PixelModeWorkbench({
               </button>
               <button type="button" onClick={() => void exportPixelGameBundle()} disabled={isExporting}>
                 <PackageOpen size={14} /> 游戏资产包
+              </button>
+              <button type="button" onClick={() => void exportPixelEngineBridge()} disabled={isExporting}>
+                <Download size={14} /> 引擎桥接包
               </button>
             </div>
           </div>
