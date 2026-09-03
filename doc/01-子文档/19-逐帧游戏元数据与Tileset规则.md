@@ -1,14 +1,14 @@
-# 光阴砚 AEONQUILL — 逐帧游戏元数据、Terrain、引擎交付与跨帧选区
+# 光阴砚 AEONQUILL — 逐帧游戏元数据、Terrain Map、引擎交付与跨帧选区
 
-> 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、调色板循环、动画事件、游戏交付及跨帧选区编辑的可复核事实。
+> 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、持久化 Terrain Map、调色板循环、动画事件、游戏交付及跨帧选区编辑的可复核事实。
 >
-> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，`PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付，`PIXEL-009 / V0.7.45` 建立的 Godot 4、Unity 2021.2+ 与 RPG Maker MZ 同源桥接包，以及 `PIXEL-010 / V0.7.46` 建立的严格内存选区剪贴板与跨帧、跨图层原子粘贴。
+> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，`PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付，`PIXEL-009 / V0.7.45` 建立的 Godot 4、Unity 2021.2+ 与 RPG Maker MZ 同源桥接包，`PIXEL-010 / V0.7.46` 建立的严格内存选区剪贴板与跨帧、跨图层原子粘贴，以及 `PIXEL-011 / V0.7.47` 建立的 schema v6 持久化任意尺寸 Terrain Map、连续画笔与 PNG/Sprite/JSON/TMJ 交付。
 >
 > **最后一次更新时间**：2026-09-03
 >
 > **更新者**：主开发、像素模式责任域、前端与游戏资产责任域
 >
-> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`、`PIXEL-009 / V0.7.45`、`PIXEL-010 / V0.7.46`
+> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`、`PIXEL-009 / V0.7.45`、`PIXEL-010 / V0.7.46`、`PIXEL-011 / V0.7.47`
 
 ---
 
@@ -314,3 +314,22 @@ RPG Maker MZ 单角色资源按官方 [Asset Standards](https://rpgmakerofficial
 固定向量覆盖跨 Cel 复制、`replace`/`opaque-only`、源矩形与稠密相对像素、损坏 schema、未知字段、非法来源身份、长度不符、未知颜色和源/目标越界。P7 在 D 盘隔离项目与后台系统 Edge 中读取真实框选 DOM 几何，框选 2×2 来源区域，在一个 frame 的 light 图层执行剪切、撤销、重做并再次撤销恢复，再粘贴到另一个 frame 的 silhouette 图层；先锁定目标确认 `Layer silhouette is locked`，再解锁粘贴并完成单步撤销/重做。导出的 PixelDocument 精确比较目标选区和已恢复来源像素，刷新后粘贴结果保留，1440×900 与 390×844 继续通过且页面无 warning/error。
 
 本检查点不提供操作系统剪贴板、跨浏览器标签或跨项目剪贴板持久化，也不提供旋转、缩放、羽化或自由变换选区；刷新后剪贴板按设计清空。它没有启动 ComfyUI/H3、改写正式项目/既有 output、重封安装包或替换 D 盘正式桌面。
+
+## 24. V0.7.47 持久化任意尺寸 Terrain Map
+
+`PixelDocument schema v6` 在既有逐帧 Terrain ID/Mask 之外新增严格 `terrainMaps` 正文。单文档最多 16 张地图；每张地图保存稳定 ID、名称、Terrain ID、1—64 的宽高和长度恰好等于 `width × height` 的稠密布尔占用数组，总格数不得超过 4096。schema v5 只通过显式迁移补空地图数组，v0—v4 继续沿既有迁移链进入 v6；未知字段、重复 ID、空名称/Terrain ID、尺寸/长度不符、非布尔格和超限值全部失败关闭。
+
+`terrain-maps.add/remove/restore/patch/resize/restore-shape/cells.patch` 覆盖完整生命周期。删除、内部恢复、属性修改、尺寸变更和格补丁都生成精确逆命令；恢复类命令只允许内部 actor。改尺寸以左上角为锚保留交叠区，新区域为空；相同尺寸、重复坐标、无实际变化和未知地图均被拒绝，避免伪 revision。工作台最多打开一个活动地图，支持创建/切换/改名/改 Terrain、宽高调整、绘制/擦除、填满/清空和撤销/重做。拖动期间以线段栅格化填补事件间隔并只更新本地草稿，指针释放后将实际差异合并成一条去重 `terrain-maps.cells.patch`。
+
+## 25. 任意尺寸推断、交付与验证边界
+
+`createPixelTerrainMapLayout()` 把任意合法宽高的占用图按行优先处理；每个占用格继续用 N/NE/E/SE/S/SW/W/NW 位序和相同斜角门推导期望 Mask。候选只取同 Terrain，按精确命中、Mask Hamming 距离、PixelDocument 帧顺序和稳定帧 ID 选取，因而同一正文总能得到相同来源；没有候选时返回 `UNKNOWN_TERRAIN`，已保存地图仍可编辑但不能伪造渲染结果。
+
+`createPixelTerrainMapExportBundle()` 交付四项同源文件：
+
+1. `*-terrain-map.png`：按地图宽高和原始像素单元拼接的最终地图；
+2. `*-terrain-map-source-sprite-sheet.png`：只包含本次布局实际使用来源帧的 Sprite Atlas；
+3. `*-terrain-map.json`：`aeonquill.pixel-terrain-map` 严格事实，保存源文档/revision、地图、占用、候选图集和逐格期望/命中 Mask、来源、距离、精确性与 GID；
+4. `*-terrain-map.tmj`：可直接被 Tiled 打开的有限正交地图，Tileset 内联到 TMJ，避免把未交付的外部 TSJ 当成依赖。
+
+核心、转换与游戏专项合计 34/34；全仓 289/289、TypeScript、生产构建和 96 项默认安全基线通过。P7 在 D 盘隔离项目与后台系统 Edge 中创建 6×4 地图，以连续指针轨迹绘制 9 格 L 形区域，验证单步撤销/重做、四文件实际下载/解析、SQLite 刷新恢复和 1440×900/390×844 无页面级横向溢出；页面无 warning/error。该检查点没有启动 ComfyUI/H3、读取或改写正式项目/既有 output、重封安装包或替换 D 盘正式桌面，也不宣称多 Terrain 同图混合、自动生成缺失图块、Worker 化或三引擎原生地图导入已完成。

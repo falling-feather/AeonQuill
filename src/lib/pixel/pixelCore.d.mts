@@ -8,6 +8,8 @@ export type PixelCommandType =
   | 'cels.copy' | 'cels.restore'
   | 'animations.add' | 'animations.remove' | 'animations.restore' | 'animations.patch'
   | 'animation-events.add' | 'animation-events.remove' | 'animation-events.restore' | 'animation-events.patch'
+  | 'terrain-maps.add' | 'terrain-maps.remove' | 'terrain-maps.restore' | 'terrain-maps.patch'
+  | 'terrain-maps.resize' | 'terrain-maps.restore-shape' | 'terrain-maps.cells.patch'
   | 'onion-skin.set'
 
 export type PixelPaletteColor = { id: string; name: string; color: string }
@@ -25,6 +27,14 @@ export type PixelBlendMode = 'normal' | 'multiply' | 'screen' | 'add'
 export type PixelCollisionType = 'solid' | 'hitbox' | 'hurtbox' | 'interaction'
 export type PixelCollisionShape = { id: string; name: string; type: PixelCollisionType; x: number; y: number; width: number; height: number }
 export type PixelTileRule = { terrainId: string; bitmask: number }
+export type PixelTerrainMap = {
+  id: string
+  name: string
+  terrainId: string
+  width: number
+  height: number
+  occupancy: boolean[]
+}
 export type PixelFrameGameplay = {
   anchor: { x: number; y: number }
   collisions: PixelCollisionShape[]
@@ -67,7 +77,7 @@ export type PixelAnimationEvent = {
 export type PixelOnionSkin = { enabled: boolean; previousFrames: number; nextFrames: number; opacity: number }
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 5
+  schemaVersion: 6
   id: string
   name: string
   width: number
@@ -80,6 +90,7 @@ export type PixelDocument = {
   frames: PixelFrame[]
   animationTags: PixelAnimationTag[]
   animationEvents: PixelAnimationEvent[]
+  terrainMaps: PixelTerrainMap[]
   activeLayerId: string
   activeFrameId: string
   onionSkin: PixelOnionSkin
@@ -100,7 +111,7 @@ export type SpriteSheetCell = {
 export type SpriteSheetFrame = SpriteSheetCell & { gameplay: PixelFrameGameplay }
 export type SpriteSheetLayout = { width: number; height: number; columns: number; rows: number; padding: number; spacing: number; cells: SpriteSheetCell[] }
 export type SpriteSheetMetadata = {
-  schemaVersion: 5
+  schemaVersion: 6
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -117,9 +128,10 @@ export type SpriteSheetMetadata = {
   layers: PixelLayer[]
   palette: PixelPaletteColor[]
   paletteCycles: PixelPaletteCycle[]
+  terrainMaps: PixelTerrainMap[]
 }
 export type PixelAnimationClipMetadata = {
-  schemaVersion: 5
+  schemaVersion: 6
   kind: 'aeonquill.pixel-animation-clip'
   sourceDocumentId: string
   sourceRevision: number
@@ -136,11 +148,12 @@ export type PixelAnimationClipMetadata = {
   layers: PixelLayer[]
   palette: PixelPaletteColor[]
   paletteCycles: PixelPaletteCycle[]
+  terrainMaps: PixelTerrainMap[]
 }
 
 export class PixelContractError extends Error { code: string; details?: unknown }
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 5
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 6
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_PALETTE_CYCLE_DIRECTIONS: ReadonlyArray<PixelPaletteCycleDirection>
 export const PIXEL_ANIMATION_EVENT_TYPES: ReadonlyArray<PixelAnimationEventType>
@@ -150,7 +163,8 @@ export const PIXEL_TILE_NEIGHBORS: ReadonlyArray<Readonly<{ id: string; label: s
 export const PIXEL_LIMITS: Readonly<{
   maxWidth: number; maxHeight: number; maxPaletteColors: number; maxLayers: number; maxLayerGroups: number
   maxFrames: number; maxAnimationTags: number; maxPaletteCycles: number; maxPaletteCycleColors: number
-  maxAnimationEvents: number; maxCollisionShapesPerFrame: number; maxDocumentCells: number
+  maxAnimationEvents: number; maxCollisionShapesPerFrame: number; maxTerrainMaps: number
+  maxTerrainMapWidth: number; maxTerrainMapHeight: number; maxTerrainMapCells: number; maxDocumentCells: number
   maxPixelsPerCommand: number; maxBulkCellsPerCommand: number; maxSpritePixels: number
 }>
 export function assertPixelDocument(input: unknown): PixelDocument

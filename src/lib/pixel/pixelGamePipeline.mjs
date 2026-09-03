@@ -1,4 +1,6 @@
 import {
+  PIXEL_DOCUMENT_SCHEMA_VERSION,
+  PIXEL_LIMITS,
   PIXEL_TILE_NEIGHBORS,
   assertPixelDocument,
   createSpriteSheetLayout,
@@ -45,11 +47,6 @@ export const PIXEL_TERRAIN_GRID_PRESETS = Object.freeze([
 ])
 
 const TERRAIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
-const TERRAIN_GRID_CELLS = Object.freeze(Array.from({ length: PIXEL_TERRAIN_GRID_SIZE ** 2 }, (_, index) => Object.freeze({
-  index,
-  row: Math.floor(index / PIXEL_TERRAIN_GRID_SIZE),
-  column: index % PIXEL_TERRAIN_GRID_SIZE,
-})))
 const TERRAIN_NEIGHBOR_OFFSETS = Object.freeze([
   Object.freeze({ id: 'north', row: -1, column: 0, gateIds: [] }),
   Object.freeze({ id: 'north-east', row: -1, column: 1, gateIds: ['north', 'east'] }),
@@ -116,25 +113,26 @@ function assertTerrainId(value, path) {
   return value
 }
 
-function assertTerrainOccupancy(value, path) {
-  if (!Array.isArray(value) || value.length !== TERRAIN_GRID_CELLS.length || value.some((entry) => typeof entry !== 'boolean')) {
-    fail('INVALID_TERRAIN_OCCUPANCY', `${path} must contain exactly nine booleans`)
+function assertTerrainOccupancy(value, width, height, path) {
+  const cellCount = width * height
+  if (!Array.isArray(value) || value.length !== cellCount || value.some((entry) => typeof entry !== 'boolean')) {
+    fail('INVALID_TERRAIN_OCCUPANCY', `${path} must contain exactly ${cellCount} booleans`)
   }
   return [...value]
 }
 
-function terrainGridOccupied(occupancy, row, column) {
-  if (row < 0 || column < 0 || row >= PIXEL_TERRAIN_GRID_SIZE || column >= PIXEL_TERRAIN_GRID_SIZE) return false
-  return occupancy[row * PIXEL_TERRAIN_GRID_SIZE + column]
+function terrainGridOccupied(occupancy, row, column, width, height) {
+  if (row < 0 || column < 0 || row >= height || column >= width) return false
+  return occupancy[row * width + column]
 }
 
-function inferTerrainCellBitmask(occupancy, row, column) {
+function inferTerrainCellBitmask(occupancy, row, column, width, height) {
   let bitmask = 0
   for (const neighbor of TERRAIN_NEIGHBOR_OFFSETS) {
-    if (!terrainGridOccupied(occupancy, row + neighbor.row, column + neighbor.column)) continue
+    if (!terrainGridOccupied(occupancy, row + neighbor.row, column + neighbor.column, width, height)) continue
     const gatesOpen = neighbor.gateIds.every((gateId) => {
       const gate = TERRAIN_OFFSET_BY_ID.get(gateId)
-      return terrainGridOccupied(occupancy, row + gate.row, column + gate.column)
+      return terrainGridOccupied(occupancy, row + gate.row, column + gate.column, width, height)
     })
     if (gatesOpen) bitmask |= TERRAIN_BIT_BY_ID.get(neighbor.id)
   }
@@ -151,23 +149,16 @@ function bitCount8(value) {
   return count
 }
 
-export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}) {
-  const document = assertPixelDocument(documentInput)
-  const options = assertRecord(optionsInput, 'options')
-  assertKnownFields(options, new Set(['terrainId', 'occupancy']), 'options')
-  const fallbackTerrainId = document.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId
-  const terrainId = assertTerrainId(options.terrainId ?? fallbackTerrainId, 'options.terrainId')
-  const occupancy = assertTerrainOccupancy(
-    options.occupancy ?? PIXEL_TERRAIN_GRID_PRESETS.at(-1).occupancy,
-    'options.occupancy',
-  )
+function createTerrainLayout(document, { kind, terrainId, width, height, occupancy, terrainMapId, terrainMapName }) {
   const candidates = document.frames
     .map((frame, frameIndex) => ({ frame, frameIndex }))
     .filter(({ frame }) => frame.gameplay.tileRule?.terrainId === terrainId)
   if (candidates.length === 0) {
     fail('UNKNOWN_TERRAIN', `No frames are registered for terrain ${terrainId}`, { terrainId })
   }
-  const cells = TERRAIN_GRID_CELLS.map(({ index, row, column }) => {
+  const cells = Array.from({ length: width * height }, (_, index) => {
+    const row = Math.floor(index / width)
+    const column = index % width
     if (!occupancy[index]) {
       return {
         index,
@@ -182,7 +173,7 @@ export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}
         exact: false,
       }
     }
-    const expectedBitmask = inferTerrainCellBitmask(occupancy, row, column)
+    const expectedBitmask = inferTerrainCellBitmask(occupancy, row, column, width, height)
     const ranked = candidates
       .map(({ frame, frameIndex }) => ({
         frame,
@@ -211,11 +202,12 @@ export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}
   })
   return {
     schemaVersion: 1,
-    kind: 'aeonquill.pixel-terrain-preview',
+    kind,
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
+    ...(terrainMapId === undefined ? {} : { terrainMapId, terrainMapName }),
     terrainId,
-    grid: { width: PIXEL_TERRAIN_GRID_SIZE, height: PIXEL_TERRAIN_GRID_SIZE },
+    grid: { width, height },
     tile: { width: document.width, height: document.height },
     occupancy,
     exactCount: cells.filter((cell) => cell.occupied && cell.exact).length,
@@ -224,12 +216,63 @@ export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}
   }
 }
 
-export function renderPixelTerrainPreviewRgba(documentInput, optionsInput = {}) {
+export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}) {
   const document = assertPixelDocument(documentInput)
-  const layout = createPixelTerrainPreviewLayout(document, optionsInput)
-  const width = document.width * PIXEL_TERRAIN_GRID_SIZE
-  const height = document.height * PIXEL_TERRAIN_GRID_SIZE
-  const pixels = new Uint8ClampedArray(width * height * 4)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['terrainId', 'occupancy']), 'options')
+  const fallbackTerrainId = document.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId
+  const terrainId = assertTerrainId(options.terrainId ?? fallbackTerrainId, 'options.terrainId')
+  const occupancy = assertTerrainOccupancy(
+    options.occupancy ?? PIXEL_TERRAIN_GRID_PRESETS.at(-1).occupancy,
+    PIXEL_TERRAIN_GRID_SIZE,
+    PIXEL_TERRAIN_GRID_SIZE,
+    'options.occupancy',
+  )
+  return createTerrainLayout(document, {
+    kind: 'aeonquill.pixel-terrain-preview',
+    terrainId,
+    width: PIXEL_TERRAIN_GRID_SIZE,
+    height: PIXEL_TERRAIN_GRID_SIZE,
+    occupancy,
+  })
+}
+
+export function createPixelTerrainMapLayout(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['terrainMapId', 'occupancy']), 'options')
+  const terrainMapId = options.terrainMapId ?? document.terrainMaps[0]?.id
+  if (typeof terrainMapId !== 'string') fail('UNKNOWN_TERRAIN_MAP', 'options.terrainMapId must reference an existing terrain map')
+  const terrainMap = document.terrainMaps.find((item) => item.id === terrainMapId)
+  if (!terrainMap) fail('UNKNOWN_TERRAIN_MAP', `Unknown terrain map ${terrainMapId}`, { terrainMapId })
+  const occupancy = assertTerrainOccupancy(
+    options.occupancy ?? terrainMap.occupancy,
+    terrainMap.width,
+    terrainMap.height,
+    'options.occupancy',
+  )
+  return createTerrainLayout(document, {
+    kind: 'aeonquill.pixel-terrain-map',
+    terrainId: terrainMap.terrainId,
+    width: terrainMap.width,
+    height: terrainMap.height,
+    occupancy,
+    terrainMapId: terrainMap.id,
+    terrainMapName: terrainMap.name,
+  })
+}
+
+function renderTerrainLayout(document, layout) {
+  const width = document.width * layout.grid.width
+  const height = document.height * layout.grid.height
+  const totalPixels = width * height
+  if (totalPixels > PIXEL_LIMITS.maxSpritePixels) {
+    fail('TERRAIN_RENDER_TOO_LARGE', `Terrain render contains ${totalPixels} pixels`, {
+      totalPixels,
+      limit: PIXEL_LIMITS.maxSpritePixels,
+    })
+  }
+  const pixels = new Uint8ClampedArray(totalPixels * 4)
   const framePixelsById = new Map()
   for (const cell of layout.cells) {
     if (!cell.occupied || cell.frameId === null) continue
@@ -245,6 +288,18 @@ export function renderPixelTerrainPreviewRgba(documentInput, optionsInput = {}) 
     }
   }
   return { pixels, width, height, layout }
+}
+
+export function renderPixelTerrainPreviewRgba(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const layout = createPixelTerrainPreviewLayout(document, optionsInput)
+  return renderTerrainLayout(document, layout)
+}
+
+export function renderPixelTerrainMapRgba(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const layout = createPixelTerrainMapLayout(document, optionsInput)
+  return renderTerrainLayout(document, layout)
 }
 
 function defaultMapSize(frameCount) {
@@ -347,7 +402,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     : null
   const tileIds = new Map(layout.cells.map((cell) => [cell.frameId, cell.index + 1]))
   return {
-    schemaVersion: 5,
+    schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
     kind: 'aeonquill.pixel-game-bundle',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -384,6 +439,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     layers: document.layers.map((layer) => ({ ...layer })),
     palette: document.palette.map((color) => ({ ...color })),
     paletteCycles: document.paletteCycles.map((cycle) => ({ ...cycle, colorIds: [...cycle.colorIds] })),
+    terrainMaps: document.terrainMaps.map((terrainMap) => ({ ...terrainMap, occupancy: [...terrainMap.occupancy] })),
   }
 }
 
@@ -634,6 +690,85 @@ export function createPixelTerrainPreviewExportBundle(documentInput, optionsInpu
       mime: 'application/json',
       text: JSON.stringify(metadata, null, 2),
       value: metadata,
+    },
+  }
+}
+
+export function createPixelTerrainMapExportBundle(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['terrainMapId', 'occupancy', 'baseName']), 'options')
+  const rendered = renderPixelTerrainMapRgba(document, {
+    ...(options.terrainMapId === undefined ? {} : { terrainMapId: options.terrainMapId }),
+    ...(options.occupancy === undefined ? {} : { occupancy: options.occupancy }),
+  })
+  const baseName = safePixelFilename(options.baseName ?? document.name)
+  const terrainMapName = safePixelFilename(rendered.layout.terrainMapName, rendered.layout.terrainMapId)
+  const exportStem = `${baseName}-${terrainMapName}-terrain-map`
+  const atlasStem = `${exportStem}-source`
+  const atlasBundle = createPixelExportBundle(document, { baseName: atlasStem })
+  const gameManifest = createPixelGameManifest(document, { baseName: atlasStem })
+  const tiledTileset = createTiledTileset(gameManifest, atlasStem)
+  const tileIdByFrame = new Map(gameManifest.frames.map((frame, index) => [frame.id, index + 1]))
+  const image = `${exportStem}.png`
+  const atlas = atlasBundle.sprite.filename
+  const metadata = { ...rendered.layout, image, atlas }
+  const tiledMap = {
+    compressionlevel: -1,
+    height: rendered.layout.grid.height,
+    infinite: false,
+    layers: [{
+      data: rendered.layout.cells.map((cell) => (
+        cell.occupied && cell.frameId !== null ? tileIdByFrame.get(cell.frameId) : 0
+      )),
+      height: rendered.layout.grid.height,
+      id: 1,
+      name: rendered.layout.terrainMapName,
+      opacity: 1,
+      type: 'tilelayer',
+      visible: true,
+      width: rendered.layout.grid.width,
+      x: 0,
+      y: 0,
+    }],
+    nextlayerid: 2,
+    nextobjectid: 1,
+    orientation: 'orthogonal',
+    properties: [
+      { name: 'aeonquillTerrainMapId', type: 'string', value: rendered.layout.terrainMapId },
+      { name: 'aeonquillTerrainId', type: 'string', value: rendered.layout.terrainId },
+      { name: 'aeonquillSourceDocumentId', type: 'string', value: document.id },
+      { name: 'aeonquillSourceRevision', type: 'int', value: document.revision },
+    ],
+    renderorder: 'right-down',
+    tiledversion: '1.10.2',
+    tileheight: document.height,
+    tilesets: [{ firstgid: 1, ...tiledTileset }],
+    tilewidth: document.width,
+    type: 'map',
+    version: '1.10',
+    width: rendered.layout.grid.width,
+  }
+  return {
+    preview: {
+      filename: image,
+      mime: 'image/png',
+      width: rendered.width,
+      height: rendered.height,
+      pixels: rendered.pixels,
+    },
+    atlas: atlasBundle.sprite,
+    manifest: {
+      filename: `${exportStem}.json`,
+      mime: 'application/json',
+      text: JSON.stringify(metadata, null, 2),
+      value: metadata,
+    },
+    tiledMap: {
+      filename: `${exportStem}.tmj`,
+      mime: 'application/json',
+      text: JSON.stringify(tiledMap, null, 2),
+      value: tiledMap,
     },
   }
 }
@@ -1020,6 +1155,7 @@ export function createPixelEngineBridgeExportBundle(documentInput, optionsInput 
     layers: game.layers,
     palette: game.palette,
     paletteCycles: game.paletteCycles,
+    terrainMaps: game.terrainMaps,
     godot: {
       target: 'Godot 4.x',
       durationFps: 1000,

@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 5
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 6
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -14,6 +14,10 @@ export const PIXEL_LIMITS = Object.freeze({
   maxPaletteCycleColors: 32,
   maxAnimationEvents: 256,
   maxCollisionShapesPerFrame: 8,
+  maxTerrainMaps: 16,
+  maxTerrainMapWidth: 64,
+  maxTerrainMapHeight: 64,
+  maxTerrainMapCells: 4_096,
   maxDocumentCells: 16_777_216,
   maxPixelsPerCommand: 65_536,
   maxBulkCellsPerCommand: 1_048_576,
@@ -35,6 +39,7 @@ const DOCUMENT_FIELDS = new Set([
   'frames',
   'animationTags',
   'animationEvents',
+  'terrainMaps',
   'activeLayerId',
   'activeFrameId',
   'onionSkin',
@@ -48,6 +53,7 @@ const FRAME_GAMEPLAY_FIELDS = new Set(['anchor', 'collisions', 'tileRule'])
 const ANCHOR_FIELDS = new Set(['x', 'y'])
 const COLLISION_FIELDS = new Set(['id', 'name', 'type', 'x', 'y', 'width', 'height'])
 const TILE_RULE_FIELDS = new Set(['terrainId', 'bitmask'])
+const TERRAIN_MAP_FIELDS = new Set(['id', 'name', 'terrainId', 'width', 'height', 'occupancy'])
 const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ANIMATION_EVENT_FIELDS = new Set(['id', 'name', 'type', 'animationTagId', 'frameId', 'value'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
@@ -90,6 +96,13 @@ const COMMAND_TYPES = new Set([
   'animation-events.remove',
   'animation-events.restore',
   'animation-events.patch',
+  'terrain-maps.add',
+  'terrain-maps.remove',
+  'terrain-maps.restore',
+  'terrain-maps.patch',
+  'terrain-maps.resize',
+  'terrain-maps.restore-shape',
+  'terrain-maps.cells.patch',
   'onion-skin.set',
 ])
 const INTERNAL_COMMAND_TYPES = new Set([
@@ -101,6 +114,8 @@ const INTERNAL_COMMAND_TYPES = new Set([
   'cels.restore',
   'animations.restore',
   'animation-events.restore',
+  'terrain-maps.restore',
+  'terrain-maps.restore-shape',
 ])
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{8}$/
@@ -338,6 +353,36 @@ function assertFrameGameplay(input, path, documentWidth, documentHeight) {
   return gameplay
 }
 
+function assertTerrainMap(input, path) {
+  const terrainMap = assertRecord(input, path)
+  assertKnownFields(terrainMap, TERRAIN_MAP_FIELDS, path)
+  assertId(terrainMap.id, `${path}.id`)
+  assertString(terrainMap.name, `${path}.name`, { min: 1, max: 80 })
+  assertId(terrainMap.terrainId, `${path}.terrainId`)
+  const width = assertInteger(terrainMap.width, `${path}.width`, {
+    min: 1,
+    max: PIXEL_LIMITS.maxTerrainMapWidth,
+  })
+  const height = assertInteger(terrainMap.height, `${path}.height`, {
+    min: 1,
+    max: PIXEL_LIMITS.maxTerrainMapHeight,
+  })
+  const cellCount = width * height
+  if (cellCount > PIXEL_LIMITS.maxTerrainMapCells) {
+    fail('TERRAIN_MAP_TOO_LARGE', `${path} contains ${cellCount} cells`, {
+      cellCount,
+      limit: PIXEL_LIMITS.maxTerrainMapCells,
+    })
+  }
+  if (!Array.isArray(terrainMap.occupancy) || terrainMap.occupancy.length !== cellCount) {
+    fail('INVALID_TERRAIN_OCCUPANCY', `${path}.occupancy must contain exactly ${cellCount} cells`, {
+      path: `${path}.occupancy`,
+    })
+  }
+  terrainMap.occupancy.forEach((occupied, index) => assertBoolean(occupied, `${path}.occupancy[${index}]`))
+  return terrainMap
+}
+
 function assertAnimationTag(input, path, frameIds, frameOrder) {
   const tag = assertRecord(input, path)
   assertKnownFields(tag, ANIMATION_TAG_FIELDS, path)
@@ -512,6 +557,11 @@ export function assertPixelDocument(input) {
     frameOrder,
   ))
   assertUniqueIds(document.animationEvents, 'document.animationEvents')
+  if (!Array.isArray(document.terrainMaps) || document.terrainMaps.length > PIXEL_LIMITS.maxTerrainMaps) {
+    fail('INVALID_TERRAIN_MAPS', `document.terrainMaps must contain 0-${PIXEL_LIMITS.maxTerrainMaps} maps`)
+  }
+  document.terrainMaps.forEach((terrainMap, index) => assertTerrainMap(terrainMap, `document.terrainMaps[${index}]`))
+  assertUniqueIds(document.terrainMaps, 'document.terrainMaps')
   assertOnionSkin(document.onionSkin)
   return document
 }
@@ -526,7 +576,7 @@ export function createPixelDocument(input = {}) {
   const options = assertRecord(input, 'input')
   assertKnownFields(options, new Set([
     'id', 'name', 'width', 'height', 'revision', 'palette', 'paletteCycles', 'layerGroups', 'layers', 'frames',
-    'animationTags', 'animationEvents', 'activeLayerId', 'activeFrameId', 'onionSkin',
+    'animationTags', 'animationEvents', 'terrainMaps', 'activeLayerId', 'activeFrameId', 'onionSkin',
   ]), 'input')
   const width = options.width ?? 16
   const height = options.height ?? 16
@@ -539,6 +589,7 @@ export function createPixelDocument(input = {}) {
   if (options.frames !== undefined && !Array.isArray(options.frames)) fail('INVALID_FRAMES', 'input.frames must be an array')
   if (options.animationTags !== undefined && !Array.isArray(options.animationTags)) fail('INVALID_ANIMATION_TAGS', 'input.animationTags must be an array')
   if (options.animationEvents !== undefined && !Array.isArray(options.animationEvents)) fail('INVALID_ANIMATION_EVENTS', 'input.animationEvents must be an array')
+  if (options.terrainMaps !== undefined && !Array.isArray(options.terrainMaps)) fail('INVALID_TERRAIN_MAPS', 'input.terrainMaps must be an array')
   const palette = options.palette === undefined ? DEFAULT_PALETTE : options.palette
   const layerGroups = options.layerGroups ?? []
   const layers = (options.layers === undefined
@@ -575,6 +626,7 @@ export function createPixelDocument(input = {}) {
     frames,
     animationTags: options.animationTags ?? [],
     animationEvents: options.animationEvents ?? [],
+    terrainMaps: options.terrainMaps ?? [],
     activeLayerId: options.activeLayerId ?? layers[0]?.id,
     activeFrameId: options.activeFrameId ?? frames[0]?.id,
     onionSkin: options.onionSkin === undefined
@@ -647,22 +699,35 @@ export function migratePixelDocument(input) {
     assertPixelDocument(input)
     return cloneJson(input)
   }
+  if (isRecord(input) && input.schemaVersion === 5) {
+    const legacy = assertRecord(input, 'schemaFiveDocument')
+    const schemaFiveFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'terrainMaps'))
+    assertKnownFields(legacy, schemaFiveFields, 'schemaFiveDocument')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      terrainMaps: [],
+    }
+    assertPixelDocument(migrated)
+    return migrated
+  }
   if (isRecord(input) && input.schemaVersion === 4) {
     const legacy = assertRecord(input, 'schemaFourDocument')
-    const schemaFourFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents']).has(field)))
+    const schemaFourFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaFourFields, 'schemaFourDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
       paletteCycles: [],
       animationEvents: [],
+      terrainMaps: [],
     }
     assertPixelDocument(migrated)
     return migrated
   }
   if (isRecord(input) && input.schemaVersion === 3) {
     const legacy = assertRecord(input, 'schemaThreeDocument')
-    const schemaThreeFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents']).has(field)))
+    const schemaThreeFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaThreeFields, 'schemaThreeDocument')
     const migrated = {
       ...cloneJson(legacy),
@@ -673,13 +738,14 @@ export function migratePixelDocument(input) {
         gameplay: createDefaultPixelFrameGameplay(legacy.width, legacy.height),
       })),
       animationEvents: [],
+      terrainMaps: [],
     }
     assertPixelDocument(migrated)
     return migrated
   }
   if (isRecord(input) && input.schemaVersion === 2) {
     const legacy = assertRecord(input, 'schemaTwoDocument')
-    const schemaTwoFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'layerGroups', 'animationEvents']).has(field)))
+    const schemaTwoFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'layerGroups', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaTwoFields, 'schemaTwoDocument')
     const migrated = {
       ...cloneJson(legacy),
@@ -692,13 +758,14 @@ export function migratePixelDocument(input) {
         gameplay: createDefaultPixelFrameGameplay(legacy.width, legacy.height),
       })),
       animationEvents: [],
+      terrainMaps: [],
     }
     assertPixelDocument(migrated)
     return migrated
   }
   if (isRecord(input) && input.schemaVersion === 1) {
     const legacy = assertRecord(input, 'schemaOneDocument')
-    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationTags', 'animationEvents', 'layerGroups']).has(field)))
+    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationTags', 'animationEvents', 'layerGroups', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaOneFields, 'schemaOneDocument')
     const migrated = {
       ...cloneJson(legacy),
@@ -712,6 +779,7 @@ export function migratePixelDocument(input) {
       })),
       animationTags: [],
       animationEvents: [],
+      terrainMaps: [],
     }
     assertPixelDocument(migrated)
     return migrated
@@ -1251,6 +1319,64 @@ export function assertPixelCommand(input, documentInput) {
       })
       break
     }
+    case 'terrain-maps.add':
+    case 'terrain-maps.restore': {
+      assertKnownFields(payload, new Set(['terrainMap', 'index']), 'command.payload')
+      assertTerrainMap(payload.terrainMap, 'command.payload.terrainMap')
+      if (document.terrainMaps.some((terrainMap) => terrainMap.id === payload.terrainMap.id)) {
+        fail('DUPLICATE_ID', `Terrain map ${payload.terrainMap.id} already exists`)
+      }
+      if (document.terrainMaps.length >= PIXEL_LIMITS.maxTerrainMaps) fail('LIMIT_EXCEEDED', 'Maximum terrain map count reached')
+      if (payload.index !== undefined) assertIndex(payload.index, 'command.payload.index', document.terrainMaps.length)
+      break
+    }
+    case 'terrain-maps.remove':
+      assertKnownFields(payload, new Set(['terrainMapId']), 'command.payload')
+      assertTerrainMapTarget(payload, document)
+      break
+    case 'terrain-maps.patch': {
+      assertKnownFields(payload, new Set(['terrainMapId', 'patch']), 'command.payload')
+      const terrainMap = assertTerrainMapTarget(payload, document)
+      const patch = assertRecord(payload.patch, 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name', 'terrainId']), 'command.payload.patch')
+      const keys = Object.keys(patch)
+      if (keys.length === 0) fail('EMPTY_PATCH', 'Terrain map patch must change at least one field')
+      if (keys.every((key) => terrainMap[key] === patch[key])) fail('NO_TERRAIN_CHANGE', 'Terrain map patch does not change any field')
+      assertTerrainMap({ ...terrainMap, ...patch }, 'command.payload.patch')
+      break
+    }
+    case 'terrain-maps.resize': {
+      assertKnownFields(payload, new Set(['terrainMapId', 'width', 'height']), 'command.payload')
+      const terrainMap = assertTerrainMapTarget(payload, document)
+      const width = assertInteger(payload.width, 'command.payload.width', { min: 1, max: PIXEL_LIMITS.maxTerrainMapWidth })
+      const height = assertInteger(payload.height, 'command.payload.height', { min: 1, max: PIXEL_LIMITS.maxTerrainMapHeight })
+      if (width * height > PIXEL_LIMITS.maxTerrainMapCells) fail('TERRAIN_MAP_TOO_LARGE', 'Terrain map dimensions exceed the cell limit')
+      if (width === terrainMap.width && height === terrainMap.height) fail('NO_TERRAIN_CHANGE', 'Terrain map size is unchanged')
+      break
+    }
+    case 'terrain-maps.restore-shape': {
+      assertKnownFields(payload, new Set(['terrainMapId', 'width', 'height', 'occupancy']), 'command.payload')
+      const terrainMap = assertTerrainMapTarget(payload, document)
+      const candidate = {
+        ...terrainMap,
+        width: payload.width,
+        height: payload.height,
+        occupancy: payload.occupancy,
+      }
+      assertTerrainMap(candidate, 'command.payload')
+      if (
+        terrainMap.width === candidate.width
+        && terrainMap.height === candidate.height
+        && terrainMap.occupancy.every((occupied, index) => occupied === candidate.occupancy[index])
+      ) fail('NO_TERRAIN_CHANGE', 'Terrain map shape is unchanged')
+      break
+    }
+    case 'terrain-maps.cells.patch': {
+      assertKnownFields(payload, new Set(['terrainMapId', 'cells']), 'command.payload')
+      const terrainMap = assertTerrainMapTarget(payload, document)
+      assertTerrainMapCells(payload.cells, terrainMap, 'command.payload.cells')
+      break
+    }
     case 'onion-skin.set': {
       assertKnownFields(payload, new Set(['patch']), 'command.payload')
       const patch = assertRecord(payload.patch, 'command.payload.patch')
@@ -1598,6 +1724,79 @@ export function applyPixelCommand(documentInput, commandInput) {
       inversePayload = { eventId: payload.eventId, patch: previous }
       break
     }
+    case 'terrain-maps.add':
+    case 'terrain-maps.restore': {
+      const index = payload.index ?? next.terrainMaps.length
+      next.terrainMaps.splice(index, 0, cloneJson(payload.terrainMap))
+      inverseType = 'terrain-maps.remove'
+      inversePayload = { terrainMapId: payload.terrainMap.id }
+      break
+    }
+    case 'terrain-maps.remove': {
+      const index = next.terrainMaps.findIndex((terrainMap) => terrainMap.id === payload.terrainMapId)
+      const [terrainMap] = next.terrainMaps.splice(index, 1)
+      inverseType = 'terrain-maps.restore'
+      inversePayload = { terrainMap, index }
+      break
+    }
+    case 'terrain-maps.patch': {
+      const terrainMap = next.terrainMaps.find((item) => item.id === payload.terrainMapId)
+      const previous = Object.fromEntries(Object.keys(payload.patch).map((key) => [key, terrainMap[key]]))
+      Object.assign(terrainMap, cloneJson(payload.patch))
+      inverseType = 'terrain-maps.patch'
+      inversePayload = { terrainMapId: payload.terrainMapId, patch: previous }
+      break
+    }
+    case 'terrain-maps.resize': {
+      const terrainMap = next.terrainMaps.find((item) => item.id === payload.terrainMapId)
+      const previous = {
+        width: terrainMap.width,
+        height: terrainMap.height,
+        occupancy: cloneJson(terrainMap.occupancy),
+      }
+      const occupancy = Array.from({ length: payload.width * payload.height }, () => false)
+      const overlapWidth = Math.min(terrainMap.width, payload.width)
+      const overlapHeight = Math.min(terrainMap.height, payload.height)
+      for (let y = 0; y < overlapHeight; y += 1) {
+        for (let x = 0; x < overlapWidth; x += 1) {
+          occupancy[y * payload.width + x] = terrainMap.occupancy[y * terrainMap.width + x]
+        }
+      }
+      terrainMap.width = payload.width
+      terrainMap.height = payload.height
+      terrainMap.occupancy = occupancy
+      inverseType = 'terrain-maps.restore-shape'
+      inversePayload = { terrainMapId: payload.terrainMapId, ...previous }
+      break
+    }
+    case 'terrain-maps.restore-shape': {
+      const terrainMap = next.terrainMaps.find((item) => item.id === payload.terrainMapId)
+      const previous = {
+        width: terrainMap.width,
+        height: terrainMap.height,
+        occupancy: cloneJson(terrainMap.occupancy),
+      }
+      terrainMap.width = payload.width
+      terrainMap.height = payload.height
+      terrainMap.occupancy = cloneJson(payload.occupancy)
+      inverseType = 'terrain-maps.restore-shape'
+      inversePayload = { terrainMapId: payload.terrainMapId, ...previous }
+      break
+    }
+    case 'terrain-maps.cells.patch': {
+      const terrainMap = next.terrainMaps.find((item) => item.id === payload.terrainMapId)
+      const previous = payload.cells.map((cell) => ({
+        x: cell.x,
+        y: cell.y,
+        occupied: terrainMap.occupancy[cell.y * terrainMap.width + cell.x],
+      }))
+      for (const cell of payload.cells) {
+        terrainMap.occupancy[cell.y * terrainMap.width + cell.x] = cell.occupied
+      }
+      inverseType = 'terrain-maps.cells.patch'
+      inversePayload = { terrainMapId: payload.terrainMapId, cells: previous }
+      break
+    }
     case 'onion-skin.set': {
       const previous = cloneJson(next.onionSkin)
       next.onionSkin = { ...next.onionSkin, ...payload.patch }
@@ -1636,6 +1835,34 @@ function blendChannel(mode, source, destination) {
     default:
       return source
   }
+}
+
+function assertTerrainMapTarget(payload, document) {
+  assertId(payload.terrainMapId, 'command.payload.terrainMapId')
+  const terrainMap = document.terrainMaps.find((item) => item.id === payload.terrainMapId)
+  if (!terrainMap) fail('UNKNOWN_TERRAIN_MAP', `Unknown terrain map ${payload.terrainMapId}`)
+  return terrainMap
+}
+
+function assertTerrainMapCells(cells, terrainMap, path) {
+  if (!Array.isArray(cells) || cells.length < 1 || cells.length > PIXEL_LIMITS.maxTerrainMapCells) {
+    fail('INVALID_TERRAIN_CELLS', `${path} must contain 1-${PIXEL_LIMITS.maxTerrainMapCells} unique cells`)
+  }
+  const seen = new Set()
+  let changed = false
+  cells.forEach((cellInput, index) => {
+    const cellPath = `${path}[${index}]`
+    const cell = assertRecord(cellInput, cellPath)
+    assertKnownFields(cell, new Set(['x', 'y', 'occupied']), cellPath)
+    const x = assertInteger(cell.x, `${cellPath}.x`, { min: 0, max: terrainMap.width - 1 })
+    const y = assertInteger(cell.y, `${cellPath}.y`, { min: 0, max: terrainMap.height - 1 })
+    assertBoolean(cell.occupied, `${cellPath}.occupied`)
+    const key = `${x}:${y}`
+    if (seen.has(key)) fail('DUPLICATE_TERRAIN_CELL', `${path} contains duplicate coordinate ${key}`, { path, key })
+    seen.add(key)
+    if (terrainMap.occupancy[y * terrainMap.width + x] !== cell.occupied) changed = true
+  })
+  if (!changed) fail('NO_TERRAIN_CHANGE', `${path} does not change the terrain map`)
 }
 
 function blendPixel(output, offset, source, opacity, mode) {
@@ -1745,7 +1972,7 @@ export function createSpriteSheetMetadata(documentInput, options = {}) {
 function createSpriteSheetMetadataFromLayout(document, layout) {
   const animationSequences = new Map(document.animationTags.map((tag) => [tag.id, resolveAnimationTagFrames(document, tag)]))
   return {
-    schemaVersion: 5,
+    schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
     kind: 'aeonquill.sprite-sheet',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -1768,6 +1995,7 @@ function createSpriteSheetMetadataFromLayout(document, layout) {
     layers: cloneJson(document.layers),
     palette: cloneJson(document.palette),
     paletteCycles: cloneJson(document.paletteCycles),
+    terrainMaps: cloneJson(document.terrainMaps),
   }
 }
 
@@ -1819,7 +2047,7 @@ export function renderPixelAnimationClipRgba(documentInput, tagId, options = {})
     pixels,
     layout,
     metadata: {
-      schemaVersion: 5,
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
       kind: 'aeonquill.pixel-animation-clip',
       sourceDocumentId: document.id,
       sourceRevision: document.revision,
@@ -1839,6 +2067,7 @@ export function renderPixelAnimationClipRgba(documentInput, tagId, options = {})
       layers: cloneJson(document.layers),
       palette: cloneJson(document.palette),
       paletteCycles: cloneJson(document.paletteCycles),
+      terrainMaps: cloneJson(document.terrainMaps),
     },
   }
 }

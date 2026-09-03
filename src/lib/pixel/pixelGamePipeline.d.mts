@@ -29,7 +29,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 5
+  schemaVersion: 6
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -61,6 +61,7 @@ export type PixelGameManifest = {
   layers: PixelDocument['layers']
   palette: PixelDocument['palette']
   paletteCycles: PixelDocument['paletteCycles']
+  terrainMaps: PixelDocument['terrainMaps']
 }
 
 export type PixelGameExportBundle = {
@@ -116,6 +117,27 @@ export type PixelTerrainPreviewExportBundle = {
   manifest: { filename: string; mime: 'application/json'; text: string; value: PixelTerrainPreviewMetadata }
 }
 
+export type PixelTerrainMapOptions = {
+  terrainMapId?: string
+  occupancy?: boolean[]
+}
+
+export type PixelTerrainMapLayout = Omit<PixelTerrainPreviewLayout, 'kind' | 'grid'> & {
+  kind: 'aeonquill.pixel-terrain-map'
+  terrainMapId: string
+  terrainMapName: string
+  grid: { width: number; height: number }
+}
+
+export type PixelTerrainMapMetadata = PixelTerrainMapLayout & { image: string; atlas: string }
+
+export type PixelTerrainMapExportBundle = {
+  preview: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  atlas: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  manifest: { filename: string; mime: 'application/json'; text: string; value: PixelTerrainMapMetadata }
+  tiledMap: { filename: string; mime: 'application/json'; text: string; value: Record<string, unknown> }
+}
+
 export type PixelEngineBridgeOptions = PixelGameOptions & {
   pixelsPerUnit?: number
   rpgMakerFrameIds?: Partial<Record<'south' | 'west' | 'east' | 'north', string[]>>
@@ -146,6 +168,7 @@ export type PixelEngineBridgeManifest = {
   layers: PixelDocument['layers']
   palette: PixelDocument['palette']
   paletteCycles: PixelDocument['paletteCycles']
+  terrainMaps: PixelDocument['terrainMaps']
   godot: {
     target: 'Godot 4.x'
     durationFps: 1000
@@ -219,6 +242,18 @@ export function createPixelTerrainPreviewExportBundle(
   document: PixelDocument,
   options?: PixelTerrainPreviewOptions & { baseName?: string },
 ): PixelTerrainPreviewExportBundle
+export function createPixelTerrainMapLayout(
+  document: PixelDocument,
+  options?: PixelTerrainMapOptions,
+): PixelTerrainMapLayout
+export function renderPixelTerrainMapRgba(
+  document: PixelDocument,
+  options?: PixelTerrainMapOptions,
+): { pixels: Uint8ClampedArray; width: number; height: number; layout: PixelTerrainMapLayout }
+export function createPixelTerrainMapExportBundle(
+  document: PixelDocument,
+  options?: PixelTerrainMapOptions & { baseName?: string },
+): PixelTerrainMapExportBundle
 export function createPixelEngineBridgeExportBundle(
   document: PixelDocument,
   options?: PixelEngineBridgeOptions,

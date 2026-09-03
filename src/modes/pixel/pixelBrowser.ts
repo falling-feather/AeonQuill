@@ -9,6 +9,7 @@ import {
   type PixelExportBundle,
   type PixelGameExportBundle,
   type PixelTerrainPreviewExportBundle,
+  type PixelTerrainMapExportBundle,
   type RgbaImage,
 } from '../../lib/pixel/index'
 
@@ -160,6 +161,13 @@ export async function downloadPixelAnimationClipExportBundle(bundle: PixelAnimat
 export async function downloadPixelTerrainPreviewExportBundle(bundle: PixelTerrainPreviewExportBundle) {
   downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
   downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+}
+
+export async function downloadPixelTerrainMapExportBundle(bundle: PixelTerrainMapExportBundle) {
+  downloadPixelBlob(await rgbaToPngBlob(bundle.preview.pixels, bundle.preview.width, bundle.preview.height), bundle.preview.filename)
+  downloadPixelBlob(await rgbaToPngBlob(bundle.atlas.pixels, bundle.atlas.width, bundle.atlas.height), bundle.atlas.filename)
+  downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+  downloadPixelText(bundle.tiledMap.text, bundle.tiledMap.filename, bundle.tiledMap.mime)
 }
 
 export async function downloadPixelEngineBridgeExportBundle(bundle: PixelEngineBridgeExportBundle) {

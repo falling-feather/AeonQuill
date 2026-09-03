@@ -11,6 +11,9 @@ import {
   createPixelGameManifest,
   createPixelTerrainPreviewExportBundle,
   createPixelTerrainPreviewLayout,
+  createPixelTerrainMapExportBundle,
+  createPixelTerrainMapLayout,
+  renderPixelTerrainMapRgba,
   renderPixelTerrainPreviewRgba,
 } from '../src/lib/pixel/pixelGamePipeline.mjs'
 
@@ -83,6 +86,14 @@ function createTerrainDocument(masks = [28, 124, 112, 31, 255, 241, 7, 199, 193]
     height: 1,
     layers,
     frames,
+    terrainMaps: [{
+      id: 'stone-yard',
+      name: 'Stone Yard',
+      terrainId: 'stone',
+      width: 6,
+      height: 4,
+      occupancy: Array(24).fill(true),
+    }],
     activeLayerId: layers[0].id,
     activeFrameId: frames[0].id,
   })
@@ -92,7 +103,7 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3 })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
-  assert.equal(manifest.schemaVersion, 5)
+  assert.equal(manifest.schemaVersion, 6)
   assert.deepEqual(manifest.animationEvents, document.animationEvents)
   assert.deepEqual(manifest.paletteCycles, document.paletteCycles)
   assert.deepEqual(manifest.layerGroups, document.layerGroups)
@@ -144,7 +155,7 @@ test('exports one active animation clip with a unique atlas and exact playback, 
   const bundle = createPixelAnimationClipExportBundle(document, 'turn', { columns: 2, padding: 1, spacing: 1 })
   assert.equal(bundle.sprite.filename, 'Hero-Eight-Way-Turn-clip.png')
   assert.equal(bundle.manifest.value.kind, 'aeonquill.pixel-animation-clip')
-  assert.equal(bundle.manifest.value.schemaVersion, 5)
+  assert.equal(bundle.manifest.value.schemaVersion, 6)
   assert.deepEqual(bundle.manifest.value.frames.map((frame) => frame.frameId), [
     'direction-5', 'direction-6', 'direction-7', 'direction-8',
   ])
@@ -209,6 +220,66 @@ test('terrain preview reports stable fallback, renders pixels, exports facts and
   )
   assert.throws(
     () => createPixelTerrainPreviewLayout(document, { terrainId: 'stone', occupancy, surprise: true }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_FIELD',
+  )
+})
+
+test('persistent non-3x3 terrain maps infer, render and export deterministic JSON plus an inline Tiled map', () => {
+  const document = createTerrainDocument()
+  const layout = createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard' })
+  assert.equal(layout.kind, 'aeonquill.pixel-terrain-map')
+  assert.deepEqual(layout.grid, { width: 6, height: 4 })
+  assert.equal(layout.cells.length, 24)
+  assert.equal(layout.exactCount, 24)
+  assert.equal(layout.fallbackCount, 0)
+  assert.equal(layout.cells[0].expectedBitmask, 28)
+  assert.equal(layout.cells[7].expectedBitmask, 255)
+  assert.equal(layout.cells[23].expectedBitmask, 193)
+
+  const diagonalOnly = Array(24).fill(false)
+  diagonalOnly[1 * 6 + 2] = true
+  diagonalOnly[0 * 6 + 3] = true
+  const gated = createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', occupancy: diagonalOnly })
+  assert.equal(gated.cells[8].expectedBitmask, 0)
+
+  const rendered = renderPixelTerrainMapRgba(document, { terrainMapId: 'stone-yard' })
+  assert.equal(rendered.width, 6)
+  assert.equal(rendered.height, 4)
+  assert.equal(rendered.pixels.length, 96)
+
+  const bundle = createPixelTerrainMapExportBundle(document, { terrainMapId: 'stone-yard' })
+  const metadata = JSON.parse(bundle.manifest.text)
+  const tiledMap = JSON.parse(bundle.tiledMap.text)
+  assert.equal(bundle.preview.filename, 'Terrain-Nine-Grid-Stone-Yard-terrain-map.png')
+  assert.equal(bundle.atlas.filename, 'Terrain-Nine-Grid-Stone-Yard-terrain-map-source-sprite-sheet.png')
+  assert.equal(metadata.image, bundle.preview.filename)
+  assert.equal(metadata.atlas, bundle.atlas.filename)
+  assert.deepEqual(metadata.occupancy, Array(24).fill(true))
+  assert.equal(tiledMap.width, 6)
+  assert.equal(tiledMap.height, 4)
+  assert.equal(tiledMap.layers[0].data.length, 24)
+  assert.equal(tiledMap.layers[0].data.every((tileId) => Number.isInteger(tileId) && tileId > 0), true)
+  assert.equal(tiledMap.tilesets[0].firstgid, 1)
+  assert.equal(tiledMap.tilesets[0].image, bundle.atlas.filename)
+  assert.equal(Object.hasOwn(tiledMap.tilesets[0], 'source'), false)
+  assert.equal(tiledMap.tilesets[0].wangsets[0].name, 'stone')
+
+  const fallbackDocument = createTerrainDocument([1, 2])
+  const firstFallback = createPixelTerrainMapLayout(fallbackDocument, { terrainMapId: 'stone-yard' })
+  const secondFallback = createPixelTerrainMapLayout(fallbackDocument, { terrainMapId: 'stone-yard' })
+  assert.equal(firstFallback.fallbackCount > 0, true)
+  assert.deepEqual(firstFallback.cells.map((cell) => cell.frameId), secondFallback.cells.map((cell) => cell.frameId))
+
+  assert.throws(
+    () => createPixelTerrainMapLayout(document, { terrainMapId: 'missing' }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_TERRAIN_MAP',
+  )
+  assert.throws(
+    () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', occupancy: [true] }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_TERRAIN_OCCUPANCY',
+  )
+  assert.throws(
+    () => createPixelTerrainMapLayout(document, { terrainMapId: 'stone-yard', surprise: true }),
     (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_FIELD',
   )
 })
