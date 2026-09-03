@@ -10,6 +10,8 @@ import {
   createSpriteSheetMetadata,
   deserializePixelDocument,
   migratePixelDocument,
+  resolvePixelAnimationSequences,
+  resolvePixelAnimationFrames,
   renderPixelFrameRgba,
   renderSpriteSheetRgba,
   serializePixelDocument,
@@ -210,10 +212,17 @@ test('switches and reorders layers and frames while keeping onion-skin settings 
   assert.deepEqual(onionRestored.document.onionSkin, original.onionSkin)
 })
 
-test('serializes schema v1 without loss and migrates the existing single-layer palette-index format', () => {
+test('serializes schema v2 without loss and migrates v1 plus the single-layer palette-index format', () => {
   const document = makeMultiLayerMultiFrameDocument()
   const serialized = serializePixelDocument(document)
   assert.equal(serializePixelDocument(deserializePixelDocument(serialized)), serialized)
+
+  const schemaOne = structuredClone(document)
+  schemaOne.schemaVersion = 1
+  delete schemaOne.animationTags
+  const migratedSchemaOne = migratePixelDocument(schemaOne)
+  assert.equal(migratedSchemaOne.schemaVersion, 2)
+  assert.deepEqual(migratedSchemaOne.animationTags, [])
 
   const migrated = migratePixelDocument({
     version: 0,
@@ -225,10 +234,95 @@ test('serializes schema v1 without loss and migrates the existing single-layer p
     pixels: ['1', '.', 2, 0],
     frameDurationMs: 90,
   })
-  assert.equal(migrated.schemaVersion, 1)
+  assert.equal(migrated.schemaVersion, 2)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', null, 'color-2', null])
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
+})
+
+test('animation tags, batch durations and cross-frame cel copies are strict and reversible', () => {
+  let document = makeMultiLayerMultiFrameDocument()
+  document = execute(document, 'frames.add', {
+    frame: { id: 'frame-3', name: 'Frame 3', durationMs: 360 },
+    copyFromFrameId: 'frame-2',
+  }).document
+
+  const tagged = execute(document, 'animations.add', {
+    tag: {
+      id: 'attack',
+      name: 'Attack',
+      fromFrameId: 'frame-1',
+      toFrameId: 'frame-3',
+      direction: 'ping-pong',
+      loop: true,
+    },
+  })
+  assert.deepEqual(resolvePixelAnimationFrames(tagged.document, 'attack'), ['frame-1', 'frame-2', 'frame-3', 'frame-2'])
+  assert.deepEqual(resolvePixelAnimationSequences(tagged.document), [
+    { tagId: 'attack', frameIds: ['frame-1', 'frame-2', 'frame-3', 'frame-2'] },
+  ])
+  assert.throws(
+    () => execute(tagged.document, 'frames.remove', { frameId: 'frame-1' }),
+    (error) => error instanceof PixelContractError && error.code === 'FRAME_IN_ANIMATION_TAG',
+  )
+
+  const timed = execute(tagged.document, 'frames.duration.set', {
+    frames: [
+      { frameId: 'frame-1', durationMs: 80 },
+      { frameId: 'frame-2', durationMs: 90 },
+      { frameId: 'frame-3', durationMs: 100 },
+    ],
+  })
+  assert.deepEqual(timed.document.frames.map((frame) => frame.durationMs), [80, 90, 100])
+  assert.deepEqual(
+    withoutRevision(applyPixelCommand(timed.document, timed.inverse).document),
+    withoutRevision(tagged.document),
+  )
+
+  const copied = execute(timed.document, 'cels.copy', {
+    sourceFrameId: 'frame-1',
+    targetFrameIds: ['frame-2', 'frame-3'],
+    layerIds: ['highlight'],
+    mode: 'replace',
+  })
+  assert.deepEqual(copied.document.frames[1].cels.highlight, copied.document.frames[0].cels.highlight)
+  assert.deepEqual(copied.document.frames[2].cels.highlight, copied.document.frames[0].cels.highlight)
+  assert.deepEqual(
+    withoutRevision(applyPixelCommand(copied.document, copied.inverse).document),
+    withoutRevision(timed.document),
+  )
+
+  const removed = execute(tagged.document, 'animations.remove', { tagId: 'attack' })
+  assert.deepEqual(removed.document.animationTags, [])
+  assert.deepEqual(
+    withoutRevision(applyPixelCommand(removed.document, removed.inverse).document),
+    withoutRevision(tagged.document),
+  )
+})
+
+test('animation and bulk commands reject inverted ranges, duplicate targets and locked layers', () => {
+  let document = makeMultiLayerMultiFrameDocument()
+  assert.throws(
+    () => execute(document, 'animations.add', {
+      tag: {
+        id: 'backwards', name: 'Backwards', fromFrameId: 'frame-2', toFrameId: 'frame-1', direction: 'forward', loop: true,
+      },
+    }),
+    (error) => error instanceof PixelContractError && error.code === 'INVALID_ANIMATION_RANGE',
+  )
+  assert.throws(
+    () => execute(document, 'frames.duration.set', {
+      frames: [{ frameId: 'frame-1', durationMs: 80 }, { frameId: 'frame-1', durationMs: 90 }],
+    }),
+    (error) => error instanceof PixelContractError && error.code === 'DUPLICATE_ID',
+  )
+  document = execute(document, 'layers.patch', { layerId: 'highlight', patch: { locked: true } }).document
+  assert.throws(
+    () => execute(document, 'cels.copy', {
+      sourceFrameId: 'frame-1', targetFrameIds: ['frame-2'], layerIds: ['highlight'], mode: 'replace',
+    }),
+    (error) => error instanceof PixelContractError && error.code === 'LAYER_LOCKED',
+  )
 })
 
 test('produces bounded sprite-sheet layout, metadata and RGBA pixels in document frame order', () => {

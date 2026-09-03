@@ -1,4 +1,4 @@
-import { assertPixelDocument, createSpriteSheetLayout } from './pixelCore.mjs'
+import { assertPixelDocument, createSpriteSheetLayout, resolvePixelAnimationSequences } from './pixelCore.mjs'
 import { createPixelExportBundle, safePixelFilename } from './pixelConversion.mjs'
 
 export const PIXEL_DIRECTIONS = Object.freeze([
@@ -58,7 +58,7 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
   const options = assertRecord(optionsInput, 'options')
   assertKnownFields(options, new Set([
     'columns', 'padding', 'spacing', 'baseName', 'anchor', 'directionFrameIds',
-    'mapWidth', 'mapHeight', 'mapFrameIds', 'animationName',
+    'mapWidth', 'mapHeight', 'mapFrameIds', 'animationName', 'animationTagId',
   ]), 'options')
   const frameIds = new Set(document.frames.map((frame) => frame.id))
   const fallbackMap = defaultMapSize(document.frames.length)
@@ -95,6 +95,13 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
   const animationName = typeof options.animationName === 'string' && options.animationName.trim()
     ? options.animationName.trim().slice(0, 64)
     : 'default'
+  const animationTagId = options.animationTagId ?? document.animationTags[0]?.id ?? null
+  if (animationTagId !== null && (
+    typeof animationTagId !== 'string'
+    || !document.animationTags.some((tag) => tag.id === animationTagId)
+  )) {
+    fail('UNKNOWN_ANIMATION_TAG', 'options.animationTagId must reference an existing animation tag')
+  }
   return {
     columns,
     padding,
@@ -106,6 +113,7 @@ export function normalizePixelGameOptions(documentInput, optionsInput = {}) {
     mapHeight,
     mapFrameIds,
     animationName,
+    animationTagId,
   }
 }
 
@@ -132,9 +140,23 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     const frameId = options.directionFrameIds[direction.id]
     return { ...direction, frameId, frameIndex: document.frames.findIndex((frame) => frame.id === frameId) }
   })
+  const animationSequences = new Map(resolvePixelAnimationSequences(document).map((sequence) => [sequence.tagId, sequence.frameIds]))
+  const animations = document.animationTags.map((tag) => ({
+    id: tag.id,
+    name: tag.name,
+    direction: tag.direction,
+    loop: tag.loop,
+    frames: animationSequences.get(tag.id).map((frameId) => ({
+      id: frameId,
+      durationMs: document.frames.find((frame) => frame.id === frameId).durationMs,
+    })),
+  }))
+  const selectedAnimation = options.animationTagId
+    ? animations.find((animation) => animation.id === options.animationTagId)
+    : null
   const tileIds = new Map(layout.cells.map((cell) => [cell.frameId, cell.index + 1]))
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'aeonquill.pixel-game-bundle',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -148,7 +170,14 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
       padding: layout.padding,
       spacing: layout.spacing,
     },
-    animation: { name: options.animationName, loop: true, frames: frames.map((frame) => ({ id: frame.id, durationMs: frame.durationMs })) },
+    animation: selectedAnimation ?? {
+      id: 'default',
+      name: options.animationName,
+      direction: 'forward',
+      loop: true,
+      frames: frames.map((frame) => ({ id: frame.id, durationMs: frame.durationMs })),
+    },
+    animations,
     frames,
     directions,
     tilemap: {

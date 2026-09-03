@@ -24,6 +24,10 @@ function createEightFrameDocument() {
     height: 2,
     layers,
     frames,
+    animationTags: [
+      { id: 'walk', name: 'Walk', fromFrameId: 'direction-1', toFrameId: 'direction-4', direction: 'forward', loop: true },
+      { id: 'turn', name: 'Turn', fromFrameId: 'direction-5', toFrameId: 'direction-8', direction: 'ping-pong', loop: false },
+    ],
     activeLayerId: 'body',
     activeFrameId: frames[0].id,
   })
@@ -33,6 +37,12 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3, anchor: { x: 1, y: 2 } })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
+  assert.equal(manifest.schemaVersion, 2)
+  assert.equal(manifest.animation.id, 'walk')
+  assert.deepEqual(manifest.animation.frames.map((frame) => frame.id), ['direction-1', 'direction-2', 'direction-3', 'direction-4'])
+  assert.deepEqual(manifest.animations[1].frames.map((frame) => frame.id), [
+    'direction-5', 'direction-6', 'direction-7', 'direction-8', 'direction-7', 'direction-6',
+  ])
   assert.equal(manifest.directions.length, PIXEL_DIRECTIONS.length)
   assert.deepEqual(manifest.directions.map((direction) => direction.frameId), document.frames.map((frame) => frame.id))
   assert.deepEqual(manifest.frames[0].anchor, { x: 1, y: 2 })
@@ -63,6 +73,10 @@ test('fails closed when a direction or map points at an unknown frame', () => {
   assert.throws(
     () => createPixelGameManifest(document, { mapWidth: 2, mapHeight: 2, mapFrameIds: ['direction-1'] }),
     (error) => error instanceof PixelGamePipelineError && error.code === 'INVALID_TILEMAP',
+  )
+  assert.throws(
+    () => createPixelGameManifest(document, { animationTagId: 'missing' }),
+    (error) => error instanceof PixelGamePipelineError && error.code === 'UNKNOWN_ANIMATION_TAG',
   )
 })
 

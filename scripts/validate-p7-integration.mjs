@@ -119,6 +119,32 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(await frameButtons.count(), 8)
     assert.deepEqual(await frameButtons.locator('strong').allInnerTexts(), ['南', '西南', '西', '西北', '北', '东北', '东', '东南'])
 
+    const animationWorkbench = page.getByLabel('动画片段', { exact: true })
+    await animationWorkbench.waitFor({ state: 'visible' })
+    await animationWorkbench.getByRole('button', { name: '新建动画片段', exact: true }).click()
+    const animationName = animationWorkbench.getByLabel('片段名称', { exact: true })
+    await animationName.fill('八方演武')
+    await animationName.press('Tab')
+    await animationWorkbench.getByRole('button', { name: '选择动画片段 八方演武', exact: true }).waitFor({ state: 'visible' })
+    await animationWorkbench.locator('label').filter({ hasText: '播放方向' }).locator('select').selectOption('ping-pong')
+    await animationWorkbench.locator('label').filter({ hasText: '片段统一时长' }).locator('input').fill('180')
+    await animationWorkbench.getByRole('button', { name: '应用片段时长', exact: true }).click()
+    await page.getByText(/八方演武.*8 帧统一设为 180 ms/u).waitFor({ state: 'visible' })
+    assert.deepEqual(await frameButtons.locator('small').allInnerTexts(), Array(8).fill('180 ms'))
+
+    await animationWorkbench.getByRole('button', { name: '覆盖复制当前图层', exact: true }).click()
+    await page.getByText(/覆盖复制完成.*7 个目标帧/u).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '撤销', exact: true }).click()
+    await page.getByText('已撤销上一步', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '重做', exact: true }).click()
+    await page.getByText('已重做上一步', { exact: true }).waitFor({ state: 'visible' })
+
+    await page.getByRole('button', { name: '播放动画', exact: true }).click()
+    await page.waitForTimeout(420)
+    assert.equal(await frameButtons.evaluateAll((buttons) => buttons.some((button) => button.classList.contains('is-previewing'))), true)
+    await page.getByRole('button', { name: '停止预览', exact: true }).click()
+    await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-animation-desktop.png'), fullPage: true })
+
     await page.getByRole('button', { name: /游戏资产包/u }).click()
     await waitForDownloads(downloads, 6)
     await page.getByText(/游戏资产包完成/u).waitFor({ state: 'visible' })
@@ -142,8 +168,17 @@ async function validatePixelGameUi(baseUrl) {
     const tileset = JSON.parse((await readDownload('-tileset.tsj')).toString('utf8'))
     const tilemap = JSON.parse((await readDownload('-tilemap.tmj')).toString('utf8'))
     const viewer = (await readDownload('-preview.html')).toString('utf8')
+    const project = JSON.parse((await readDownload('.aeonpixel.json')).toString('utf8'))
+    assert.equal(project.schemaVersion, 2)
+    assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
+    assert.equal(manifest.schemaVersion, 2)
     assert.equal(manifest.directions.length, 8)
     assert.equal(manifest.frames.length, 8)
+    assert.equal(manifest.animations.length, 2)
+    assert.equal(manifest.animation.name, '八方演武')
+    assert.equal(manifest.animation.direction, 'ping-pong')
+    assert.equal(manifest.animation.frames.length, 14)
+    assert.equal(manifest.animation.frames.every((frame) => frame.durationMs === 180), true)
     assert.equal(tileset.image, manifest.image)
     assert.equal(tilemap.tilesets[0].source.endsWith('-tileset.tsj'), true)
     assert.equal(/https?:\/\//u.test(viewer), false)
@@ -151,18 +186,19 @@ async function validatePixelGameUi(baseUrl) {
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
+    await page.getByRole('button', { name: '选择动画片段 八方演武', exact: true }).waitFor({ state: 'visible' })
     assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
     assert.equal(await page.locator('html').evaluate((html) => html.scrollWidth <= html.clientWidth), true)
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel game UI and six-file delivery',
+      label: 'pixel animation, game UI and six-file delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel game UI and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel animation, game UI and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

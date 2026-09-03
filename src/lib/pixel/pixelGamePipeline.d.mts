@@ -13,17 +13,27 @@ export type PixelGameOptions = {
   mapHeight?: number
   mapFrameIds?: Array<string | null>
   animationName?: string
+  animationTagId?: string
+}
+
+export type PixelGameAnimation = {
+  id: string
+  name: string
+  direction: 'forward' | 'reverse' | 'ping-pong'
+  loop: boolean
+  frames: Array<{ id: string; durationMs: number }>
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 1
+  schemaVersion: 2
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
   image: string
   canvas: { width: number; height: number }
   atlas: { width: number; height: number; columns: number; rows: number; padding: number; spacing: number }
-  animation: { name: string; loop: boolean; frames: Array<{ id: string; durationMs: number }> }
+  animation: PixelGameAnimation
+  animations: PixelGameAnimation[]
   frames: Array<{
     id: string
     name: string
@@ -58,6 +68,9 @@ export class PixelGamePipelineError extends Error {
 }
 
 export const PIXEL_DIRECTIONS: ReadonlyArray<Readonly<{ id: PixelDirectionId; label: string }>>
-export function normalizePixelGameOptions(document: PixelDocument, options?: PixelGameOptions): Required<PixelGameOptions>
+export function normalizePixelGameOptions(
+  document: PixelDocument,
+  options?: PixelGameOptions,
+): Required<Omit<PixelGameOptions, 'animationTagId'>> & { animationTagId: string | null }
 export function createPixelGameManifest(document: PixelDocument, options?: PixelGameOptions): PixelGameManifest
 export function createPixelGameExportBundle(document: PixelDocument, options?: PixelGameOptions): PixelGameExportBundle

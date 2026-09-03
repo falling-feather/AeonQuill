@@ -15,8 +15,15 @@ export type PixelCommandType =
   | 'frames.remove'
   | 'frames.restore'
   | 'frames.patch'
+  | 'frames.duration.set'
   | 'frames.reorder'
   | 'frames.select'
+  | 'cels.copy'
+  | 'cels.restore'
+  | 'animations.add'
+  | 'animations.remove'
+  | 'animations.restore'
+  | 'animations.patch'
   | 'onion-skin.set'
 
 export type PixelPaletteColor = {
@@ -40,6 +47,17 @@ export type PixelFrame = {
   cels: Record<string, Array<string | null>>
 }
 
+export type PixelAnimationDirection = 'forward' | 'reverse' | 'ping-pong'
+
+export type PixelAnimationTag = {
+  id: string
+  name: string
+  fromFrameId: string
+  toFrameId: string
+  direction: PixelAnimationDirection
+  loop: boolean
+}
+
 export type PixelOnionSkin = {
   enabled: boolean
   previousFrames: number
@@ -49,7 +67,7 @@ export type PixelOnionSkin = {
 
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 1
+  schemaVersion: 2
   id: string
   name: string
   width: number
@@ -58,6 +76,7 @@ export type PixelDocument = {
   palette: PixelPaletteColor[]
   layers: PixelLayer[]
   frames: PixelFrame[]
+  animationTags: PixelAnimationTag[]
   activeLayerId: string
   activeFrameId: string
   onionSkin: PixelOnionSkin
@@ -100,7 +119,7 @@ export type SpriteSheetLayout = {
 }
 
 export type SpriteSheetMetadata = {
-  schemaVersion: 1
+  schemaVersion: 2
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -111,6 +130,7 @@ export type SpriteSheetMetadata = {
   padding: number
   spacing: number
   frames: SpriteSheetCell[]
+  animations: Array<PixelAnimationTag & { frameIds: string[] }>
   palette: PixelPaletteColor[]
 }
 
@@ -120,7 +140,7 @@ export class PixelContractError extends Error {
 }
 
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 1
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 2
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_LIMITS: Readonly<{
   maxWidth: number
@@ -128,8 +148,10 @@ export const PIXEL_LIMITS: Readonly<{
   maxPaletteColors: number
   maxLayers: number
   maxFrames: number
+  maxAnimationTags: number
   maxDocumentCells: number
   maxPixelsPerCommand: number
+  maxBulkCellsPerCommand: number
   maxSpritePixels: number
 }>
 
@@ -140,6 +162,8 @@ export function migratePixelDocument(input: unknown): PixelDocument
 export function serializePixelDocument(document: PixelDocument, options?: { pretty?: boolean }): string
 export function deserializePixelDocument(serialized: string): PixelDocument
 export function clonePixelDocument(document: PixelDocument): PixelDocument
+export function resolvePixelAnimationSequences(document: PixelDocument): Array<{ tagId: string; frameIds: string[] }>
+export function resolvePixelAnimationFrames(document: PixelDocument, tagId: string): string[]
 export function assertPixelCommand(input: unknown, document?: PixelDocument): PixelCommand
 export function createPixelCommand(
   document: PixelDocument,

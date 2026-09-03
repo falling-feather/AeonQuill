@@ -68,10 +68,12 @@ import {
   rasterPixelLine,
   rasterPixelRectangle,
   renderPixelFrameRgba,
+  resolvePixelAnimationFrames,
   safePixelFilename,
   serializePixelProject,
   type PixelCommand,
   type PixelCommandType,
+  type PixelAnimationDirection,
   type PixelConversionReport,
   type PixelDitherMode,
   type PixelDocument,
@@ -195,6 +197,14 @@ export function createDefaultPixelProject(input: { id?: string; name?: string } 
     palette: base.palette,
     layers,
     frames,
+    animationTags: [{
+      id: 'light-loop',
+      name: '流光循环',
+      fromFrameId: 'frame-1',
+      toFrameId: 'frame-3',
+      direction: 'ping-pong',
+      loop: true,
+    }],
     activeLayerId: 'light',
     activeFrameId: 'frame-1',
   })
@@ -294,7 +304,11 @@ export function PixelModeWorkbench({
   const [isImporting, setIsImporting] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [previewFrameId, setPreviewFrameId] = useState<string | null>(null)
+  const [previewFrameCursor, setPreviewFrameCursor] = useState<number | null>(null)
+  const [activeAnimationTagId, setActiveAnimationTagId] = useState<string | null>(
+    () => history.document.animationTags[0]?.id ?? null,
+  )
+  const [batchDurationMs, setBatchDurationMs] = useState('140')
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const importedSourceRef = useRef<ImportedSource | null>(null)
@@ -316,7 +330,7 @@ export function PixelModeWorkbench({
 
   const stopPlayback = useCallback(() => {
     setIsPlaying(false)
-    setPreviewFrameId(null)
+    setPreviewFrameCursor(null)
   }, [])
 
   const apply = useCallback((type: PixelCommandType, payload: Record<string, unknown>) => {
@@ -381,6 +395,8 @@ export function PixelModeWorkbench({
     stopPlayback()
     replaceHistory({ document: nextDocument, undo: [], redo: [] })
     setActiveColorId(nextDocument.palette[0].id)
+    setActiveAnimationTagId(nextDocument.animationTags[0]?.id ?? null)
+    setBatchDurationMs(String(nextDocument.frames[0]?.durationMs ?? 140))
     setSelection(null)
     setDragDraft(null)
     dragContextRef.current = null
@@ -453,27 +469,57 @@ export function PixelModeWorkbench({
     onDocumentChange?.(document)
   }, [document, onDocumentChange])
 
+  const activeAnimationTag = document.animationTags.find((tag) => tag.id === activeAnimationTagId)
+    ?? document.animationTags[0]
+    ?? null
+  const animationRangeFrameIds = useMemo(() => {
+    if (!activeAnimationTag) return document.frames.map((frame) => frame.id)
+    const fromIndex = document.frames.findIndex((frame) => frame.id === activeAnimationTag.fromFrameId)
+    const toIndex = document.frames.findIndex((frame) => frame.id === activeAnimationTag.toFrameId)
+    return document.frames.slice(fromIndex, toIndex + 1).map((frame) => frame.id)
+  }, [activeAnimationTag, document.frames])
+  const playbackFrameIds = useMemo(
+    () => activeAnimationTag
+      ? resolvePixelAnimationFrames(document, activeAnimationTag.id)
+      : document.frames.map((frame) => frame.id),
+    [activeAnimationTag, document],
+  )
+
   useEffect(() => {
     if (!isPlaying) return undefined
-    const currentId = previewFrameId && document.frames.some((frame) => frame.id === previewFrameId)
-      ? previewFrameId
-      : document.activeFrameId
-    if (previewFrameId !== currentId) {
-      setPreviewFrameId(currentId)
+    if (playbackFrameIds.length === 0) {
+      setIsPlaying(false)
+      setPreviewFrameCursor(null)
       return undefined
     }
-    const currentIndex = document.frames.findIndex((frame) => frame.id === currentId)
-    const currentFrame = document.frames[currentIndex]
+    const nextCursor = previewFrameCursor !== null
+      && previewFrameCursor >= 0
+      && previewFrameCursor < playbackFrameIds.length
+      ? previewFrameCursor
+      : Math.max(0, playbackFrameIds.indexOf(document.activeFrameId))
+    if (previewFrameCursor !== nextCursor) {
+      setPreviewFrameCursor(nextCursor)
+      return undefined
+    }
+    const currentFrame = document.frames.find((frame) => frame.id === playbackFrameIds[nextCursor])
     if (!currentFrame) return undefined
     const timer = window.setTimeout(() => {
-      const nextFrame = document.frames[(currentIndex + 1) % document.frames.length]
-      setPreviewFrameId(nextFrame.id)
+      if (nextCursor + 1 < playbackFrameIds.length) {
+        setPreviewFrameCursor(nextCursor + 1)
+        return
+      }
+      if (activeAnimationTag?.loop ?? true) {
+        setPreviewFrameCursor(0)
+        return
+      }
+      setIsPlaying(false)
+      setPreviewFrameCursor(null)
     }, currentFrame.durationMs)
     return () => window.clearTimeout(timer)
-  }, [document.activeFrameId, document.frames, isPlaying, previewFrameId])
+  }, [activeAnimationTag?.loop, document.activeFrameId, document.frames, isPlaying, playbackFrameIds, previewFrameCursor])
 
-  const displayedFrameId = isPlaying && previewFrameId && document.frames.some((frame) => frame.id === previewFrameId)
-    ? previewFrameId
+  const displayedFrameId = isPlaying && previewFrameCursor !== null && playbackFrameIds[previewFrameCursor]
+    ? playbackFrameIds[previewFrameCursor]
     : document.activeFrameId
 
   useEffect(() => {
@@ -911,6 +957,83 @@ export function PixelModeWorkbench({
       : '当前前八帧已经是标准八方向槽')
   }, [apply])
 
+  const createAnimationTag = useCallback(() => {
+    const current = historyRef.current.document
+    const id = uniqueId('animation', current.animationTags.map((tag) => tag.id), current.revision)
+    const created = apply('animations.add', {
+      tag: {
+        id,
+        name: `动画 ${current.animationTags.length + 1}`,
+        fromFrameId: current.frames[0].id,
+        toFrameId: current.frames.at(-1)?.id ?? current.frames[0].id,
+        direction: 'forward',
+        loop: true,
+      },
+    })
+    if (created) {
+      setActiveAnimationTagId(id)
+      setStatus('已创建动画片段，可继续设定范围、方向与循环方式')
+    }
+  }, [apply])
+
+  const patchActiveAnimationTag = useCallback((patch: Record<string, unknown>) => {
+    const tagId = activeAnimationTag?.id
+    if (!tagId) {
+      setStatus('请先创建动画片段')
+      return false
+    }
+    return apply('animations.patch', { tagId, patch })
+  }, [activeAnimationTag?.id, apply])
+
+  const removeActiveAnimationTag = useCallback(() => {
+    const current = historyRef.current.document
+    const tagId = activeAnimationTag?.id
+    if (!tagId) return
+    const fallback = current.animationTags.find((tag) => tag.id !== tagId)?.id ?? null
+    if (apply('animations.remove', { tagId })) {
+      setActiveAnimationTagId(fallback)
+      setStatus('动画片段已删除；像素帧本身保持不变')
+    }
+  }, [activeAnimationTag?.id, apply])
+
+  const applyAnimationDuration = useCallback(() => {
+    if (!activeAnimationTag) {
+      setStatus('请先创建动画片段，再批量设置时长')
+      return
+    }
+    const durationMs = Number(batchDurationMs)
+    if (!Number.isSafeInteger(durationMs) || durationMs < 20 || durationMs > 60_000) {
+      setStatus('片段时长必须是 20—60000 ms 的整数')
+      return
+    }
+    if (apply('frames.duration.set', {
+      frames: animationRangeFrameIds.map((frameId) => ({ frameId, durationMs })),
+    })) {
+      setStatus(`已将「${activeAnimationTag.name}」的 ${animationRangeFrameIds.length} 帧统一设为 ${durationMs} ms · 可一次撤销`)
+    }
+  }, [activeAnimationTag, animationRangeFrameIds, apply, batchDurationMs])
+
+  const copyActiveLayerAcrossAnimation = useCallback((mode: 'replace' | 'non-transparent') => {
+    if (!activeAnimationTag) {
+      setStatus('请先创建动画片段，再执行跨帧复制')
+      return
+    }
+    const current = historyRef.current.document
+    const targetFrameIds = animationRangeFrameIds.filter((frameId) => frameId !== current.activeFrameId)
+    if (targetFrameIds.length === 0) {
+      setStatus('当前动画片段没有可复制的目标帧')
+      return
+    }
+    if (apply('cels.copy', {
+      sourceFrameId: current.activeFrameId,
+      targetFrameIds,
+      layerIds: [current.activeLayerId],
+      mode,
+    })) {
+      setStatus(`${mode === 'replace' ? '覆盖复制' : '透明合并'}完成：当前图层已同步到「${activeAnimationTag.name}」的 ${targetFrameIds.length} 个目标帧 · 可一次撤销`)
+    }
+  }, [activeAnimationTag, animationRangeFrameIds, apply])
+
   const exportPixelGameBundle = useCallback(async () => {
     setIsExporting(true)
     try {
@@ -924,6 +1047,9 @@ export function PixelModeWorkbench({
         mapWidth,
         mapHeight,
         anchor: { x: Math.floor(current.width / 2), y: current.height },
+        animationTagId: current.animationTags.some((tag) => tag.id === activeAnimationTagId)
+          ? activeAnimationTagId ?? undefined
+          : current.animationTags[0]?.id,
       })
       await downloadPixelGameExportBundle(bundle)
       setStatus('游戏资产包完成：项目、Sprite、八方向/锚点 manifest、Tiled Tileset/Tilemap 与离线预览页')
@@ -932,7 +1058,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [])
+  }, [activeAnimationTagId])
 
   return (
     <section
@@ -1057,7 +1183,7 @@ export function PixelModeWorkbench({
           onClick={() => {
             if (isPlaying) stopPlayback()
             else {
-              setPreviewFrameId(document.activeFrameId)
+              setPreviewFrameCursor(Math.max(0, playbackFrameIds.indexOf(document.activeFrameId)))
               setIsPlaying(true)
             }
           }}
@@ -1345,13 +1471,13 @@ export function PixelModeWorkbench({
                   <input
                     key={`${document.activeFrameId}-${document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs}`}
                     type="number"
-                    min={16}
+                    min={20}
                     max={60_000}
                     defaultValue={document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs}
                     onBlur={(event) => {
                       const durationMs = event.currentTarget.valueAsNumber
                       const currentDuration = document.frames.find((frame) => frame.id === document.activeFrameId)?.durationMs
-                      if (Number.isSafeInteger(durationMs) && durationMs >= 16 && durationMs <= 60_000 && durationMs !== currentDuration) {
+                      if (Number.isSafeInteger(durationMs) && durationMs >= 20 && durationMs <= 60_000 && durationMs !== currentDuration) {
                         stopPlayback()
                         apply('frames.patch', { frameId: document.activeFrameId, patch: { durationMs } })
                       }
@@ -1396,7 +1522,7 @@ export function PixelModeWorkbench({
                 <button
                   type="button"
                   key={frame.id}
-                  className={`${frame.id === document.activeFrameId ? 'is-active' : ''} ${isPlaying && frame.id === displayedFrameId ? 'is-previewing' : ''}`.trim()}
+                  className={`${frame.id === document.activeFrameId ? 'is-active' : ''} ${isPlaying && frame.id === displayedFrameId ? 'is-previewing' : ''} ${activeAnimationTag && animationRangeFrameIds.includes(frame.id) ? 'is-in-animation' : ''}`.trim()}
                   aria-pressed={frame.id === document.activeFrameId}
                   onClick={() => {
                     stopPlayback()
@@ -1408,6 +1534,130 @@ export function PixelModeWorkbench({
                   <small>{frame.durationMs} ms</small>
                 </button>
               ))}
+            </div>
+            <div className="aq-pixel-animation-workbench" aria-label="动画片段">
+              <div className="aq-pixel-animation-tags">
+                <span>片段</span>
+                <div>
+                  {document.animationTags.map((tag) => (
+                    <button
+                      type="button"
+                      key={tag.id}
+                      className={tag.id === activeAnimationTag?.id ? 'is-active' : ''}
+                      aria-pressed={tag.id === activeAnimationTag?.id}
+                      aria-label={`选择动画片段 ${tag.name}`}
+                      onClick={() => {
+                        stopPlayback()
+                        setActiveAnimationTagId(tag.id)
+                        const firstFrameId = resolvePixelAnimationFrames(document, tag.id)[0]
+                        const firstFrame = document.frames.find((frame) => frame.id === firstFrameId)
+                        if (firstFrame) setBatchDurationMs(String(firstFrame.durationMs))
+                        setStatus(`已选择动画片段：${tag.name}`)
+                      }}
+                    >{tag.name}</button>
+                  ))}
+                  <button type="button" className="is-add" onClick={createAnimationTag} aria-label="新建动画片段">
+                    <Plus size={12} /> 新建
+                  </button>
+                </div>
+              </div>
+              {activeAnimationTag ? (
+                <div className="aq-pixel-animation-editor">
+                  <label className="is-name">
+                    <span>片段名称</span>
+                    <input
+                      key={`${activeAnimationTag.id}-${activeAnimationTag.name}`}
+                      type="text"
+                      defaultValue={activeAnimationTag.name}
+                      maxLength={80}
+                      onBlur={(event) => {
+                        const name = event.currentTarget.value.trim()
+                        if (!name) {
+                          event.currentTarget.value = activeAnimationTag.name
+                          setStatus('片段名称不能为空')
+                        } else if (name !== activeAnimationTag.name) {
+                          patchActiveAnimationTag({ name })
+                        }
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span>起始帧</span>
+                    <select
+                      value={activeAnimationTag.fromFrameId}
+                      onChange={(event) => patchActiveAnimationTag({ fromFrameId: event.currentTarget.value })}
+                    >
+                      {document.frames.map((frame, index) => (
+                        <option
+                          key={frame.id}
+                          value={frame.id}
+                          disabled={index > document.frames.findIndex((item) => item.id === activeAnimationTag.toFrameId)}
+                        >{String(index + 1).padStart(2, '0')} · {frame.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>结束帧</span>
+                    <select
+                      value={activeAnimationTag.toFrameId}
+                      onChange={(event) => patchActiveAnimationTag({ toFrameId: event.currentTarget.value })}
+                    >
+                      {document.frames.map((frame, index) => (
+                        <option
+                          key={frame.id}
+                          value={frame.id}
+                          disabled={index < document.frames.findIndex((item) => item.id === activeAnimationTag.fromFrameId)}
+                        >{String(index + 1).padStart(2, '0')} · {frame.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>播放方向</span>
+                    <select
+                      value={activeAnimationTag.direction}
+                      onChange={(event) => patchActiveAnimationTag({ direction: event.currentTarget.value as PixelAnimationDirection })}
+                    >
+                      <option value="forward">正向</option>
+                      <option value="reverse">反向</option>
+                      <option value="ping-pong">往返</option>
+                    </select>
+                  </label>
+                  <label className="is-loop">
+                    <span>循环播放</span>
+                    <input
+                      type="checkbox"
+                      checked={activeAnimationTag.loop}
+                      onChange={(event) => patchActiveAnimationTag({ loop: event.currentTarget.checked })}
+                    />
+                  </label>
+                  <label className="is-duration">
+                    <span>片段统一时长</span>
+                    <span className="aq-pixel-animation-number">
+                      <input
+                        type="number"
+                        min={20}
+                        max={60_000}
+                        value={batchDurationMs}
+                        onChange={(event) => setBatchDurationMs(event.currentTarget.value)}
+                      />
+                      ms
+                    </span>
+                  </label>
+                  <div className="aq-pixel-animation-actions">
+                    <button type="button" onClick={applyAnimationDuration}>应用片段时长</button>
+                    <button type="button" onClick={() => copyActiveLayerAcrossAnimation('replace')}>覆盖复制当前图层</button>
+                    <button type="button" onClick={() => copyActiveLayerAcrossAnimation('non-transparent')}>透明合并当前图层</button>
+                    <button type="button" className="is-danger" onClick={removeActiveAnimationTag} aria-label="删除当前动画片段">
+                      <Trash2 size={12} /> 删除片段
+                    </button>
+                  </div>
+                  <small className="aq-pixel-animation-summary">
+                    {animationRangeFrameIds.length} 个基础帧 · 播放序列 {playbackFrameIds.length} 帧 · 当前源图层「{selectedLayer.name}」
+                  </small>
+                </div>
+              ) : (
+                <p className="aq-pixel-animation-empty">建立片段后，可以限定帧范围、往返播放、批量时长与跨帧图层复制。</p>
+              )}
             </div>
           </section>
         </main>

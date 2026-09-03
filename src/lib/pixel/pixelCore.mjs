@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 1
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 2
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -8,8 +8,10 @@ export const PIXEL_LIMITS = Object.freeze({
   maxPaletteColors: 256,
   maxLayers: 64,
   maxFrames: 256,
+  maxAnimationTags: 64,
   maxDocumentCells: 16_777_216,
   maxPixelsPerCommand: 65_536,
+  maxBulkCellsPerCommand: 1_048_576,
   maxSpritePixels: 67_108_864,
 })
 
@@ -24,6 +26,7 @@ const DOCUMENT_FIELDS = new Set([
   'palette',
   'layers',
   'frames',
+  'animationTags',
   'activeLayerId',
   'activeFrameId',
   'onionSkin',
@@ -31,6 +34,7 @@ const DOCUMENT_FIELDS = new Set([
 const PALETTE_FIELDS = new Set(['id', 'name', 'color'])
 const LAYER_FIELDS = new Set(['id', 'name', 'visible', 'locked', 'opacity'])
 const FRAME_FIELDS = new Set(['id', 'name', 'durationMs', 'cels'])
+const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
 const COMMAND_FIELDS = new Set(['schemaVersion', 'id', 'actor', 'type', 'baseRevision', 'payload'])
 const ACTORS = new Set(['user', 'tool', 'agent', 'system'])
@@ -50,13 +54,21 @@ const COMMAND_TYPES = new Set([
   'frames.remove',
   'frames.restore',
   'frames.patch',
+  'frames.duration.set',
   'frames.reorder',
   'frames.select',
+  'cels.copy',
+  'cels.restore',
+  'animations.add',
+  'animations.remove',
+  'animations.restore',
+  'animations.patch',
   'onion-skin.set',
 ])
-const INTERNAL_COMMAND_TYPES = new Set(['pixels.restore', 'layers.restore', 'frames.restore'])
+const INTERNAL_COMMAND_TYPES = new Set(['pixels.restore', 'layers.restore', 'frames.restore', 'cels.restore', 'animations.restore'])
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{8}$/
+const ANIMATION_DIRECTIONS = new Set(['forward', 'reverse', 'ping-pong'])
 
 const DEFAULT_PALETTE = Object.freeze([
   Object.freeze({ id: 'ink', name: 'Ink', color: '#171821FF' }),
@@ -141,6 +153,19 @@ function assertUniqueIds(items, path) {
   return seen
 }
 
+function assertUniqueStringList(values, path, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  if (!Array.isArray(values) || values.length < min || values.length > max) {
+    fail('INVALID_LIST', `${path} must contain ${min}-${max} unique ids`, { path })
+  }
+  const seen = new Set()
+  values.forEach((value, index) => {
+    assertId(value, `${path}[${index}]`)
+    if (seen.has(value)) fail('DUPLICATE_ID', `${path} contains duplicate id ${value}`, { path, id: value })
+    seen.add(value)
+  })
+  return seen
+}
+
 function assertPaletteColor(input, path) {
   const color = assertRecord(input, path)
   assertKnownFields(color, PALETTE_FIELDS, path)
@@ -161,6 +186,28 @@ function assertLayer(input, path) {
   assertBoolean(layer.locked, `${path}.locked`)
   assertNumber(layer.opacity, `${path}.opacity`, { min: 0, max: 1 })
   return layer
+}
+
+function assertAnimationTag(input, path, frameIds, frameOrder) {
+  const tag = assertRecord(input, path)
+  assertKnownFields(tag, ANIMATION_TAG_FIELDS, path)
+  assertId(tag.id, `${path}.id`)
+  assertString(tag.name, `${path}.name`, { min: 1, max: 80 })
+  assertId(tag.fromFrameId, `${path}.fromFrameId`)
+  assertId(tag.toFrameId, `${path}.toFrameId`)
+  if (!frameIds.has(tag.fromFrameId)) fail('UNKNOWN_FRAME', `${path}.fromFrameId references an unknown frame`, { frameId: tag.fromFrameId })
+  if (!frameIds.has(tag.toFrameId)) fail('UNKNOWN_FRAME', `${path}.toFrameId references an unknown frame`, { frameId: tag.toFrameId })
+  if (frameOrder.get(tag.fromFrameId) > frameOrder.get(tag.toFrameId)) {
+    fail('INVALID_ANIMATION_RANGE', `${path} must run from an earlier frame to a later frame`, {
+      fromFrameId: tag.fromFrameId,
+      toFrameId: tag.toFrameId,
+    })
+  }
+  if (!ANIMATION_DIRECTIONS.has(tag.direction)) {
+    fail('INVALID_ANIMATION_DIRECTION', `${path}.direction is unsupported`, { direction: tag.direction })
+  }
+  assertBoolean(tag.loop, `${path}.loop`)
+  return tag
 }
 
 function assertOnionSkin(input, path = 'document.onionSkin') {
@@ -243,6 +290,17 @@ export function assertPixelDocument(input) {
   if (!frameIds.has(document.activeFrameId)) {
     fail('UNKNOWN_FRAME', 'document.activeFrameId must reference an existing frame', { frameId: document.activeFrameId })
   }
+  if (!Array.isArray(document.animationTags) || document.animationTags.length > PIXEL_LIMITS.maxAnimationTags) {
+    fail('INVALID_ANIMATION_TAGS', `document.animationTags must contain 0-${PIXEL_LIMITS.maxAnimationTags} tags`)
+  }
+  const frameOrder = new Map(document.frames.map((frame, index) => [frame.id, index]))
+  document.animationTags.forEach((tag, index) => assertAnimationTag(
+    tag,
+    `document.animationTags[${index}]`,
+    frameIds,
+    frameOrder,
+  ))
+  assertUniqueIds(document.animationTags, 'document.animationTags')
   assertOnionSkin(document.onionSkin)
   return document
 }
@@ -257,7 +315,7 @@ export function createPixelDocument(input = {}) {
   const options = assertRecord(input, 'input')
   assertKnownFields(options, new Set([
     'id', 'name', 'width', 'height', 'revision', 'palette', 'layers', 'frames',
-    'activeLayerId', 'activeFrameId', 'onionSkin',
+    'animationTags', 'activeLayerId', 'activeFrameId', 'onionSkin',
   ]), 'input')
   const width = options.width ?? 16
   const height = options.height ?? 16
@@ -266,6 +324,7 @@ export function createPixelDocument(input = {}) {
   if (options.palette !== undefined && !Array.isArray(options.palette)) fail('INVALID_PALETTE', 'input.palette must be an array')
   if (options.layers !== undefined && !Array.isArray(options.layers)) fail('INVALID_LAYERS', 'input.layers must be an array')
   if (options.frames !== undefined && !Array.isArray(options.frames)) fail('INVALID_FRAMES', 'input.frames must be an array')
+  if (options.animationTags !== undefined && !Array.isArray(options.animationTags)) fail('INVALID_ANIMATION_TAGS', 'input.animationTags must be an array')
   const palette = options.palette === undefined ? DEFAULT_PALETTE : options.palette
   const layers = options.layers === undefined
     ? [{ id: 'layer-1', name: 'Ink', visible: true, locked: false, opacity: 1 }]
@@ -289,6 +348,7 @@ export function createPixelDocument(input = {}) {
     palette,
     layers,
     frames,
+    animationTags: options.animationTags ?? [],
     activeLayerId: options.activeLayerId ?? layers[0]?.id,
     activeFrameId: options.activeFrameId ?? frames[0]?.id,
     onionSkin: options.onionSkin === undefined
@@ -361,6 +421,18 @@ export function migratePixelDocument(input) {
     assertPixelDocument(input)
     return cloneJson(input)
   }
+  if (isRecord(input) && input.schemaVersion === 1) {
+    const legacy = assertRecord(input, 'schemaOneDocument')
+    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'animationTags'))
+    assertKnownFields(legacy, schemaOneFields, 'schemaOneDocument')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      animationTags: [],
+    }
+    assertPixelDocument(migrated)
+    return migrated
+  }
   return migrateLegacyDocument(input)
 }
 
@@ -386,6 +458,32 @@ export function deserializePixelDocument(serialized) {
 export function clonePixelDocument(document) {
   assertPixelDocument(document)
   return cloneJson(document)
+}
+
+function resolveAnimationTagFrames(document, tag) {
+  const fromIndex = document.frames.findIndex((frame) => frame.id === tag.fromFrameId)
+  const toIndex = document.frames.findIndex((frame) => frame.id === tag.toFrameId)
+  const range = document.frames.slice(fromIndex, toIndex + 1)
+  if (tag.direction === 'reverse') return range.reverse().map((frame) => frame.id)
+  if (tag.direction === 'ping-pong' && range.length > 2) {
+    return [...range, ...range.slice(1, -1).reverse()].map((frame) => frame.id)
+  }
+  return range.map((frame) => frame.id)
+}
+
+export function resolvePixelAnimationSequences(documentInput) {
+  const document = assertPixelDocument(documentInput)
+  return document.animationTags.map((tag) => ({
+    tagId: tag.id,
+    frameIds: resolveAnimationTagFrames(document, tag),
+  }))
+}
+
+export function resolvePixelAnimationFrames(documentInput, tagId) {
+  assertId(tagId, 'tagId')
+  const sequence = resolvePixelAnimationSequences(documentInput).find((item) => item.tagId === tagId)
+  if (!sequence) fail('UNKNOWN_ANIMATION_TAG', `Unknown animation tag ${tagId}`, { tagId })
+  return sequence.frameIds
 }
 
 function assertPoint(input, path, document, { withColor = false, withValue = false } = {}) {
@@ -581,6 +679,9 @@ export function assertPixelCommand(input, documentInput) {
       assertId(payload.frameId, 'command.payload.frameId')
       if (!document.frames.some((frame) => frame.id === payload.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${payload.frameId}`)
       if (document.frames.length === 1) fail('LAST_FRAME', 'The last frame cannot be removed')
+      if (document.animationTags.some((tag) => tag.fromFrameId === payload.frameId || tag.toFrameId === payload.frameId)) {
+        fail('FRAME_IN_ANIMATION_TAG', `Frame ${payload.frameId} is an animation boundary`, { frameId: payload.frameId })
+      }
       break
     case 'frames.restore': {
       assertKnownFields(payload, new Set(['frame', 'index', 'activeFrameId']), 'command.payload')
@@ -607,15 +708,120 @@ export function assertPixelCommand(input, documentInput) {
       if (patch.durationMs !== undefined) assertInteger(patch.durationMs, 'command.payload.patch.durationMs', { min: 20, max: 60_000 })
       break
     }
-    case 'frames.reorder':
+    case 'frames.duration.set': {
+      assertKnownFields(payload, new Set(['frames']), 'command.payload')
+      if (!Array.isArray(payload.frames) || payload.frames.length < 1 || payload.frames.length > document.frames.length) {
+        fail('INVALID_FRAME_DURATIONS', 'command.payload.frames must contain a bounded non-empty frame list')
+      }
+      const seen = new Set()
+      payload.frames.forEach((entryInput, index) => {
+        const entry = assertRecord(entryInput, `command.payload.frames[${index}]`)
+        assertKnownFields(entry, new Set(['frameId', 'durationMs']), `command.payload.frames[${index}]`)
+        assertId(entry.frameId, `command.payload.frames[${index}].frameId`)
+        if (seen.has(entry.frameId)) fail('DUPLICATE_ID', `command.payload.frames contains duplicate frame ${entry.frameId}`)
+        seen.add(entry.frameId)
+        if (!document.frames.some((frame) => frame.id === entry.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${entry.frameId}`)
+        assertInteger(entry.durationMs, `command.payload.frames[${index}].durationMs`, { min: 20, max: 60_000 })
+      })
+      break
+    }
+    case 'frames.reorder': {
       assertKnownFields(payload, new Set(['frameIds']), 'command.payload')
       assertIdOrder(payload.frameIds, document.frames.map((frame) => frame.id), 'command.payload.frameIds')
+      const frameOrder = new Map(payload.frameIds.map((frameId, index) => [frameId, index]))
+      for (const tag of document.animationTags) {
+        if (frameOrder.get(tag.fromFrameId) > frameOrder.get(tag.toFrameId)) {
+          fail('INVALID_ANIMATION_RANGE', `Reordering would invert animation ${tag.id}`, { tagId: tag.id })
+        }
+      }
       break
+    }
     case 'frames.select':
       assertKnownFields(payload, new Set(['frameId']), 'command.payload')
       assertId(payload.frameId, 'command.payload.frameId')
       if (!document.frames.some((frame) => frame.id === payload.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${payload.frameId}`)
       break
+    case 'cels.copy': {
+      assertKnownFields(payload, new Set(['sourceFrameId', 'targetFrameIds', 'layerIds', 'mode']), 'command.payload')
+      assertId(payload.sourceFrameId, 'command.payload.sourceFrameId')
+      if (!document.frames.some((frame) => frame.id === payload.sourceFrameId)) fail('UNKNOWN_FRAME', `Unknown source frame ${payload.sourceFrameId}`)
+      const targetFrameIds = assertUniqueStringList(payload.targetFrameIds, 'command.payload.targetFrameIds', { max: document.frames.length - 1 })
+      if (targetFrameIds.has(payload.sourceFrameId)) fail('INVALID_COPY_TARGET', 'Source frame cannot also be a copy target')
+      for (const frameId of targetFrameIds) {
+        if (!document.frames.some((frame) => frame.id === frameId)) fail('UNKNOWN_FRAME', `Unknown target frame ${frameId}`)
+      }
+      const layerIds = assertUniqueStringList(payload.layerIds, 'command.payload.layerIds', { max: document.layers.length })
+      for (const layerId of layerIds) {
+        const layer = document.layers.find((item) => item.id === layerId)
+        if (!layer) fail('UNKNOWN_LAYER', `Unknown layer ${layerId}`)
+        if (layer.locked) fail('LAYER_LOCKED', `Layer ${layerId} is locked`, { layerId })
+      }
+      if (!new Set(['replace', 'non-transparent']).has(payload.mode)) fail('INVALID_COPY_MODE', `Unsupported cel copy mode ${String(payload.mode)}`)
+      const cellCount = targetFrameIds.size * layerIds.size * document.width * document.height
+      if (cellCount > PIXEL_LIMITS.maxBulkCellsPerCommand) {
+        fail('BULK_COMMAND_TOO_LARGE', `Cel copy would touch ${cellCount} cells`, { cellCount, limit: PIXEL_LIMITS.maxBulkCellsPerCommand })
+      }
+      break
+    }
+    case 'cels.restore': {
+      assertKnownFields(payload, new Set(['frames']), 'command.payload')
+      if (!Array.isArray(payload.frames) || payload.frames.length < 1 || payload.frames.length > document.frames.length) {
+        fail('INVALID_CEL_RESTORE', 'command.payload.frames must contain a bounded non-empty frame list')
+      }
+      const frameIds = new Set()
+      let cellCount = 0
+      const paletteIds = new Set(document.palette.map((color) => color.id))
+      const validLayerIds = new Set(document.layers.map((layer) => layer.id))
+      payload.frames.forEach((entryInput, index) => {
+        const entry = assertRecord(entryInput, `command.payload.frames[${index}]`)
+        assertKnownFields(entry, new Set(['frameId', 'cels']), `command.payload.frames[${index}]`)
+        assertId(entry.frameId, `command.payload.frames[${index}].frameId`)
+        if (frameIds.has(entry.frameId)) fail('DUPLICATE_ID', `command.payload.frames contains duplicate frame ${entry.frameId}`)
+        frameIds.add(entry.frameId)
+        if (!document.frames.some((frame) => frame.id === entry.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${entry.frameId}`)
+        const cels = assertRecord(entry.cels, `command.payload.frames[${index}].cels`)
+        const layerIds = Object.keys(cels)
+        if (layerIds.length < 1 || layerIds.length > document.layers.length) fail('INVALID_CEL_RESTORE', 'Each restored frame must include at least one cel')
+        for (const layerId of layerIds) {
+          if (!validLayerIds.has(layerId)) fail('UNKNOWN_LAYER', `Unknown layer ${layerId}`)
+          assertPixelArray(cels[layerId], document.width * document.height, paletteIds, `command.payload.frames[${index}].cels.${layerId}`)
+          cellCount += document.width * document.height
+        }
+      })
+      if (cellCount > PIXEL_LIMITS.maxBulkCellsPerCommand) {
+        fail('BULK_COMMAND_TOO_LARGE', `Cel restore would touch ${cellCount} cells`, { cellCount, limit: PIXEL_LIMITS.maxBulkCellsPerCommand })
+      }
+      break
+    }
+    case 'animations.add':
+    case 'animations.restore': {
+      assertKnownFields(payload, new Set(['tag', 'index']), 'command.payload')
+      const frameIds = new Set(document.frames.map((frame) => frame.id))
+      const frameOrder = new Map(document.frames.map((frame, index) => [frame.id, index]))
+      assertAnimationTag(payload.tag, 'command.payload.tag', frameIds, frameOrder)
+      if (document.animationTags.some((tag) => tag.id === payload.tag.id)) fail('DUPLICATE_ID', `Animation ${payload.tag.id} already exists`)
+      if (document.animationTags.length >= PIXEL_LIMITS.maxAnimationTags) fail('LIMIT_EXCEEDED', 'Maximum animation tag count reached')
+      if (payload.index !== undefined) assertIndex(payload.index, 'command.payload.index', document.animationTags.length)
+      break
+    }
+    case 'animations.remove':
+      assertKnownFields(payload, new Set(['tagId']), 'command.payload')
+      assertId(payload.tagId, 'command.payload.tagId')
+      if (!document.animationTags.some((tag) => tag.id === payload.tagId)) fail('UNKNOWN_ANIMATION_TAG', `Unknown animation tag ${payload.tagId}`)
+      break
+    case 'animations.patch': {
+      assertKnownFields(payload, new Set(['tagId', 'patch']), 'command.payload')
+      assertId(payload.tagId, 'command.payload.tagId')
+      const tag = document.animationTags.find((item) => item.id === payload.tagId)
+      if (!tag) fail('UNKNOWN_ANIMATION_TAG', `Unknown animation tag ${payload.tagId}`)
+      const patch = assertRecord(payload.patch, 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name', 'fromFrameId', 'toFrameId', 'direction', 'loop']), 'command.payload.patch')
+      if (Object.keys(patch).length === 0) fail('EMPTY_PATCH', 'Animation patch must change at least one field')
+      const frameIds = new Set(document.frames.map((frame) => frame.id))
+      const frameOrder = new Map(document.frames.map((frame, index) => [frame.id, index]))
+      assertAnimationTag({ ...tag, ...patch }, 'command.payload.patch', frameIds, frameOrder)
+      break
+    }
     case 'onion-skin.set': {
       assertKnownFields(payload, new Set(['patch']), 'command.payload')
       const patch = assertRecord(payload.patch, 'command.payload.patch')
@@ -801,6 +1007,17 @@ export function applyPixelCommand(documentInput, commandInput) {
       inversePayload = { frameId: payload.frameId, patch: previous }
       break
     }
+    case 'frames.duration.set': {
+      const previous = payload.frames.map((entry) => {
+        const frame = next.frames.find((item) => item.id === entry.frameId)
+        const prior = { frameId: frame.id, durationMs: frame.durationMs }
+        frame.durationMs = entry.durationMs
+        return prior
+      })
+      inverseType = 'frames.duration.set'
+      inversePayload = { frames: previous }
+      break
+    }
     case 'frames.reorder': {
       const previous = next.frames.map((frame) => frame.id)
       const byId = new Map(next.frames.map((frame) => [frame.id, frame]))
@@ -814,6 +1031,60 @@ export function applyPixelCommand(documentInput, commandInput) {
       inversePayload = { frameId: next.activeFrameId }
       next.activeFrameId = payload.frameId
       break
+    case 'cels.copy': {
+      const source = next.frames.find((frame) => frame.id === payload.sourceFrameId)
+      const previous = payload.targetFrameIds.map((frameId) => {
+        const target = next.frames.find((frame) => frame.id === frameId)
+        const cels = {}
+        for (const layerId of payload.layerIds) {
+          cels[layerId] = cloneJson(target.cels[layerId])
+          target.cels[layerId] = payload.mode === 'replace'
+            ? cloneJson(source.cels[layerId])
+            : source.cels[layerId].map((colorId, index) => colorId === null ? target.cels[layerId][index] : colorId)
+        }
+        return { frameId, cels }
+      })
+      inverseType = 'cels.restore'
+      inversePayload = { frames: previous }
+      break
+    }
+    case 'cels.restore': {
+      const previous = payload.frames.map((entry) => {
+        const frame = next.frames.find((item) => item.id === entry.frameId)
+        const cels = {}
+        for (const layerId of Object.keys(entry.cels)) {
+          cels[layerId] = cloneJson(frame.cels[layerId])
+          frame.cels[layerId] = cloneJson(entry.cels[layerId])
+        }
+        return { frameId: entry.frameId, cels }
+      })
+      inverseType = 'cels.restore'
+      inversePayload = { frames: previous }
+      break
+    }
+    case 'animations.add':
+    case 'animations.restore': {
+      const index = payload.index ?? next.animationTags.length
+      next.animationTags.splice(index, 0, cloneJson(payload.tag))
+      inverseType = 'animations.remove'
+      inversePayload = { tagId: payload.tag.id }
+      break
+    }
+    case 'animations.remove': {
+      const index = next.animationTags.findIndex((tag) => tag.id === payload.tagId)
+      const [tag] = next.animationTags.splice(index, 1)
+      inverseType = 'animations.restore'
+      inversePayload = { tag, index }
+      break
+    }
+    case 'animations.patch': {
+      const tag = next.animationTags.find((item) => item.id === payload.tagId)
+      const previous = Object.fromEntries(Object.keys(payload.patch).map((key) => [key, tag[key]]))
+      Object.assign(tag, payload.patch)
+      inverseType = 'animations.patch'
+      inversePayload = { tagId: payload.tagId, patch: previous }
+      break
+    }
     case 'onion-skin.set': {
       const previous = cloneJson(next.onionSkin)
       next.onionSkin = { ...next.onionSkin, ...payload.patch }
@@ -921,8 +1192,9 @@ export function createSpriteSheetMetadata(documentInput, options = {}) {
 }
 
 function createSpriteSheetMetadataFromLayout(document, layout) {
+  const animationSequences = new Map(document.animationTags.map((tag) => [tag.id, resolveAnimationTagFrames(document, tag)]))
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'aeonquill.sprite-sheet',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -933,6 +1205,10 @@ function createSpriteSheetMetadataFromLayout(document, layout) {
     padding: layout.padding,
     spacing: layout.spacing,
     frames: layout.cells.map((cell) => ({ ...cell })),
+    animations: document.animationTags.map((tag) => ({
+      ...cloneJson(tag),
+      frameIds: animationSequences.get(tag.id),
+    })),
     palette: cloneJson(document.palette),
   }
 }
