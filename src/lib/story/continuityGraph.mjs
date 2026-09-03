@@ -1,4 +1,4 @@
-export const VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION = 1
+export const VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION = 2
 
 export const VIDEO_CONTINUITY_LIMITS = Object.freeze({
   maxCharacters: 32,
@@ -8,6 +8,8 @@ export const VIDEO_CONTINUITY_LIMITS = Object.freeze({
   maxFrames: 640,
   maxShots: 320,
   maxBindingsPerShot: 32,
+  maxCandidates: 2_000,
+  maxCandidatesPerShot: 12,
   maxReviews: 2_000,
   maxNotes: 2_000,
 })
@@ -16,11 +18,15 @@ const GRAPH_KIND = 'aeonquill.video-continuity-graph'
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
 const ASSET_STATUSES = new Set(['planned', 'ready', 'approved'])
-const SHOT_STATUSES = new Set(['blocked', 'ready', 'approved', 'retry-required'])
+const SHOT_STATUSES = new Set(['blocked', 'candidate-required', 'ready', 'approved', 'retry-required'])
+const LEGACY_SHOT_STATUSES = new Set(['blocked', 'ready', 'approved', 'retry-required'])
 const VIEWS = new Set(['front', 'side', 'back', 'expression', 'action'])
 const FRAME_ROLES = new Set(['first-frame', 'last-frame'])
 const MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/webm'])
 const LIBRARY_SCOPES = new Set(['project', 'global-reference'])
+const CANDIDATE_SOURCES = new Set(['comfyui-h3', 'byok-video', 'imported'])
+const GENERATION_MODES = new Set(['fast', 'quality'])
 const DECISIONS = new Set(['accept', 'retry'])
 const REVIEW_STATUSES = new Set(['active', 'superseded'])
 const SCORE_KEYS = Object.freeze(['identity', 'wardrobe', 'location', 'sharpness', 'motion'])
@@ -107,6 +113,22 @@ export function assertContinuityAssetBinding(binding) {
   return normalizeAssetBinding(binding)
 }
 
+function normalizeVideoAssetBinding(binding, path = 'binding') {
+  const value = record(binding, path)
+  exactKeys(value, ['libraryItemId', 'libraryVersionId', 'contentHash', 'mimeType', 'scope', 'boundAt'], path)
+  safeId(value.libraryItemId, `${path}.libraryItemId`)
+  safeId(value.libraryVersionId, `${path}.libraryVersionId`)
+  if (typeof value.contentHash !== 'string' || !SHA256.test(value.contentHash)) fail('INVALID_CONTENT_HASH', `${path}.contentHash must be a lowercase SHA-256`)
+  if (!VIDEO_MIME_TYPES.has(value.mimeType)) fail('INVALID_VIDEO_MIME', `${path}.mimeType is unsupported`)
+  if (!LIBRARY_SCOPES.has(value.scope)) fail('INVALID_LIBRARY_SCOPE', `${path}.scope is unsupported`)
+  integer(value.boundAt, `${path}.boundAt`, 1, Number.MAX_SAFE_INTEGER)
+  return value
+}
+
+export function assertContinuityVideoBinding(binding) {
+  return normalizeVideoAssetBinding(binding)
+}
+
 function assertAssetSlot(value, path, extraKeys, extraValidation) {
   const slot = record(value, path)
   exactKeys(slot, [...extraKeys, 'status', 'asset'], path)
@@ -125,12 +147,23 @@ function assertScore(value, path) {
   }
 }
 
-function assertReview(value, path, shotIds) {
+function assertReview(value, path, shotIds, candidatesById, legacy = false) {
   const review = record(value, path)
-  exactKeys(review, ['id', 'shotId', 'attempt', 'reviewerId', 'scores', 'decision', 'notes', 'reasons', 'recommendedActions', 'inputFingerprint', 'status', 'createdAt'], path)
+  exactKeys(review, legacy
+    ? ['id', 'shotId', 'attempt', 'reviewerId', 'scores', 'decision', 'notes', 'reasons', 'recommendedActions', 'inputFingerprint', 'status', 'createdAt']
+    : ['id', 'shotId', 'candidateId', 'attempt', 'reviewerId', 'scores', 'decision', 'notes', 'reasons', 'recommendedActions', 'inputFingerprint', 'status', 'createdAt'], path)
   safeId(review.id, `${path}.id`)
   safeId(review.shotId, `${path}.shotId`)
   if (!shotIds.has(review.shotId)) fail('DANGLING_SHOT', `${path}.shotId is unknown`)
+  if (!legacy) {
+    safeId(review.candidateId, `${path}.candidateId`, true)
+    if (review.candidateId !== null) {
+      const candidate = candidatesById.get(review.candidateId)
+      if (!candidate) fail('DANGLING_CANDIDATE', `${path}.candidateId is unknown`)
+      if (candidate.shotId !== review.shotId) fail('CROSS_SHOT_CANDIDATE', `${path}.candidateId belongs to another shot`)
+    }
+    if (review.status === 'active' && review.candidateId === null) fail('ACTIVE_REVIEW_WITHOUT_CANDIDATE', `${path} active reviews require a video candidate`)
+  }
   integer(review.attempt, `${path}.attempt`, 1, VIDEO_CONTINUITY_LIMITS.maxReviews)
   safeId(review.reviewerId, `${path}.reviewerId`)
   const scores = record(review.scores, `${path}.scores`)
@@ -148,10 +181,13 @@ function assertReview(value, path, shotIds) {
   integer(review.createdAt, `${path}.createdAt`, 1, Number.MAX_SAFE_INTEGER)
 }
 
-export function assertVideoContinuityGraph(input) {
+function assertVideoContinuityGraphSchema(input, allowLegacy = false) {
   const graph = record(input, 'continuityGraph')
-  exactKeys(graph, ['kind', 'schemaVersion', 'storyProjectId', 'storyRevision', 'characters', 'views', 'wardrobes', 'locations', 'frames', 'shots', 'reviews', 'revision', 'createdAt', 'updatedAt'], 'continuityGraph')
-  if (graph.kind !== GRAPH_KIND || graph.schemaVersion !== VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION) fail('UNSUPPORTED_SCHEMA', 'Unsupported video continuity graph schema')
+  const legacy = graph.schemaVersion === 1
+  exactKeys(graph, legacy
+    ? ['kind', 'schemaVersion', 'storyProjectId', 'storyRevision', 'characters', 'views', 'wardrobes', 'locations', 'frames', 'shots', 'reviews', 'revision', 'createdAt', 'updatedAt']
+    : ['kind', 'schemaVersion', 'storyProjectId', 'storyRevision', 'characters', 'views', 'wardrobes', 'locations', 'frames', 'shots', 'candidates', 'reviews', 'revision', 'createdAt', 'updatedAt'], 'continuityGraph')
+  if (graph.kind !== GRAPH_KIND || (graph.schemaVersion !== VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION && !(allowLegacy && legacy))) fail('UNSUPPORTED_SCHEMA', 'Unsupported video continuity graph schema')
   safeId(graph.storyProjectId, 'continuityGraph.storyProjectId', true)
   if (graph.storyRevision !== null) integer(graph.storyRevision, 'continuityGraph.storyRevision', 0, Number.MAX_SAFE_INTEGER)
   if ((graph.storyProjectId === null) !== (graph.storyRevision === null)) fail('STORY_IDENTITY_MISMATCH', 'storyProjectId and storyRevision must both be null or both be present')
@@ -163,6 +199,7 @@ export function assertVideoContinuityGraph(input) {
     ['locations', VIDEO_CONTINUITY_LIMITS.maxLocations],
     ['frames', VIDEO_CONTINUITY_LIMITS.maxFrames],
     ['shots', VIDEO_CONTINUITY_LIMITS.maxShots],
+    ...(!legacy ? [['candidates', VIDEO_CONTINUITY_LIMITS.maxCandidates]] : []),
     ['reviews', VIDEO_CONTINUITY_LIMITS.maxReviews],
   ]
   for (const [key, max] of collections) {
@@ -170,7 +207,7 @@ export function assertVideoContinuityGraph(input) {
   }
 
   const allIds = new Set()
-  for (const key of ['characters', 'views', 'wardrobes', 'locations', 'frames', 'shots', 'reviews']) {
+  for (const key of ['characters', 'views', 'wardrobes', 'locations', 'frames', 'shots', ...(!legacy ? ['candidates'] : []), 'reviews']) {
     for (const item of graph[key]) {
       safeId(item?.id, `continuityGraph.${key}.id`)
       if (allIds.has(item.id)) fail('DUPLICATE_ID', `continuityGraph contains duplicate id ${item.id}`)
@@ -184,6 +221,7 @@ export function assertVideoContinuityGraph(input) {
   const locationIds = new Set(graph.locations.map(({ id }) => id))
   const frameIds = new Set(graph.frames.map(({ id }) => id))
   const shotIds = new Set(graph.shots.map(({ id }) => id))
+  const candidatesById = new Map((legacy ? [] : graph.candidates).map((candidate) => [candidate.id, candidate]))
   const reviewIds = new Set(graph.reviews.map(({ id }) => id))
 
   graph.characters.forEach((inputCharacter, index) => {
@@ -248,10 +286,27 @@ export function assertVideoContinuityGraph(input) {
     if (typeof frame.required !== 'boolean') fail('INVALID_BOOLEAN', `continuityGraph.frames[${index}].required must be boolean`)
   }))
 
+  if (!legacy) graph.candidates.forEach((inputCandidate, index) => {
+    const path = `continuityGraph.candidates[${index}]`
+    const candidate = record(inputCandidate, path)
+    exactKeys(candidate, ['id', 'shotId', 'attempt', 'label', 'source', 'generationMode', 'asset', 'inputFingerprint', 'createdAt'], path)
+    safeId(candidate.id, `${path}.id`)
+    if (!shotIds.has(candidate.shotId)) fail('DANGLING_SHOT', `${path}.shotId is unknown`)
+    integer(candidate.attempt, `${path}.attempt`, 1, VIDEO_CONTINUITY_LIMITS.maxCandidatesPerShot)
+    text(candidate.label, `${path}.label`, 160)
+    if (!CANDIDATE_SOURCES.has(candidate.source)) fail('INVALID_CANDIDATE_SOURCE', `${path}.source is unsupported`)
+    if (!GENERATION_MODES.has(candidate.generationMode)) fail('INVALID_GENERATION_MODE', `${path}.generationMode is unsupported`)
+    normalizeVideoAssetBinding(candidate.asset, `${path}.asset`)
+    safeId(candidate.inputFingerprint, `${path}.inputFingerprint`)
+    integer(candidate.createdAt, `${path}.createdAt`, 1, Number.MAX_SAFE_INTEGER)
+  })
+
   graph.shots.forEach((inputShot, index) => {
     const path = `continuityGraph.shots[${index}]`
     const shot = record(inputShot, path)
-    exactKeys(shot, ['id', 'storyShotId', 'sceneId', 'label', 'locationId', 'characterBindings', 'frameIds', 'status', 'latestReviewId', 'inputFingerprint'], path)
+    exactKeys(shot, legacy
+      ? ['id', 'storyShotId', 'sceneId', 'label', 'locationId', 'characterBindings', 'frameIds', 'status', 'latestReviewId', 'inputFingerprint']
+      : ['id', 'storyShotId', 'sceneId', 'label', 'locationId', 'characterBindings', 'frameIds', 'candidateIds', 'selectedCandidateId', 'status', 'latestReviewId', 'inputFingerprint'], path)
     safeId(shot.id, `${path}.id`)
     safeId(shot.storyShotId, `${path}.storyShotId`, true)
     safeId(shot.sceneId, `${path}.sceneId`, true)
@@ -275,31 +330,83 @@ export function assertVideoContinuityGraph(input) {
       if (!frameIds.has(frameId)) fail('DANGLING_FRAME', `${path}.frameIds contains ${frameId}`)
       if (graph.frames.find(({ id }) => id === frameId)?.shotId !== shot.id) fail('CROSS_SHOT_FRAME', `${path}.frameIds contains a frame owned by another shot`)
     })
-    if (!SHOT_STATUSES.has(shot.status)) fail('INVALID_SHOT_STATUS', `${path}.status is unsupported`)
+    if (!legacy) {
+      if (!Array.isArray(shot.candidateIds) || shot.candidateIds.length > VIDEO_CONTINUITY_LIMITS.maxCandidatesPerShot || new Set(shot.candidateIds).size !== shot.candidateIds.length) {
+        fail('INVALID_CANDIDATE_REFERENCES', `${path}.candidateIds is invalid`)
+      }
+      shot.candidateIds.forEach((candidateId) => {
+        const candidate = candidatesById.get(candidateId)
+        if (!candidate) fail('DANGLING_CANDIDATE', `${path}.candidateIds contains ${candidateId}`)
+        if (candidate.shotId !== shot.id) fail('CROSS_SHOT_CANDIDATE', `${path}.candidateIds contains a candidate owned by another shot`)
+      })
+      safeId(shot.selectedCandidateId, `${path}.selectedCandidateId`, true)
+      if (shot.selectedCandidateId !== null && !shot.candidateIds.includes(shot.selectedCandidateId)) fail('DANGLING_CANDIDATE', `${path}.selectedCandidateId is not in candidateIds`)
+      const selected = shot.selectedCandidateId === null ? null : candidatesById.get(shot.selectedCandidateId)
+      if (selected && selected.inputFingerprint !== shot.inputFingerprint) fail('STALE_SELECTED_CANDIDATE', `${path}.selectedCandidateId was generated from stale inputs`)
+    }
+    if (!(legacy ? LEGACY_SHOT_STATUSES : SHOT_STATUSES).has(shot.status)) fail('INVALID_SHOT_STATUS', `${path}.status is unsupported`)
     if (shot.latestReviewId !== null && !reviewIds.has(shot.latestReviewId)) fail('DANGLING_REVIEW', `${path}.latestReviewId is unknown`)
     safeId(shot.inputFingerprint, `${path}.inputFingerprint`)
   })
 
-  graph.reviews.forEach((review, index) => assertReview(review, `continuityGraph.reviews[${index}]`, shotIds))
+  if (!legacy) {
+    for (const shot of graph.shots) {
+      const actual = graph.candidates.filter(({ shotId }) => shotId === shot.id).map(({ id }) => id)
+      if (actual.length !== shot.candidateIds.length || actual.some((candidateId, index) => shot.candidateIds[index] !== candidateId)) {
+        fail('CANDIDATE_ORDER_MISMATCH', `shot ${shot.id} candidateIds must match graph candidate order`)
+      }
+      const attempts = graph.candidates.filter(({ shotId }) => shotId === shot.id).map(({ attempt }) => attempt)
+      if (attempts.some((attempt, index) => attempt !== index + 1)) fail('CANDIDATE_ATTEMPT_MISMATCH', `shot ${shot.id} candidate attempts must be contiguous`)
+    }
+  }
+
+  graph.reviews.forEach((review, index) => assertReview(review, `continuityGraph.reviews[${index}]`, shotIds, candidatesById, legacy))
   for (const shot of graph.shots) {
     if (dependencyFingerprint(graph, shot) !== shot.inputFingerprint) fail('SHOT_FINGERPRINT_MISMATCH', `shot ${shot.id} input fingerprint is inconsistent`)
     const active = graph.reviews.filter((review) => review.shotId === shot.id && review.status === 'active')
     if (active.length > 1) fail('MULTIPLE_ACTIVE_REVIEWS', `shot ${shot.id} has multiple active reviews`)
     if ((active[0]?.id ?? null) !== shot.latestReviewId) fail('LATEST_REVIEW_MISMATCH', `shot ${shot.id} latestReviewId is inconsistent`)
     if (active[0] && active[0].inputFingerprint !== shot.inputFingerprint) fail('STALE_ACTIVE_REVIEW', `shot ${shot.id} active review uses stale inputs`)
-    const expected = active[0]?.decision === 'accept'
-      ? 'approved'
-      : active[0]?.decision === 'retry'
-        ? 'retry-required'
-        : requiredSlotsReady(graph, shot)
-          ? 'ready'
-          : 'blocked'
+    if (!legacy && active[0] && active[0].candidateId !== shot.selectedCandidateId) fail('REVIEW_CANDIDATE_MISMATCH', `shot ${shot.id} active review does not target its selected candidate`)
+    const assetsReady = requiredSlotsReady(graph, shot)
+    const expected = !assetsReady
+      ? 'blocked'
+      : !legacy && shot.selectedCandidateId === null
+        ? 'candidate-required'
+        : active[0]?.decision === 'accept'
+          ? 'approved'
+          : active[0]?.decision === 'retry'
+            ? 'retry-required'
+            : 'ready'
     if (shot.status !== expected) fail('SHOT_REVIEW_STATUS_MISMATCH', `shot ${shot.id} status does not match its assets and active review`)
   }
   integer(graph.revision, 'continuityGraph.revision', 0, Number.MAX_SAFE_INTEGER)
   integer(graph.createdAt, 'continuityGraph.createdAt', 1, Number.MAX_SAFE_INTEGER)
   integer(graph.updatedAt, 'continuityGraph.updatedAt', graph.createdAt, Number.MAX_SAFE_INTEGER)
   return graph
+}
+
+export function assertVideoContinuityGraph(input) {
+  return assertVideoContinuityGraphSchema(input, false)
+}
+
+export function migrateVideoContinuityGraph(input, options = {}) {
+  const validated = clone(assertVideoContinuityGraphSchema(input, true))
+  if (validated.schemaVersion === VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION) return assertVideoContinuityGraph(validated)
+  const now = integer(options.now ?? validated.updatedAt, 'options.now', validated.updatedAt, Number.MAX_SAFE_INTEGER)
+  validated.schemaVersion = VIDEO_CONTINUITY_GRAPH_SCHEMA_VERSION
+  validated.candidates = []
+  validated.reviews = validated.reviews.map((review) => ({ ...review, candidateId: null, status: 'superseded' }))
+  validated.shots = validated.shots.map((shot) => ({
+    ...shot,
+    candidateIds: [],
+    selectedCandidateId: null,
+    latestReviewId: null,
+    status: requiredSlotsReady(validated, shot) ? 'candidate-required' : 'blocked',
+  }))
+  validated.revision += 1
+  validated.updatedAt = now
+  return assertVideoContinuityGraph(validated)
 }
 
 function validPersistedAsset(asset) {
@@ -354,16 +461,19 @@ function refreshShotState(graph, shot, previousFingerprint = shot.inputFingerpri
       if (review.shotId === shot.id && review.status === 'active') review.status = 'superseded'
     }
     shot.latestReviewId = null
+    shot.selectedCandidateId = null
   }
   shot.inputFingerprint = nextFingerprint
   const active = graph.reviews.find((review) => review.id === shot.latestReviewId && review.status === 'active')
-  shot.status = active?.decision === 'accept'
-    ? 'approved'
-    : active?.decision === 'retry'
-      ? 'retry-required'
-      : requiredSlotsReady(graph, shot)
-        ? 'ready'
-        : 'blocked'
+  shot.status = !requiredSlotsReady(graph, shot)
+    ? 'blocked'
+    : shot.selectedCandidateId === null
+      ? 'candidate-required'
+      : active?.decision === 'accept'
+        ? 'approved'
+        : active?.decision === 'retry'
+          ? 'retry-required'
+          : 'ready'
 }
 
 function refreshAllShots(graph, previousFingerprints = new Map()) {
@@ -380,7 +490,7 @@ function profileByStoryCharacter(profiles, storyCharacter) {
 export function createVideoContinuityGraph({ story = null, characterProfiles, generationMode = 'quality', characterMode = 'professional', now = Date.now(), previous = null } = {}) {
   if (!Array.isArray(characterProfiles) || !characterProfiles.length) fail('INVALID_CHARACTER_PROFILES', 'characterProfiles must be a non-empty array')
   integer(now, 'now', 1, Number.MAX_SAFE_INTEGER)
-  const prior = previous ? clone(assertVideoContinuityGraph(previous)) : null
+  const prior = previous ? clone(migrateVideoContinuityGraph(previous, { now })) : null
   const priorByStoryCharacter = new Map((prior?.characters ?? []).map((character) => [character.storyCharacterId, character]))
   const priorByProfileId = new Map((prior?.characters ?? []).map((character) => [character.profileId, character]))
   const priorByName = new Map((prior?.characters ?? []).map((character) => [character.name.trim().toLocaleLowerCase('zh-CN'), character]))
@@ -474,6 +584,7 @@ export function createVideoContinuityGraph({ story = null, characterProfiles, ge
     locations,
     frames: [],
     shots: [],
+    candidates: clone(prior?.candidates ?? []),
     reviews: clone(prior?.reviews ?? []),
     revision: prior ? prior.revision + 1 : 0,
     createdAt: prior?.createdAt ?? now,
@@ -517,6 +628,8 @@ export function createVideoContinuityGraph({ story = null, characterProfiles, ge
         locationId: graphLocationByStoryId.get(scene.locationId)?.id ?? null,
         characterBindings,
         frameIds,
+        candidateIds: clone(priorShot?.candidateIds ?? []),
+        selectedCandidateId: priorShot?.selectedCandidateId ?? null,
         status: 'blocked',
         latestReviewId: priorShot?.latestReviewId ?? null,
         inputFingerprint: priorShot?.inputFingerprint ?? 'inputs-initial',
@@ -524,7 +637,16 @@ export function createVideoContinuityGraph({ story = null, characterProfiles, ge
     }
   }
   const validShotIds = new Set(graph.shots.map(({ id }) => id))
+  graph.candidates = graph.candidates.filter((candidate) => validShotIds.has(candidate.shotId))
   graph.reviews = graph.reviews.filter((review) => validShotIds.has(review.shotId))
+  const validCandidateIds = new Set(graph.candidates.map(({ id }) => id))
+  graph.shots.forEach((shot) => {
+    shot.candidateIds = graph.candidates.filter(({ shotId }) => shotId === shot.id).map(({ id }) => id)
+    if (!validCandidateIds.has(shot.selectedCandidateId)) shot.selectedCandidateId = null
+  })
+  graph.reviews.forEach((review) => {
+    if (review.candidateId !== null && !validCandidateIds.has(review.candidateId)) review.status = 'superseded'
+  })
   const previousFingerprints = new Map((prior?.shots ?? []).map((shot) => [shot.id, shot.inputFingerprint]))
   refreshAllShots(graph, previousFingerprints)
   return assertVideoContinuityGraph(graph)
@@ -595,6 +717,69 @@ export function assignContinuityWardrobe(graphInput, shotId, characterId, wardro
   return touch(graph, now, previousFingerprints)
 }
 
+export function registerContinuityCandidate(graphInput, candidateInput, options = {}) {
+  const graph = clone(assertVideoContinuityGraph(graphInput))
+  const value = record(candidateInput, 'candidate')
+  exactKeys(value, ['shotId', 'label', 'source', 'generationMode', 'inputFingerprint', 'binding'], 'candidate')
+  safeId(value.shotId, 'candidate.shotId')
+  text(value.label, 'candidate.label', 160)
+  if (!CANDIDATE_SOURCES.has(value.source)) fail('INVALID_CANDIDATE_SOURCE', 'candidate.source is unsupported')
+  if (!GENERATION_MODES.has(value.generationMode)) fail('INVALID_GENERATION_MODE', 'candidate.generationMode is unsupported')
+  safeId(value.inputFingerprint, 'candidate.inputFingerprint')
+  const binding = clone(normalizeVideoAssetBinding(value.binding, 'candidate.binding'))
+  const shot = graph.shots.find(({ id }) => id === value.shotId)
+  if (!shot) fail('UNKNOWN_SHOT', `Unknown continuity shot ${value.shotId}`)
+  if (!requiredSlotsReady(graph, shot)) fail('CANDIDATE_INPUTS_BLOCKED', `Shot ${value.shotId} cannot register video candidates before required assets are approved`)
+  if (value.inputFingerprint !== shot.inputFingerprint) fail('STALE_CANDIDATE_INPUTS', `Shot ${value.shotId} inputs changed while this candidate was rendering`)
+  const shotCandidates = graph.candidates.filter(({ shotId }) => shotId === shot.id)
+  if (shotCandidates.length >= VIDEO_CONTINUITY_LIMITS.maxCandidatesPerShot) fail('CANDIDATE_LIMIT', `Shot ${value.shotId} reached its candidate limit`)
+  if (graph.candidates.length >= VIDEO_CONTINUITY_LIMITS.maxCandidates) fail('CANDIDATE_LIMIT', 'Continuity candidate limit reached')
+  if (shotCandidates.some((candidate) => (
+    candidate.inputFingerprint === shot.inputFingerprint
+    && candidate.asset.libraryItemId === binding.libraryItemId
+    && candidate.asset.libraryVersionId === binding.libraryVersionId
+    && candidate.asset.contentHash === binding.contentHash
+  ))) fail('DUPLICATE_CANDIDATE', `Shot ${value.shotId} already contains this immutable video version`)
+  const now = integer(options.now ?? Date.now(), 'options.now', graph.updatedAt, Number.MAX_SAFE_INTEGER)
+  const attempt = shotCandidates.length + 1
+  const candidate = {
+    id: stableId('continuity-candidate', graph.storyProjectId ?? 'unbound', shot.id, attempt, binding.libraryVersionId, binding.contentHash),
+    shotId: shot.id,
+    attempt,
+    label: value.label.trim(),
+    source: value.source,
+    generationMode: value.generationMode,
+    asset: binding,
+    inputFingerprint: shot.inputFingerprint,
+    createdAt: now,
+  }
+  if (graph.candidates.some(({ id }) => id === candidate.id)) fail('DUPLICATE_ID', `Continuity candidate already exists: ${candidate.id}`)
+  const previousFingerprints = new Map(graph.shots.map((item) => [item.id, item.inputFingerprint]))
+  graph.candidates.push(candidate)
+  shot.candidateIds.push(candidate.id)
+  return touch(graph, now, previousFingerprints)
+}
+
+export function selectContinuityCandidate(graphInput, shotId, candidateId, options = {}) {
+  const graph = clone(assertVideoContinuityGraph(graphInput))
+  safeId(shotId, 'shotId')
+  safeId(candidateId, 'candidateId')
+  const shot = graph.shots.find(({ id }) => id === shotId)
+  if (!shot) fail('UNKNOWN_SHOT', `Unknown continuity shot ${shotId}`)
+  const candidate = graph.candidates.find(({ id }) => id === candidateId)
+  if (!candidate) fail('UNKNOWN_CANDIDATE', `Unknown continuity candidate ${candidateId}`)
+  if (candidate.shotId !== shot.id || !shot.candidateIds.includes(candidate.id)) fail('CROSS_SHOT_CANDIDATE', `${candidateId} does not belong to ${shotId}`)
+  if (!requiredSlotsReady(graph, shot)) fail('CANDIDATE_INPUTS_BLOCKED', `Shot ${shotId} required assets are not approved`)
+  if (candidate.inputFingerprint !== shot.inputFingerprint) fail('STALE_CANDIDATE', `${candidateId} was generated from stale shot inputs`)
+  if (shot.selectedCandidateId === candidate.id) fail('CANDIDATE_ALREADY_SELECTED', `${candidateId} is already selected`)
+  const now = integer(options.now ?? Date.now(), 'options.now', graph.updatedAt, Number.MAX_SAFE_INTEGER)
+  const previousFingerprints = new Map(graph.shots.map((item) => [item.id, item.inputFingerprint]))
+  graph.reviews.forEach((review) => { if (review.shotId === shot.id && review.status === 'active') review.status = 'superseded' })
+  shot.latestReviewId = null
+  shot.selectedCandidateId = candidate.id
+  return touch(graph, now, previousFingerprints)
+}
+
 function reviewRecommendations(scores) {
   const available = SCORE_KEYS
     .filter((key) => scores[key] !== null)
@@ -629,7 +814,9 @@ export function recordContinuityReview(graphInput, reviewInput, options = {}) {
   if (SCORE_KEYS.filter((key) => scores[key] !== null).length < 3) fail('INSUFFICIENT_REVIEW_SCORES', 'review.scores requires at least three applicable dimensions')
   const shot = graph.shots.find(({ id }) => id === value.shotId)
   if (!shot) fail('UNKNOWN_SHOT', `Unknown continuity shot ${value.shotId}`)
-  if (!['ready', 'approved', 'retry-required'].includes(shot.status)) fail('SHOT_ASSETS_BLOCKED', `Shot ${value.shotId} cannot be reviewed before required assets are approved`)
+  if (!['ready', 'approved', 'retry-required'].includes(shot.status)) fail('SHOT_CANDIDATE_REQUIRED', `Shot ${value.shotId} requires approved inputs and an explicitly selected current video candidate`)
+  const candidate = graph.candidates.find(({ id }) => id === shot.selectedCandidateId)
+  if (!candidate || candidate.inputFingerprint !== shot.inputFingerprint) fail('SHOT_CANDIDATE_REQUIRED', `Shot ${value.shotId} has no current video candidate`)
   const now = integer(options.now ?? Date.now(), 'options.now', graph.updatedAt, Number.MAX_SAFE_INTEGER)
   graph.reviews.forEach((review) => { if (review.shotId === shot.id && review.status === 'active') review.status = 'superseded' })
   const attempt = graph.reviews.filter((review) => review.shotId === shot.id).length + 1
@@ -637,6 +824,7 @@ export function recordContinuityReview(graphInput, reviewInput, options = {}) {
   const review = {
     id: stableId('continuity-review', graph.storyProjectId ?? 'unbound', shot.id, attempt, now),
     shotId: shot.id,
+    candidateId: candidate.id,
     attempt,
     reviewerId: value.reviewerId,
     scores: clone(scores),
@@ -660,6 +848,9 @@ export function continuityGraphSummary(graphInput) {
   const graph = assertVideoContinuityGraph(graphInput)
   const assetSlots = [...graph.views, ...graph.wardrobes, ...graph.locations, ...graph.frames]
   const requiredSlots = assetSlots.filter((slot) => slot.required !== false || !('required' in slot))
+  const currentCandidateIds = new Set(graph.candidates
+    .filter((candidate) => graph.shots.some((shot) => shot.id === candidate.shotId && shot.inputFingerprint === candidate.inputFingerprint))
+    .map(({ id }) => id))
   return {
     characters: graph.characters.length,
     locations: graph.locations.length,
@@ -667,9 +858,14 @@ export function continuityGraphSummary(graphInput) {
     requiredAssets: requiredSlots.length,
     approvedAssets: requiredSlots.filter(({ status }) => status === 'approved').length,
     blockedShots: graph.shots.filter(({ status }) => status === 'blocked').length,
+    candidateRequiredShots: graph.shots.filter(({ status }) => status === 'candidate-required').length,
     readyShots: graph.shots.filter(({ status }) => status === 'ready').length,
     approvedShots: graph.shots.filter(({ status }) => status === 'approved').length,
     retryShots: graph.shots.filter(({ status }) => status === 'retry-required').length,
+    candidates: graph.candidates.length,
+    currentCandidates: currentCandidateIds.size,
+    staleCandidates: graph.candidates.length - currentCandidateIds.size,
+    selectedCandidates: graph.shots.filter(({ selectedCandidateId }) => selectedCandidateId !== null).length,
     calibrated: false,
   }
 }

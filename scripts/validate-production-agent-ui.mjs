@@ -7,7 +7,9 @@ import { chromium } from 'playwright'
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
 const fixturePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg==', 'base64')
-const fixtureMp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom', 'ascii'), Buffer.alloc(32, 2)])
+function fixtureMp4(index) {
+  return Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom', 'ascii'), Buffer.alloc(31, 2), Buffer.from([index])])
+}
 function fixtureWav(durationSeconds = 0.35, sampleRate = 48_000) {
   const samples = Math.round(durationSeconds * sampleRate)
   const dataBytes = samples * 2 * 2
@@ -32,7 +34,8 @@ function fixtureWav(durationSeconds = 0.35, sampleRate = 48_000) {
   return buffer
 }
 const fixtureSpeech = fixtureWav()
-let fixtureVideoPolls = 0
+let fixtureVideoSequence = 0
+const fixtureVideoPolls = new Map()
 const fixtureRequests = []
 const provider = createServer(async (request, response) => {
   const chunks = []
@@ -48,19 +51,24 @@ const provider = createServer(async (request, response) => {
     return response.end(fixtureSpeech)
   }
   if (request.method === 'POST' && request.url === '/v1/videos') {
+    fixtureVideoSequence += 1
+    const id = `qa-video-${fixtureVideoSequence}`
     response.writeHead(200, { 'content-type': 'application/json' })
-    return response.end(JSON.stringify({ id: 'qa-video', status: 'queued' }))
+    return response.end(JSON.stringify({ id, status: 'queued' }))
   }
-  if (request.method === 'GET' && request.url === '/v1/videos/qa-video') {
-    fixtureVideoPolls += 1
+  const statusMatch = request.url?.match(/^\/v1\/videos\/(qa-video-(\d+))$/u)
+  if (request.method === 'GET' && statusMatch) {
+    const polls = (fixtureVideoPolls.get(statusMatch[1]) ?? 0) + 1
+    fixtureVideoPolls.set(statusMatch[1], polls)
     response.writeHead(200, { 'content-type': 'application/json' })
-    return response.end(JSON.stringify(fixtureVideoPolls < 2
-      ? { id: 'qa-video', status: 'in_progress', progress: 63 }
-      : { id: 'qa-video', status: 'completed', progress: 100, usage: { cost_usd: 0.02 } }))
+    return response.end(JSON.stringify(polls < 2
+      ? { id: statusMatch[1], status: 'in_progress', progress: 63 }
+      : { id: statusMatch[1], status: 'completed', progress: 100, usage: { cost_usd: 0.02 } }))
   }
-  if (request.method === 'GET' && request.url === '/v1/videos/qa-video/content') {
+  const contentMatch = request.url?.match(/^\/v1\/videos\/(qa-video-(\d+))\/content$/u)
+  if (request.method === 'GET' && contentMatch) {
     response.writeHead(200, { 'content-type': 'video/mp4' })
-    return response.end(fixtureMp4)
+    return response.end(fixtureMp4(Number(contentMatch[2])))
   }
   response.writeHead(404, { 'content-type': 'application/json' })
   response.end(JSON.stringify({ error: 'fixture route missing' }))
@@ -98,6 +106,30 @@ async function createSmartVideoProject() {
   await dialog.getByRole('button', { name: '创建并进入', exact: true }).click()
 }
 
+async function bindProjectImageToContinuityCards(studio, group, requiredOnly = false) {
+  const continuity = studio.getByRole('region', { name: '连续性资产槽位' })
+  await continuity.getByLabel('资产组').selectOption(group)
+  const allCards = continuity.locator('.aq-continuity-slot-list > article')
+  const cards = requiredOnly ? allCards.filter({ hasText: '必需参考' }) : allCards
+  const count = await cards.count()
+  assert(count > 0, `${group} should expose at least one bindable card`)
+  for (let index = 0; index < count; index += 1) {
+    const card = cards.nth(index)
+    await card.getByRole('button', { name: /选择资源|替换版本/u }).click()
+    await page.locator('.aq-product-library-launcher').click()
+    const dialog = page.getByRole('dialog', { name: '资源库' })
+    await dialog.waitFor({ state: 'visible' })
+    await dialog.getByRole('tab', { name: '项目资源', exact: true }).click()
+    const imageTile = dialog.locator('.aq-library-grid > li').filter({ hasText: 'API 图像' }).first()
+    await imageTile.waitFor({ state: 'visible', timeout: 10_000 })
+    await imageTile.locator('button').click()
+    await dialog.getByRole('button', { name: '用于智能视频', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    await card.getByRole('button', { name: '批准', exact: true }).click()
+    await card.getByText('已批准', { exact: true }).waitFor({ state: 'visible' })
+  }
+}
+
 try {
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible' })
@@ -115,6 +147,11 @@ try {
   await characterSession.getByText(/^正面/u).first().waitFor({ state: 'visible' })
   await characterSession.getByText(/^侧面/u).first().waitFor({ state: 'visible' })
   await characterSession.getByText(/^背面/u).first().waitFor({ state: 'visible' })
+
+  await studio.getByLabel('生成方案').selectOption('fast')
+  await studio.getByLabel('人物方案').selectOption('quick')
+  await studio.getByRole('button', { name: '建立生产图', exact: true }).click()
+  await studio.getByText('极速 / 快速人物', { exact: true }).waitFor({ state: 'visible' })
 
   await studio.getByText('剧本设计', { exact: true }).first().click()
   await studio.getByRole('button', { name: '请求本地建议', exact: true }).click()
@@ -160,13 +197,9 @@ try {
   await videoAdapter.getByLabel('API Key').fill('qa-video-secret-1234')
   await videoAdapter.getByLabel('$ / 秒').fill('0.01')
   await videoAdapter.getByRole('button', { name: '本次运行启用', exact: true }).click()
-  await videoAdapter.getByRole('button', { name: '创建 5 秒 720P 任务', exact: true }).click()
-  await videoAdapter.getByText(/completed · 100%/u).waitFor({ state: 'visible', timeout: 12_000 })
   assert.equal((await generationPanel.innerText()).includes('qa-image-secret-1234'), false)
   assert.equal((await generationPanel.innerText()).includes('qa-speech-secret-1234'), false)
   assert.equal((await generationPanel.innerText()).includes('qa-video-secret-1234'), false)
-  assert.ok(fixtureRequests.length >= 6)
-  assert.ok(fixtureRequests.every(({ authorization }) => authorization === 'Bearer qa-image-secret-1234' || authorization === 'Bearer qa-speech-secret-1234' || authorization === 'Bearer qa-video-secret-1234'))
 
   const workspaceProjectId = new URLSearchParams(page.url().split('?')[1] || '').get('project')
   assert.ok(workspaceProjectId)
@@ -174,9 +207,39 @@ try {
     const response = await fetch(`/api/library/assets?scope=project&projectId=${encodeURIComponent(projectId)}`, { credentials: 'same-origin' })
     return response.json()
   }, workspaceProjectId)
-  assert.deepEqual(libraryAssets.assets.map((asset) => asset.mediaKind).sort(), ['audio', 'image', 'video'])
+  assert.deepEqual(libraryAssets.assets.map((asset) => asset.mediaKind).sort(), ['audio', 'image'])
   const audioAsset = libraryAssets.assets.find((asset) => asset.mediaKind === 'audio')
   assert.ok(audioAsset)
+
+  await studio.getByText('素材生成', { exact: true }).first().click()
+  await bindProjectImageToContinuityCards(studio, '人物视图', true)
+  await bindProjectImageToContinuityCards(studio, '服饰状态')
+  await bindProjectImageToContinuityCards(studio, '地点基准')
+  await studio.getByText('0 镜头受阻', { exact: true }).waitFor({ state: 'visible' })
+
+  await studio.getByText('H3 镜头生成', { exact: true }).first().click()
+  const candidatePool = studio.getByRole('region', { name: '当前镜头视频候选' })
+  await candidatePool.getByText(/暂无候选/u).waitFor({ state: 'visible' })
+  await videoAdapter.getByRole('button', { name: '生成 5 秒 720P 候选', exact: true }).click()
+  await videoAdapter.getByText(/completed · 100%/u).waitFor({ state: 'visible', timeout: 12_000 })
+  await candidatePool.locator('[data-video-candidate]').waitFor({ state: 'visible', timeout: 10_000 })
+  assert.equal(await candidatePool.locator('[data-video-candidate]').count(), 1)
+  await candidatePool.getByRole('button', { name: '设为当前', exact: true }).click()
+  await studio.getByLabel('人工结论').selectOption('retry')
+  await studio.getByRole('button', { name: '记录人工结论', exact: true }).click()
+  await studio.getByText(/需定向重生/u).waitFor({ state: 'visible' })
+
+  await videoAdapter.getByRole('button', { name: '生成 5 秒 720P 候选', exact: true }).click()
+  await videoAdapter.getByText(/completed · 100%/u).waitFor({ state: 'visible', timeout: 12_000 })
+  await page.waitForFunction(() => document.querySelectorAll('[data-video-candidate]').length === 2)
+  assert.equal(await candidatePool.locator('[data-video-candidate]').count(), 2)
+  await candidatePool.locator('[data-video-candidate]').nth(1).getByRole('button', { name: '设为当前', exact: true }).click()
+  await studio.getByLabel('人工结论').selectOption('accept')
+  await studio.getByRole('button', { name: '记录人工结论', exact: true }).click()
+  await studio.getByText(/候选 #2 · 已接受/u).waitFor({ state: 'visible' })
+
+  assert.ok(fixtureRequests.length >= 10)
+  assert.ok(fixtureRequests.every(({ authorization }) => authorization === 'Bearer qa-image-secret-1234' || authorization === 'Bearer qa-speech-secret-1234' || authorization === 'Bearer qa-video-secret-1234'))
 
   await studio.getByText('声音字幕', { exact: true }).first().click()
   const soundTimeline = studio.getByRole('region', { name: '声音字幕时间线' })
@@ -225,9 +288,13 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByText('多智能体制片工作室', { exact: true }).first().waitFor({ state: 'visible', timeout: 10_000 })
   const restoredStudio = page.getByRole('region', { name: '多智能体制片工作室' })
-  await restoredStudio.getByText('质量 / 专业人物', { exact: true }).waitFor({ state: 'visible' })
+  await restoredStudio.getByText('极速 / 快速人物', { exact: true }).waitFor({ state: 'visible' })
   await restoredStudio.getByText('剧本设计', { exact: true }).first().click()
   await restoredStudio.getByText('剧本设计 · 本地受控建议', { exact: true }).waitFor({ state: 'visible' })
+  await restoredStudio.getByText('H3 镜头生成', { exact: true }).first().click()
+  const restoredCandidatePool = restoredStudio.getByRole('region', { name: '当前镜头视频候选' })
+  assert.equal(await restoredCandidatePool.locator('[data-video-candidate]').count(), 2)
+  await restoredStudio.getByText(/候选 #2 · 已接受/u).waitFor({ state: 'visible' })
   await restoredStudio.getByText('声音字幕', { exact: true }).first().click()
   const restoredSoundTimeline = restoredStudio.getByRole('region', { name: '声音字幕时间线' })
   await restoredSoundTimeline.getByText(/sha256:/u).first().waitFor({ state: 'visible' })
@@ -241,7 +308,7 @@ try {
   assert.equal(await page.locator('.aq-video-workbench').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-mobile.png'), fullPage: true })
   assert.deepEqual(issues, [])
-  console.log('✓ Production profiles, review-only agents, batch BYOK TTS, approved timeline mix/subtitles, reload persistence, and responsive layout passed')
+  console.log('✓ Production profiles, two-version video candidate replace/accept, batch BYOK TTS, approved mix/subtitles, reload persistence, and responsive layout passed')
 } catch (error) {
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-failure.png'), fullPage: true }).catch(() => undefined)
   console.error(JSON.stringify({ url: page.url(), issues, body: (await page.locator('body').innerText().catch(() => '')).slice(0, 8000), artifactDirectory }, null, 2))

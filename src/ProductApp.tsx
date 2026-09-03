@@ -1799,9 +1799,9 @@ export default function ProductApp() {
 
   const handleUseLibraryAsset = useCallback((asset: LibraryAsset) => {
     if (route.modeId === 'home') return
-    const supportsAsset = asset.mediaKind === 'image' || (route.modeId === 'smart-video' && asset.mediaKind === 'audio')
+    const supportsAsset = asset.mediaKind === 'image' || (route.modeId === 'smart-video' && ['audio', 'video'].includes(asset.mediaKind))
     if (!supportsAsset) {
-      setModeNotice({ tone: 'error', message: route.modeId === 'smart-video' ? '智能视频当前可投递图片与音频；视频资产暂保留在资源库归档。' : '当前模式只接受资源库图片投递。' })
+      setModeNotice({ tone: 'error', message: route.modeId === 'smart-video' ? '智能视频可投递图片、音频与视频资产。' : '当前模式只接受资源库图片投递。' })
       return
     }
     setLibraryInsertion({

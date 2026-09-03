@@ -17,7 +17,7 @@ import {
   Square,
   Users,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ProcessingJob } from '../../types'
 import {
   VideoProductionError,
@@ -40,7 +40,7 @@ import {
 } from '../../lib/story/productionPipeline.mjs'
 import { continuityGraphSummary } from '../../lib/story/continuityGraph.mjs'
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib/story/storyProject.mjs'
-import type { LibraryAssetInsertion } from '../../lib/libraryApi'
+import type { LibraryAsset, LibraryAssetInsertion } from '../../lib/libraryApi'
 import { flushWorkspaceModeDocument } from '../../lib/projectApi'
 import { cancelVideoJob, createSoundRenderJob, retryVideoJob } from '../../lib/videoApi'
 import {
@@ -50,7 +50,7 @@ import {
   requestAgentProposal,
   type AgentAdapterStatus,
 } from '../../lib/agentAdapterApi'
-import { GenerationAdaptersPanel } from './GenerationAdaptersPanel'
+import { GenerationAdaptersPanel, type VideoCandidateContext } from './GenerationAdaptersPanel'
 import { SoundTimelinePanel } from './SoundTimelinePanel'
 import './production-studio.css'
 
@@ -146,6 +146,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const [notice, setNotice] = useState('剧本大纲等待用户审批；未批准节点不会越级。')
   const [continuityTargetId, setContinuityTargetId] = useState<string | null>(null)
   const [soundTargetId, setSoundTargetId] = useState<string | null>(null)
+  const [candidateTargetShotId, setCandidateTargetShotId] = useState<string | null>(null)
   const [continuityGroup, setContinuityGroup] = useState<ContinuitySlotView['group']>('人物视图')
   const [continuityPage, setContinuityPage] = useState(0)
   const [continuityShotId, setContinuityShotId] = useState(project.continuityGraph.shots[0]?.id ?? '')
@@ -225,6 +226,19 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const continuityLatestReview = continuityShot?.latestReviewId
     ? project.continuityGraph.reviews.find(({ id }) => id === continuityShot.latestReviewId) ?? null
     : null
+  const continuityCandidates = useMemo(() => continuityShot
+    ? project.continuityGraph.candidates.filter(({ shotId }) => shotId === continuityShot.id)
+    : [], [continuityShot, project.continuityGraph.candidates])
+  const continuityLatestCandidate = continuityLatestReview?.candidateId
+    ? project.continuityGraph.candidates.find(({ id }) => id === continuityLatestReview.candidateId) ?? null
+    : null
+  const videoCandidateContext: VideoCandidateContext | undefined = continuityShot && continuityShot.status !== 'blocked'
+    ? {
+        shotId: continuityShot.id,
+        inputFingerprint: continuityShot.inputFingerprint,
+        generationMode: project.settings.generationMode,
+      }
+    : undefined
   const canBridge = useMemo(() => canBridgeProductionToStory(project), [project])
   const hasReviewGate = project.nodes.some((node) => node.status === 'review')
   const nodeById = useMemo(() => new Map(project.nodes.map((node) => [node.id, node])), [project.nodes])
@@ -280,7 +294,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
     if (continuityPage >= continuityPageCount) setContinuityPage(Math.max(0, continuityPageCount - 1))
   }, [continuityPage, continuityPageCount])
 
-  const execute = (
+  const execute = useCallback((
     type: VideoProductionCommandType,
     payload: Record<string, unknown> = {},
     successMessage?: string,
@@ -300,7 +314,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
       setNotice(messageOf(error))
       return null
     }
-  }
+  }, [onProjectChange])
 
   useEffect(() => {
     let next = projectRef.current
@@ -406,8 +420,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
 
   useEffect(() => {
     if (!active || !libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
-    if (!continuityTargetId && !soundTargetId) {
-      setNotice('资源已就绪。请先选择连续性图片槽位或声音时间线音频槽位，再完成绑定。')
+    if (!continuityTargetId && !soundTargetId && !candidateTargetShotId) {
+      setNotice('资源已就绪。请先选择连续性图片槽位、声音时间线槽位或镜头视频候选，再完成绑定。')
       return
     }
     consumedLibraryAssetRef.current = libraryAsset.nonce
@@ -426,6 +440,20 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
         if (!['audio/mpeg', 'audio/wav'].includes(asset.version.mimeType)) throw new Error('声音时间线仅支持 MP3 或 WAV')
         const next = execute('sound.asset.bind', { cueId: soundTargetId, binding }, `已把“${asset.title}”绑定到声音时间线；请试听后人工批准。`)
         if (next) setSoundTargetId(null)
+      } else if (candidateTargetShotId) {
+        if (asset.mediaKind !== 'video') throw new Error('镜头候选只接受资源库中的视频资产')
+        if (!['video/mp4', 'video/webm'].includes(asset.version.mimeType)) throw new Error('镜头候选仅支持 MP4 或 WebM')
+        const currentShot = projectRef.current.continuityGraph.shots.find(({ id }) => id === candidateTargetShotId)
+        if (!currentShot) throw new Error('目标镜头已不存在')
+        const next = execute('continuity.candidate.register', {
+          shotId: currentShot.id,
+          label: asset.title.slice(0, 160),
+          source: 'imported',
+          generationMode: projectRef.current.settings.generationMode,
+          inputFingerprint: currentShot.inputFingerprint,
+          binding,
+        }, `已把“${asset.title}”登记为镜头候选；请显式选择后再复核。`)
+        if (next) setCandidateTargetShotId(null)
       } else {
         if (asset.mediaKind !== 'image') throw new Error('连续性槽位只接受资源库中的图片资产')
         if (!['image/png', 'image/jpeg', 'image/webp'].includes(asset.version.mimeType)) throw new Error('连续性槽位仅支持 PNG、JPEG 或 WebP')
@@ -439,19 +467,47 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
     }
     // 资源投递按 nonce 消费一次；项目变化由命令回填，不能导致重复绑定。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, libraryAsset?.nonce, continuityTargetId, soundTargetId])
+  }, [active, libraryAsset?.nonce, candidateTargetShotId, continuityTargetId, soundTargetId])
 
   const chooseContinuityAsset = (targetId: string) => {
     setSoundTargetId(null)
+    setCandidateTargetShotId(null)
     setContinuityTargetId(targetId)
     setNotice('槽位已选中。请打开页面顶部“资源库”，选择一个图片版本并点击“插入当前模式”。')
   }
 
   const chooseSoundAsset = (cueId: string) => {
     setContinuityTargetId(null)
+    setCandidateTargetShotId(null)
     setSoundTargetId(cueId)
     setNotice('音频槽位已选中。请打开页面顶部“资源库”，选择 MP3/WAV 明确版本并点击“插入当前模式”。')
   }
+
+  const chooseCandidateAsset = (shotId: string) => {
+    setContinuityTargetId(null)
+    setSoundTargetId(null)
+    setCandidateTargetShotId(shotId)
+    setNotice('镜头候选入口已选中。请从页面顶部“资源库”插入 MP4/WebM 明确版本。')
+  }
+
+  const registerGeneratedVideoCandidate = useCallback((asset: LibraryAsset, context: VideoCandidateContext) => {
+    const binding = {
+      libraryItemId: asset.id,
+      libraryVersionId: asset.version.id,
+      contentHash: asset.version.assetId,
+      mimeType: asset.version.mimeType,
+      scope: asset.relationship === 'project-owned' ? 'project' : 'global-reference',
+      boundAt: Math.max(Date.now(), projectRef.current.updatedAt),
+    }
+    execute('continuity.candidate.register', {
+      shotId: context.shotId,
+      label: asset.title.slice(0, 160),
+      source: 'byok-video',
+      generationMode: context.generationMode,
+      inputFingerprint: context.inputFingerprint,
+      binding,
+    }, `“${asset.title}”已入库并登记为镜头候选；请显式选择后人工复核。`)
+  }, [execute])
 
   const submitContinuityReview = () => {
     if (!continuityShot) return
@@ -764,8 +820,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
         {(selectedNode.id === 'video-director' || selectedNode.id === 'quality-controller') && project.continuityGraph.shots.length ? (
           <section className="aq-continuity-review" aria-label="镜头人工复核">
             <header>
-              <div><span>镜头人工复核</span><small>未校准 · 人工决定</small></div>
-              <b>{continuitySummary.approvedShots}/{continuitySummary.shots} 已接受</b>
+              <div><span>镜头候选与人工复核</span><small>候选不自动覆盖 · 未校准 · 人工决定</small></div>
+              <b>{continuitySummary.approvedShots}/{continuitySummary.shots} 已接受 · {continuitySummary.currentCandidates} 当前候选</b>
             </header>
             <label>
               <span>镜头</span>
@@ -787,6 +843,42 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
                     </label>
                   )
                 })}
+                <section className="aq-continuity-candidates" aria-label="当前镜头视频候选">
+                  <header>
+                    <div>
+                      <strong>视频候选池</strong>
+                      <small>{continuityCandidates.length} 个历史版本；上游变化后旧候选保留但不可误用</small>
+                    </div>
+                    <button
+                      type="button"
+                      className={candidateTargetShotId === continuityShot.id ? 'is-selected' : ''}
+                      disabled={continuityShot.status === 'blocked'}
+                      onClick={() => chooseCandidateAsset(continuityShot.id)}
+                    >{candidateTargetShotId === continuityShot.id ? '等待资源库视频' : '从资源库添加候选'}</button>
+                  </header>
+                  <div>
+                    {continuityCandidates.length ? continuityCandidates.map((candidate) => {
+                      const stale = candidate.inputFingerprint !== continuityShot.inputFingerprint
+                      const selected = candidate.id === continuityShot.selectedCandidateId
+                      const sourceLabel = candidate.source === 'comfyui-h3' ? '本地 H3' : candidate.source === 'byok-video' ? 'BYOK 视频' : '资源库导入'
+                      return (
+                        <article key={candidate.id} className={`${selected ? 'is-current' : ''}${stale ? ' is-stale' : ''}`} data-video-candidate={candidate.id}>
+                          <div>
+                            <strong>#{candidate.attempt} · {candidate.label}</strong>
+                            <small>{sourceLabel} · {candidate.generationMode === 'quality' ? '质量模式' : '极速模式'} · {stale ? '输入已变化' : '匹配当前输入'}</small>
+                            <code>sha256:{candidate.asset.contentHash.slice(0, 12)}…</code>
+                          </div>
+                          <span>{selected ? '当前选择' : stale ? '历史/过期' : '可选择'}</span>
+                          <button
+                            type="button"
+                            disabled={selected || stale || continuityShot.status === 'blocked'}
+                            onClick={() => execute('continuity.candidate.select', { shotId: continuityShot.id, candidateId: candidate.id }, `已选择候选 #${candidate.attempt}；现在可记录人工复核。`)}
+                          >{selected ? '已选中' : stale ? '不可用于当前输入' : '设为当前'}</button>
+                        </article>
+                      )
+                    }) : <p>暂无候选。可从资源库添加，或在下方用视频 API 生成；登记后仍需手动“设为当前”。</p>}
+                  </div>
+                </section>
                 <div className="aq-continuity-score-grid">
                   {REVIEW_DIMENSIONS.map(([key, label]) => (
                     <label key={key}><span>{label}</span><input type="number" min={0} max={5} step={0.1} value={reviewScores[key]} onChange={(event) => {
@@ -798,10 +890,10 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
                 </div>
                 <label><span>人工结论</span><select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as 'accept' | 'retry')}><option value="accept">接受镜头</option><option value="retry">定向重生</option></select></label>
                 <label><span>复核备注</span><textarea value={reviewNotes} maxLength={2_000} placeholder="说明接受依据或需要修正的具体问题" onChange={(event) => setReviewNotes(event.target.value)} /></label>
-                <button type="button" className="aq-continuity-submit" disabled={continuityShot.status === 'blocked'} onClick={submitContinuityReview}>{continuityShot.status === 'blocked' ? '必需资产尚未批准' : '记录人工结论'}</button>
+                <button type="button" className="aq-continuity-submit" disabled={['blocked', 'candidate-required'].includes(continuityShot.status)} onClick={submitContinuityReview}>{continuityShot.status === 'blocked' ? '必需资产尚未批准' : continuityShot.status === 'candidate-required' ? '请先选择当前视频候选' : '记录人工结论'}</button>
                 {continuityLatestReview ? (
                   <article className={`aq-continuity-review-result is-${continuityLatestReview.decision}`}>
-                    <strong>第 {continuityLatestReview.attempt} 次 · {continuityLatestReview.decision === 'accept' ? '已接受' : '需定向重生'}</strong>
+                    <strong>第 {continuityLatestReview.attempt} 次 · 候选 #{continuityLatestCandidate?.attempt ?? '—'} · {continuityLatestReview.decision === 'accept' ? '已接受' : '需定向重生'}</strong>
                     {continuityLatestReview.notes ? <p>{continuityLatestReview.notes}</p> : null}
                     {continuityLatestReview.reasons.map((reason) => <small key={reason}>{reason}</small>)}
                     {continuityLatestReview.recommendedActions.map((action) => <small key={action}>{action}</small>)}
@@ -894,6 +986,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
           projectId={workspaceProjectId}
           projectTitle={project.title}
           defaultPrompt={project.brief}
+          videoCandidateContext={videoCandidateContext}
+          onVideoAssetReady={registerGeneratedVideoCandidate}
         />
 
         <div className="aq-production-node-actions">

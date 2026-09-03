@@ -830,6 +830,7 @@ export function SmartVideoWorkbench({
     let disposed = false
     void (async () => {
       try {
+        if (libraryAsset.asset.mediaKind !== 'image') throw new Error('故事/分镜/执行区只接受图片；音频与视频请在“多智能体”工作区绑定到声音槽位或镜头候选。')
         const shotId = selectedShotIds[0] ?? result.project.scenes[0]?.shots[0]?.id
         if (!shotId) throw new Error('当前剧本还没有可绑定的镜头')
         const response = await fetch(libraryAsset.asset.version.url, { credentials: 'same-origin' })

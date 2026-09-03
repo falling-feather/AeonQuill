@@ -4,8 +4,10 @@ import assert from 'node:assert/strict'
 import {
   VideoContinuityError,
   assertContinuityAssetBinding,
+  assertContinuityVideoBinding,
   assertVideoContinuityGraph,
   continuityGraphSummary,
+  migrateVideoContinuityGraph,
 } from '../src/lib/story/continuityGraph.mjs'
 import {
   VideoProductionError,
@@ -62,6 +64,40 @@ function binding(index) {
   }
 }
 
+function videoBinding(index) {
+  return {
+    libraryItemId: `video-item-${index}`,
+    libraryVersionId: `video-version-${index}`,
+    contentHash: (index + 1_000).toString(16).padStart(64, '0'),
+    mimeType: index % 2 ? 'video/mp4' : 'video/webm',
+    scope: 'project',
+    boundAt: 3_000 + index,
+  }
+}
+
+function registerCandidate(project, shotId, index, source = 'imported') {
+  const shot = project.continuityGraph.shots.find(({ id }) => id === shotId)
+  const asset = videoBinding(index)
+  const next = apply(project, 'continuity.candidate.register', {
+    shotId,
+    label: `镜头候选 ${index}`,
+    source,
+    generationMode: project.settings.generationMode,
+    inputFingerprint: shot.inputFingerprint,
+    binding: asset,
+  })
+  const candidate = next.continuityGraph.candidates.find(({ asset: item }) => item.libraryVersionId === asset.libraryVersionId)
+  return { project: next, candidate }
+}
+
+function registerAndSelectCandidate(project, shotId, index, source = 'imported') {
+  const registered = registerCandidate(project, shotId, index, source)
+  return {
+    candidate: registered.candidate,
+    project: apply(registered.project, 'continuity.candidate.select', { shotId, candidateId: registered.candidate.id }),
+  }
+}
+
 function approveRequiredAssets(project) {
   const graph = project.continuityGraph
   const slots = [...graph.views, ...graph.wardrobes, ...graph.locations, ...graph.frames]
@@ -80,7 +116,8 @@ test('compiles story characters, professional views, locations, frames and shot 
     characterMode: 'professional',
     now: 1_100,
   })
-  assert.equal(production.schemaVersion, 4)
+  assert.equal(production.schemaVersion, 5)
+  assert.equal(production.continuityGraph.schemaVersion, 2)
   assert.equal(production.continuityGraph.storyProjectId, 'continuity-story')
   assert.equal(production.continuityGraph.characters.length, 2)
   assert.equal(production.continuityGraph.locations.length, 2)
@@ -106,6 +143,10 @@ test('rejects unknown fields, paths, unsupported mime types and non-SHA content 
   assert.throws(
     () => assertContinuityAssetBinding({ ...binding(1), mimeType: 'image/svg+xml' }),
     (error) => error instanceof VideoContinuityError && error.code === 'INVALID_ASSET_MIME',
+  )
+  assert.throws(
+    () => assertContinuityVideoBinding({ ...videoBinding(1), mimeType: 'image/png' }),
+    (error) => error instanceof VideoContinuityError && error.code === 'INVALID_VIDEO_MIME',
   )
   const production = createVideoProductionProjectForStory(story(), { now: 1_200 })
   const malformed = structuredClone(production.continuityGraph)
@@ -137,7 +178,7 @@ test('requires explicit asset approval before the asset-producer gate can pass',
   production = approveRequiredAssets(production)
   const summary = continuityGraphSummary(production.continuityGraph)
   assert.equal(summary.approvedAssets, summary.requiredAssets)
-  assert(production.continuityGraph.shots.every(({ status }) => status === 'ready'))
+  assert(production.continuityGraph.shots.every(({ status }) => status === 'candidate-required'))
   production = apply(production, 'node.approve', { nodeId: 'asset-producer' })
   assert.equal(production.nodes.find(({ id }) => id === 'asset-producer').status, 'approved')
 })
@@ -145,6 +186,8 @@ test('requires explicit asset approval before the asset-producer gate can pass',
 test('records manual accept/retry decisions without inventing calibrated machine thresholds', () => {
   let production = approveRequiredAssets(createVideoProductionProjectForStory(story(), { generationMode: 'quality', now: 1_400 }))
   const shot = production.continuityGraph.shots[0]
+  const first = registerAndSelectCandidate(production, shot.id, 1, 'comfyui-h3')
+  production = first.project
   production = apply(production, 'continuity.review.record', {
     shotId: shot.id,
     reviewerId: 'local-user',
@@ -158,6 +201,8 @@ test('records manual accept/retry decisions without inventing calibrated machine
   assert(review.recommendedActions.some((action) => action.includes('质量母版')))
   assert.equal(continuityGraphSummary(production.continuityGraph).calibrated, false)
 
+  const second = registerAndSelectCandidate(production, shot.id, 2, 'byok-video')
+  production = second.project
   production = apply(production, 'continuity.review.record', {
     shotId: shot.id,
     reviewerId: 'local-user',
@@ -167,13 +212,59 @@ test('records manual accept/retry decisions without inventing calibrated machine
   })
   review = production.continuityGraph.reviews.at(-1)
   assert.equal(review.decision, 'accept')
+  assert.equal(review.candidateId, second.candidate.id)
+  assert.equal(production.continuityGraph.shots[0].candidateIds.length, 2)
+  assert.equal(production.continuityGraph.shots[0].selectedCandidateId, second.candidate.id)
   assert.equal(production.continuityGraph.reviews[0].status, 'superseded')
   assert.equal(production.continuityGraph.shots[0].status, 'approved')
 })
 
+test('rejects duplicate, cross-shot and stale candidates while preserving immutable history', () => {
+  let production = approveRequiredAssets(createVideoProductionProjectForStory(story(), { generationMode: 'quality', now: 1_450 }))
+  const [firstShot, secondShot] = production.continuityGraph.shots
+  const first = registerCandidate(production, firstShot.id, 11)
+  production = first.project
+  assert.throws(
+    () => apply(production, 'continuity.candidate.register', {
+      shotId: firstShot.id,
+      label: '重复候选',
+      source: 'imported',
+      generationMode: 'quality',
+      inputFingerprint: firstShot.inputFingerprint,
+      binding: videoBinding(11),
+    }),
+    (error) => error instanceof VideoContinuityError && error.code === 'DUPLICATE_CANDIDATE',
+  )
+  assert.throws(
+    () => apply(production, 'continuity.candidate.select', { shotId: secondShot.id, candidateId: first.candidate.id }),
+    (error) => error instanceof VideoContinuityError && error.code === 'CROSS_SHOT_CANDIDATE',
+  )
+  assert.throws(
+    () => apply(production, 'continuity.candidate.register', {
+      shotId: firstShot.id,
+      label: '过期输入',
+      source: 'imported',
+      generationMode: 'quality',
+      inputFingerprint: 'stale-input',
+      binding: videoBinding(12),
+    }),
+    (error) => error instanceof VideoContinuityError && error.code === 'STALE_CANDIDATE_INPUTS',
+  )
+
+  const frameId = production.continuityGraph.shots[0].frameIds[0]
+  production = apply(production, 'continuity.asset.bind', { targetId: frameId, binding: binding(101) })
+  production = apply(production, 'continuity.asset.approve', { targetId: frameId })
+  assert.equal(production.continuityGraph.candidates.length, 1)
+  assert.throws(
+    () => apply(production, 'continuity.candidate.select', { shotId: firstShot.id, candidateId: first.candidate.id }),
+    (error) => error instanceof VideoContinuityError && error.code === 'STALE_CANDIDATE',
+  )
+})
+
 test('upstream asset or wardrobe changes only supersede reviews for affected shots', () => {
   let production = approveRequiredAssets(createVideoProductionProjectForStory(story(), { generationMode: 'quality', now: 1_500 }))
-  for (const shot of production.continuityGraph.shots) {
+  for (const [index, shot] of production.continuityGraph.shots.entries()) {
+    production = registerAndSelectCandidate(production, shot.id, 20 + index).project
     production = apply(production, 'continuity.review.record', {
       shotId: shot.id,
       reviewerId: 'local-user',
@@ -186,8 +277,13 @@ test('upstream asset or wardrobe changes only supersede reviews for affected sho
   const unrelatedShot = production.continuityGraph.shots.find(({ locationId }) => locationId !== firstShot.locationId)
   const firstLocationId = firstShot.locationId
   production = apply(production, 'continuity.asset.bind', { targetId: firstLocationId, binding: binding(99) })
-  assert.equal(production.continuityGraph.shots.find(({ id }) => id === firstShot.id).status, 'blocked')
-  assert.equal(production.continuityGraph.shots.find(({ id }) => id === unrelatedShot.id).status, 'approved')
+  const affected = production.continuityGraph.shots.find(({ id }) => id === firstShot.id)
+  const unaffected = production.continuityGraph.shots.find(({ id }) => id === unrelatedShot.id)
+  assert.equal(affected.status, 'blocked')
+  assert.equal(affected.selectedCandidateId, null)
+  assert(affected.candidateIds.length > 0)
+  assert.equal(unaffected.status, 'approved')
+  assert.notEqual(unaffected.selectedCandidateId, null)
 })
 
 test('synchronizes revised stories while preserving unchanged content-addressed assets', () => {
@@ -216,7 +312,7 @@ test('preserves pre-story character assets when the approved storyboard is bridg
   assert.equal(bridgedView.asset.contentHash, binding(77).contentHash)
 })
 
-test('migrates v2 production projects through v4 without losing node state', () => {
+test('migrates v2 production projects through v5 without losing node state', () => {
   const current = createVideoProductionProjectForStory(story(), { now: 1_700 })
   const legacy = structuredClone(current)
   legacy.schemaVersion = 2
@@ -225,10 +321,37 @@ test('migrates v2 production projects through v4 without losing node state', () 
   legacy.characterProfiles.forEach((profile) => { delete profile.storyCharacterId })
   legacy.nodes[1].status = 'approved'
   const migrated = migrateVideoProductionProject(legacy, { story: story(), now: 1_800 })
-  assert.equal(migrated.schemaVersion, 4)
+  assert.equal(migrated.schemaVersion, 5)
   assert.equal(migrated.nodes[1].status, 'approved')
   assert.equal(migrated.continuityGraph.storyProjectId, 'continuity-story')
   assert(migrated.characterProfiles.every(({ storyCharacterId }) => storyCharacterId !== null))
+})
+
+test('migrates continuity graph v1 reviews into superseded history without inventing video candidates', () => {
+  let production = approveRequiredAssets(createVideoProductionProjectForStory(story(), { now: 2_150 }))
+  production = registerAndSelectCandidate(production, production.continuityGraph.shots[0].id, 60).project
+  production = apply(production, 'continuity.review.record', {
+    shotId: production.continuityGraph.shots[0].id,
+    reviewerId: 'local-user',
+    scores: { identity: 4, wardrobe: 4, location: 4, sharpness: 4, motion: 4 },
+    decision: 'accept',
+    notes: '旧版审核。',
+  })
+  const legacy = structuredClone(production.continuityGraph)
+  legacy.schemaVersion = 1
+  delete legacy.candidates
+  legacy.shots.forEach((shot) => {
+    delete shot.candidateIds
+    delete shot.selectedCandidateId
+    if (shot.status === 'candidate-required') shot.status = 'ready'
+  })
+  legacy.reviews.forEach((review) => { delete review.candidateId })
+
+  const migrated = migrateVideoContinuityGraph(legacy, { now: legacy.updatedAt + 1 })
+  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.candidates.length, 0)
+  assert(migrated.reviews.every(({ status, candidateId }) => status === 'superseded' && candidateId === null))
+  assert(migrated.shots.every(({ status, selectedCandidateId }) => status === 'candidate-required' && selectedCandidateId === null))
 })
 
 test('migrates every pre-story v2 character profile instead of collapsing them into the lead', () => {

@@ -195,7 +195,7 @@ test('migrates schema v1 production exports without losing node approvals', () =
   delete legacy.settings.characterMode
   delete legacy.settings.recommendation
   const restored = deserializeVideoProductionProject(JSON.stringify(legacy))
-  assert.equal(restored.schemaVersion, 4)
+  assert.equal(restored.schemaVersion, 5)
   assert.equal(restored.settings.generationMode, 'quality')
   assert.equal(restored.nodes[1].status, current.nodes[1].status)
   assert.equal(restored.characterProfiles.length, 1)
@@ -215,7 +215,8 @@ test('migrates schema v3 production exports into a story-bound sound timeline', 
   delete legacy.soundTimeline
 
   const restored = migrateVideoProductionProject(legacy, { story, now: 9_502 })
-  assert.equal(restored.schemaVersion, 4)
+  assert.equal(restored.schemaVersion, 5)
+  assert.equal(restored.continuityGraph.schemaVersion, 2)
   assert.equal(restored.soundTimeline.storyProjectId, story.id)
   assert.equal(restored.soundTimeline.storyRevision, story.revision)
   assert.equal(restored.soundTimeline.subtitleCues.length, 1)

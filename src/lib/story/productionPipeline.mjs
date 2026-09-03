@@ -1,13 +1,17 @@
 import {
   approveContinuityAsset,
   assertContinuityAssetBinding,
+  assertContinuityVideoBinding,
   assertVideoContinuityGraph,
   assignContinuityWardrobe,
   bindContinuityAsset,
   continuityAssetProducerReady,
   continuityVideoReviewReady,
   createVideoContinuityGraph,
+  migrateVideoContinuityGraph,
   recordContinuityReview,
+  registerContinuityCandidate,
+  selectContinuityCandidate,
   unbindContinuityAsset,
 } from './continuityGraph.mjs'
 import {
@@ -30,7 +34,7 @@ import {
   unbindSoundAsset,
 } from './soundTimeline.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION = 4
+export const VIDEO_PRODUCTION_SCHEMA_VERSION = 5
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION = 1
 
 export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
@@ -69,6 +73,8 @@ const COMMAND_TYPES = new Set([
   'continuity.asset.approve',
   'continuity.asset.unbind',
   'continuity.wardrobe.assign',
+  'continuity.candidate.register',
+  'continuity.candidate.select',
   'continuity.review.record',
   'sound.voice.configure',
   'sound.voice.approve',
@@ -774,9 +780,36 @@ function migrateVideoProductionProjectV3(value, options = {}) {
   }
   return {
     ...value,
-    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    schemaVersion: 4,
     updatedAt: Math.max(value.updatedAt ?? now, now),
     soundTimeline,
+  }
+}
+
+function migrateVideoProductionProjectV4(value, options = {}) {
+  if (!isRecord(value) || value.schemaVersion !== 4 || value.kind !== PROJECT_KIND) return value
+  const now = options.now ?? value.updatedAt ?? Date.now()
+  const continuityGraph = migrateVideoContinuityGraph(value.continuityGraph, { now })
+  const nodes = clone(value.nodes)
+  if (continuityGraph.shots.length) {
+    const videoIndex = nodes.findIndex(({ id: nodeId }) => nodeId === 'video-director')
+    if (videoIndex >= 0 && ['running', 'paused', 'review', 'approved'].includes(nodes[videoIndex].status)) {
+      nodes[videoIndex].status = 'revision'
+      nodes[videoIndex].stale = Boolean(nodes[videoIndex].outputSummary)
+      nodes[videoIndex].updatedAt = Math.max(nodes[videoIndex].updatedAt ?? now, now)
+    }
+    for (let index = videoIndex + 1; index < nodes.length; index += 1) {
+      nodes[index].status = 'waiting'
+      nodes[index].stale = Boolean(nodes[index].outputSummary)
+      nodes[index].updatedAt = Math.max(nodes[index].updatedAt ?? now, now)
+    }
+  }
+  return {
+    ...value,
+    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    updatedAt: Math.max(value.updatedAt ?? now, now),
+    nodes,
+    continuityGraph,
   }
 }
 
@@ -784,7 +817,8 @@ export function migrateVideoProductionProject(input, options = {}) {
   const migratedV2 = migrateVideoProductionProjectV1(input)
   const migratedV3 = migrateVideoProductionProjectV2(migratedV2, options)
   const migratedV4 = migrateVideoProductionProjectV3(migratedV3, options)
-  const result = clone(assertVideoProductionProject(migratedV4))
+  const migratedV5 = migrateVideoProductionProjectV4(migratedV4, options)
+  const result = clone(assertVideoProductionProject(migratedV5))
   if (isRecord(options.story) && (
     result.continuityGraph.storyProjectId !== options.story.id
     || result.continuityGraph.storyRevision !== options.story.revision
@@ -949,6 +983,24 @@ export function assertVideoProductionCommand(input, projectInput) {
       if (!shot.characterBindings.some(({ characterId }) => characterId === payload.characterId)) fail('SHOT_CHARACTER_NOT_BOUND', `${payload.shotId} does not use ${payload.characterId}`)
       if (!project.continuityGraph.wardrobes.some(({ id: wardrobeId, characterId }) => wardrobeId === payload.wardrobeId && characterId === payload.characterId)) fail('WARDROBE_CHARACTER_MISMATCH', `${payload.wardrobeId} does not belong to ${payload.characterId}`)
     }
+    return command
+  }
+  if (command.type === 'continuity.candidate.register') {
+    knownFields(payload, new Set(['shotId', 'label', 'source', 'generationMode', 'inputFingerprint', 'binding']), 'command.payload')
+    id(payload.shotId, 'command.payload.shotId')
+    string(payload.label, 'command.payload.label', 1, 160)
+    if (!['comfyui-h3', 'byok-video', 'imported'].includes(payload.source)) fail('INVALID_CANDIDATE_SOURCE', 'command.payload.source is unsupported')
+    if (!GENERATION_MODES.has(payload.generationMode)) fail('INVALID_GENERATION_MODE', 'command.payload.generationMode is unsupported')
+    id(payload.inputFingerprint, 'command.payload.inputFingerprint')
+    assertContinuityVideoBinding(payload.binding)
+    registerContinuityCandidate(project?.continuityGraph ?? fail('PROJECT_REQUIRED', 'A project is required to register a candidate'), payload, { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'continuity.candidate.select') {
+    knownFields(payload, new Set(['shotId', 'candidateId']), 'command.payload')
+    id(payload.shotId, 'command.payload.shotId')
+    id(payload.candidateId, 'command.payload.candidateId')
+    selectContinuityCandidate(project?.continuityGraph ?? fail('PROJECT_REQUIRED', 'A project is required to select a candidate'), payload.shotId, payload.candidateId, { now: project.updatedAt })
     return command
   }
   if (command.type === 'continuity.review.record') {
@@ -1289,6 +1341,14 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
     case 'continuity.wardrobe.assign':
       next.continuityGraph = assignContinuityWardrobe(next.continuityGraph, payload.shotId, payload.characterId, payload.wardrobeId, { now })
       appendEvent(next, 'continuity.wardrobe-assigned', 'asset-producer', `镜头 ${payload.shotId} 已切换服饰状态；受影响复核已失效。`, now)
+      break
+    case 'continuity.candidate.register':
+      next.continuityGraph = registerContinuityCandidate(next.continuityGraph, payload, { now })
+      appendEvent(next, 'continuity.candidate-registered', 'video-director', `镜头 ${payload.shotId} 已登记不可变视频候选；需显式选择后才能复核。`, now)
+      break
+    case 'continuity.candidate.select':
+      next.continuityGraph = selectContinuityCandidate(next.continuityGraph, payload.shotId, payload.candidateId, { now })
+      appendEvent(next, 'continuity.candidate-selected', 'video-director', `镜头 ${payload.shotId} 已切换当前候选；该镜头旧复核已失效，其他镜头保持不变。`, now)
       break
     case 'continuity.review.record':
       next.continuityGraph = recordContinuityReview(next.continuityGraph, payload, { now })

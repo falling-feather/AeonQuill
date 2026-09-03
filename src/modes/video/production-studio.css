@@ -1296,6 +1296,109 @@
   gap: 5px;
 }
 
+.aq-continuity-candidates {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #ddd9ef;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aq-continuity-candidates > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-continuity-candidates > header > div,
+.aq-continuity-candidates > div,
+.aq-continuity-candidates article > div {
+  display: grid;
+  gap: 3px;
+}
+
+.aq-continuity-candidates > header strong,
+.aq-continuity-candidates article strong {
+  color: #3b354a;
+  font-size: 9px;
+}
+
+.aq-continuity-candidates small,
+.aq-continuity-candidates code,
+.aq-continuity-candidates > div > p {
+  margin: 0;
+  color: #817a91;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.aq-continuity-candidates > header button,
+.aq-continuity-candidates article button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #d7d3e5;
+  border-radius: 6px;
+  color: #625b72;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-continuity-candidates > header button.is-selected,
+.aq-continuity-candidates article.is-current button {
+  color: #fff;
+  border-color: #6553f5;
+  background: #6553f5;
+}
+
+.aq-continuity-candidates button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.aq-continuity-candidates article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #e7e3ef;
+  border-radius: 7px;
+  background: #faf9fd;
+}
+
+.aq-continuity-candidates article.is-current {
+  border-color: #8d7df7;
+  background: #f3f1ff;
+  box-shadow: 0 0 0 2px #6553f512;
+}
+
+.aq-continuity-candidates article.is-stale {
+  border-style: dashed;
+  opacity: .7;
+}
+
+.aq-continuity-candidates article > span {
+  align-self: start;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #6b607c;
+  background: #eeeaf6;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.aq-continuity-candidates article.is-current > span {
+  color: #2d6d51;
+  background: #e4f6ed;
+}
+
+.aq-continuity-candidates article > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
 .aq-continuity-review-result {
   display: grid;
   gap: 4px;

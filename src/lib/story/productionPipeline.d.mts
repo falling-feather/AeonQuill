@@ -2,7 +2,7 @@ import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from './storyPr
 import type { VideoContinuityGraph } from './continuityGraph.mjs'
 import type { SoundTimeline } from './soundTimeline.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION: 4
+export const VIDEO_PRODUCTION_SCHEMA_VERSION: 5
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION: 1
 export const VIDEO_PRODUCTION_LIMITS: Readonly<{
   maxBriefCharacters: number
@@ -38,7 +38,7 @@ export type VideoProductionNode = {
 
 export type VideoProductionProject = {
   kind: 'aeonquill.video-production'
-  schemaVersion: 4
+  schemaVersion: 5
   id: string
   title: string
   brief: string
@@ -104,7 +104,7 @@ export type VideoProductionCommandType =
   | 'node.submit-review' | 'node.approve' | 'node.request-revision' | 'node.fail' | 'node.reset'
   | 'proposal.create' | 'proposal.accept' | 'proposal.reject'
   | 'continuity.asset.bind' | 'continuity.asset.approve' | 'continuity.asset.unbind'
-  | 'continuity.wardrobe.assign' | 'continuity.review.record'
+  | 'continuity.wardrobe.assign' | 'continuity.candidate.register' | 'continuity.candidate.select' | 'continuity.review.record'
   | 'sound.voice.configure' | 'sound.voice.approve'
   | 'sound.asset.bind' | 'sound.asset.approve' | 'sound.asset.unbind' | 'sound.cue.patch'
   | 'sound.subtitle.patch' | 'sound.subtitle.approve' | 'sound.subtitles.approve-all'

@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, Film, Image as ImageIcon, KeyRound, Loader2, PlugZap, Square, Volume2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   cancelGenerationJob,
   clearGenerationAdapter,
@@ -15,11 +15,20 @@ import {
   type GenerationResult,
 } from '../../lib/generationAdapterApi'
 import type { ProcessingJob } from '../../types'
+import type { LibraryAsset } from '../../lib/libraryApi'
+
+export type VideoCandidateContext = {
+  shotId: string
+  inputFingerprint: string
+  generationMode: 'fast' | 'quality'
+}
 
 type GenerationAdaptersPanelProps = {
   projectId?: string
   projectTitle: string
   defaultPrompt: string
+  videoCandidateContext?: VideoCandidateContext
+  onVideoAssetReady?: (asset: LibraryAsset, context: VideoCandidateContext) => void
 }
 
 type AdapterForm = GenerationAdapterConfig
@@ -57,7 +66,7 @@ function money(value: number | null) {
   return value === null ? '未回报' : `$${value.toFixed(4)}`
 }
 
-export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt }: GenerationAdaptersPanelProps) {
+export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt, videoCandidateContext, onVideoAssetReady }: GenerationAdaptersPanelProps) {
   const [status, setStatus] = useState<GenerationAdapterStatus>(EMPTY_STATUS)
   const [forms, setForms] = useState<Record<GenerationCapability, AdapterForm>>({
     image: createForm('image'),
@@ -73,6 +82,8 @@ export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt
   const [videoReference, setVideoReference] = useState('')
   const [lastResult, setLastResult] = useState<GenerationResult | null>(null)
   const [videoJob, setVideoJob] = useState<ProcessingJob | null>(null)
+  const [videoJobContext, setVideoJobContext] = useState<VideoCandidateContext | null>(null)
+  const deliveredVideoJobsRef = useRef(new Set<string>())
 
   useEffect(() => {
     let disposed = false
@@ -103,6 +114,13 @@ export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt
       window.clearTimeout(timer)
     }
   }, [videoJob?.id, videoJob?.status])
+
+  useEffect(() => {
+    if (!videoJob || videoJob.status !== 'completed' || !videoJob.libraryAsset || !videoJobContext || !onVideoAssetReady) return
+    if (deliveredVideoJobsRef.current.has(videoJob.id)) return
+    deliveredVideoJobsRef.current.add(videoJob.id)
+    onVideoAssetReady(videoJob.libraryAsset as unknown as LibraryAsset, videoJobContext)
+  }, [onVideoAssetReady, videoJob, videoJobContext])
 
   const generatedAsset = useMemo(() => {
     if (lastResult) return lastResult.asset
@@ -191,6 +209,7 @@ export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt
     if (!projectId) return setNotice('当前项目尚未完成 SQLite 同步，暂不能创建外部视频任务。')
     setBusy('video-run')
     setVideoJob(null)
+    setVideoJobContext(videoCandidateContext ?? null)
     try {
       const payload = await createAdapterVideoJob({
         projectId,
@@ -202,7 +221,9 @@ export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt
         ...(videoReference.trim() ? { referenceAssetId: videoReference.trim() } : {}),
       })
       setVideoJob(payload.job)
-      setNotice('外部视频已进入统一 Job 队列；可以取消，完成后会自动写入项目资源库。')
+      setNotice(videoCandidateContext
+        ? '外部视频已进入统一 Job 队列；完成后会写入资源库并登记为当前镜头的新候选。'
+        : '外部视频已进入统一 Job 队列；可以取消，完成后会自动写入项目资源库。')
     } catch (error) {
       setNotice(messageOf(error))
     } finally {
@@ -272,9 +293,10 @@ export function GenerationAdaptersPanel({ projectId, projectTitle, defaultPrompt
                 </div>
               ) : (
                 <div className="aq-generation-adapter-smoke">
+                  {videoCandidateContext ? <small>目标镜头：{videoCandidateContext.shotId} · 完成后登记候选，仍需显式选择与人工复核。</small> : null}
                   <textarea value={videoPrompt} maxLength={6_000} onChange={(event) => setVideoPrompt(event.target.value)} aria-label="API 视频提示词" />
                   <input value={videoReference} onChange={(event) => setVideoReference(event.target.value)} placeholder="可选：首帧资源 SHA-256" spellCheck={false} />
-                  <button type="button" onClick={() => void runVideo()} disabled={!entry.configured || busy !== null || !videoPrompt.trim()}>{busy === 'video-run' ? <Loader2 size={13} className="is-spinning" /> : <Film size={13} />} 创建 5 秒 720P 任务</button>
+                  <button type="button" onClick={() => void runVideo()} disabled={!entry.configured || busy !== null || !videoPrompt.trim()}>{busy === 'video-run' ? <Loader2 size={13} className="is-spinning" /> : <Film size={13} />} {videoCandidateContext ? '生成 5 秒 720P 候选' : '创建 5 秒 720P 任务'}</button>
                   {videoJob ? <div className={`aq-generation-job is-${videoJob.status}`}><span>{videoJob.status} · {videoJob.progress}%</span><small>{videoJob.detail}</small>{!['completed', 'failed', 'cancelled'].includes(videoJob.status) ? <button type="button" onClick={() => void cancelVideo()} disabled={busy !== null}><Square size={11} />取消</button> : null}</div> : null}
                 </div>
               )}
