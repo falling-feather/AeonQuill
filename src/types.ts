@@ -366,6 +366,7 @@ export type VideoJobRequest = {
   sourceElementId?: string
   sourceImageDataUrl?: string
   lastFrameImageDataUrl?: string
+  candidateBinding?: import('./lib/story/localVideoCandidate.mjs').LocalVideoCandidateJobBinding
   director?: {
     camera: 'locked' | 'push-in' | 'pan' | 'orbit' | 'follow'
     motion: 'subtle' | 'natural' | 'dynamic'
@@ -675,6 +676,7 @@ export type ProcessingJob = {
   maskUrl?: string
   outputVersion?: ProcessingJobOutputVersion
   libraryAsset?: Record<string, unknown>
+  localCandidateBackfill?: import('./lib/story/localVideoCandidate.mjs').LocalVideoCandidateBackfill
   maskLibraryAsset?: Record<string, unknown>
   providerUsage?: {
     estimatedCostUsd: number

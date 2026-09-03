@@ -1346,6 +1346,26 @@
   cursor: pointer;
 }
 
+.aq-continuity-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.aq-continuity-candidate-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.aq-continuity-candidate-actions button.is-local {
+  color: #5847c9;
+  border-color: #cfc8ff;
+  background: #f5f2ff;
+}
+
 .aq-continuity-candidates > header button.is-selected,
 .aq-continuity-candidates article.is-current button {
   color: #fff;

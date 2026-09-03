@@ -39,6 +39,7 @@ import {
   type VideoCharacterMode,
 } from '../../lib/story/productionPipeline.mjs'
 import { continuityGraphSummary } from '../../lib/story/continuityGraph.mjs'
+import { reconcileLocalVideoCandidateJob } from '../../lib/story/localVideoCandidate.mjs'
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from '../../lib/story/storyProject.mjs'
 import type { LibraryAsset, LibraryAssetInsertion } from '../../lib/libraryApi'
 import { flushWorkspaceModeDocument } from '../../lib/projectApi'
@@ -75,6 +76,7 @@ type ProductionStudioProps = {
   onLibraryAssetConsumed?: (nonce: number) => void
   jobs: ProcessingJob[]
   onJobTracked: (job: ProcessingJob) => void
+  onPrepareLocalShot?: (continuityShotId: string) => void
 }
 
 type ContinuitySlotView = {
@@ -133,7 +135,7 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked }: ProductionStudioProps) {
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -157,6 +159,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const projectRef = useRef(project)
   const consumedLibraryAssetRef = useRef<number | null>(null)
   const consumedSoundBindingsRef = useRef(new Set<string>())
+  const consumedLocalCandidateJobsRef = useRef(new Set<string>())
   const [soundJobBusy, setSoundJobBusy] = useState<'prepare-speech' | 'render-mix' | 'cancel' | 'retry' | null>(null)
   const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
   const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
@@ -357,6 +360,52 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
       setNotice(`已把 ${applied} 条 TTS 产物回填到声音时间线；请逐条试听并人工批准。`)
     }
   }, [onProjectChange, soundJobs])
+
+  useEffect(() => {
+    if (!workspaceProjectId || !workspaceDocumentId) return
+    let next = projectRef.current
+    let registered = 0
+    const rejected: string[] = []
+    const orderedJobs = jobs.slice().sort((left, right) => left.createdAt - right.createdAt)
+    for (const job of orderedJobs) {
+      const reconciliation = reconcileLocalVideoCandidateJob(next, job, {
+        projectId: workspaceProjectId,
+        documentId: workspaceDocumentId,
+      })
+      if (reconciliation.status === 'ignored' || reconciliation.status === 'foreign' || reconciliation.status === 'pending') continue
+      const key = reconciliation.key ?? `${job.id}:invalid`
+      if (consumedLocalCandidateJobsRef.current.has(key)) continue
+      if (reconciliation.status === 'already-registered') {
+        consumedLocalCandidateJobsRef.current.add(key)
+        continue
+      }
+      if (reconciliation.status === 'rejected') {
+        consumedLocalCandidateJobsRef.current.add(key)
+        rejected.push(`${reconciliation.code} · ${reconciliation.message}`)
+        continue
+      }
+      if (reconciliation.status !== 'ready') continue
+      try {
+        const command = createVideoProductionCommand(next, 'continuity.candidate.register', reconciliation.payload, {
+          id: `production-local-${sequenceRef.current++}`,
+          actor: 'orchestrator',
+        })
+        next = applyVideoProductionCommand(next, command, { now: Math.max(Date.now(), next.updatedAt) })
+        consumedLocalCandidateJobsRef.current.add(key)
+        registered += 1
+      } catch (error) {
+        consumedLocalCandidateJobsRef.current.add(key)
+        rejected.push(messageOf(error))
+      }
+    }
+    if (registered) {
+      projectRef.current = next
+      onProjectChange(next)
+      setNotice(`已把 ${registered} 个本地 H3 成品写入对应镜头候选池；未自动替换当前选择。`)
+    } else if (rejected.length) {
+      setNotice(`本地 H3 候选未回填：${rejected.at(-1)}`)
+    }
+  }, [jobs, onProjectChange, workspaceDocumentId, workspaceProjectId])
 
   const submitSoundJob = async (action: 'prepare-speech' | 'render-mix', options: { format?: 'mp3' | 'wav'; speechBudgetUsd?: number } = {}) => {
     if (!workspaceProjectId || !workspaceDocumentId) {
@@ -849,12 +898,20 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
                       <strong>视频候选池</strong>
                       <small>{continuityCandidates.length} 个历史版本；上游变化后旧候选保留但不可误用</small>
                     </div>
-                    <button
-                      type="button"
-                      className={candidateTargetShotId === continuityShot.id ? 'is-selected' : ''}
-                      disabled={continuityShot.status === 'blocked'}
-                      onClick={() => chooseCandidateAsset(continuityShot.id)}
-                    >{candidateTargetShotId === continuityShot.id ? '等待资源库视频' : '从资源库添加候选'}</button>
+                    <span className="aq-continuity-candidate-actions">
+                      <button
+                        type="button"
+                        className="is-local"
+                        disabled={continuityShot.status === 'blocked' || !onPrepareLocalShot}
+                        onClick={() => onPrepareLocalShot?.(continuityShot.id)}
+                      ><RefreshCw size={11} />{continuityLatestReview?.decision === 'retry' ? '本地 H3 定向重生' : '本地 H3 生成候选'}</button>
+                      <button
+                        type="button"
+                        className={candidateTargetShotId === continuityShot.id ? 'is-selected' : ''}
+                        disabled={continuityShot.status === 'blocked'}
+                        onClick={() => chooseCandidateAsset(continuityShot.id)}
+                      >{candidateTargetShotId === continuityShot.id ? '等待资源库视频' : '从资源库添加候选'}</button>
+                    </span>
                   </header>
                   <div>
                     {continuityCandidates.length ? continuityCandidates.map((candidate) => {
@@ -876,7 +933,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
                           >{selected ? '已选中' : stale ? '不可用于当前输入' : '设为当前'}</button>
                         </article>
                       )
-                    }) : <p>暂无候选。可从资源库添加，或在下方用视频 API 生成；登记后仍需手动“设为当前”。</p>}
+                    }) : <p>暂无候选。可定向提交本地 H3、从资源库添加，或在下方用视频 API 生成；登记后仍需手动“设为当前”。</p>}
                   </div>
                 </section>
                 <div className="aq-continuity-score-grid">

@@ -111,6 +111,15 @@ import {
   H3_SCENARIO_PRESETS,
 } from '../src/lib/video/h3PromptAgent.mjs'
 import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
+import {
+  assertLocalVideoCandidateJobBinding,
+  createRejectedLocalVideoCandidateBackfill,
+  retargetLocalVideoCandidateSubmission,
+} from '../src/lib/story/localVideoCandidate.mjs'
+import {
+  authoritativeLocalVideoCandidate,
+  promoteLocalVideoCandidateOutput,
+} from './local-video-candidate.mjs'
 
 const distDirectory = join(projectRoot, 'dist')
 const inputDirectory = join(runtimeDirectory, 'inputs')
@@ -422,6 +431,10 @@ function validateVideoRequest(body) {
     director,
   })
 
+  const candidateBinding = body.candidateBinding === undefined
+    ? undefined
+    : structuredClone(assertLocalVideoCandidateJobBinding(body.candidateBinding))
+
   return {
     mode,
     prompt,
@@ -433,6 +446,7 @@ function validateVideoRequest(body) {
     seed,
     audio,
     sourceElementId: typeof body.sourceElementId === 'string' ? body.sourceElementId : undefined,
+    ...(candidateBinding ? { candidateBinding } : {}),
     director,
     hasLastFrame: mode === 'image-to-video' && Boolean(body.lastFrameImageDataUrl),
   }
@@ -1854,11 +1868,42 @@ async function runVideoJob(jobId, { signal }) {
     await store.log(jobId, 'success', `视频已保存：${finalComfyOutput.subfolder ? `${finalComfyOutput.subfolder}/` : ''}${finalComfyOutput.filename}`)
     const outputVersion = await describeOutputVersion(job, finalAssetPath, 'video/mp4')
     const delivery = await deliverConfiguredOutput(jobId, finalAssetPath, assetFilename)
+    const completedAt = Date.now()
+    let candidatePromotion = {}
+    if (job.request?.candidateBinding) {
+      try {
+        candidatePromotion = await promoteLocalVideoCandidateOutput({
+          job,
+          outputPath: finalAssetPath,
+          workspaceStore,
+          projectStore,
+          now: completedAt,
+        })
+        await store.log(jobId, 'success', `镜头候选已写入项目资源库 · ${candidatePromotion.libraryAsset.version.assetId.slice(0, 12)}…`)
+      } catch (promotionError) {
+        const code = String(promotionError?.code || 'LOCAL_CANDIDATE_BACKFILL_FAILED').slice(0, 120)
+        const message = String(promotionError?.message || '本地 H3 视频候选回填失败').slice(0, 1_000)
+        candidatePromotion = {
+          localCandidateBackfill: createRejectedLocalVideoCandidateBackfill({
+            jobId: job.id,
+            binding: job.request.candidateBinding,
+            code,
+            message,
+            now: completedAt,
+          }),
+        }
+        await store.log(jobId, 'warning', `${code}：${message}；原始视频仍保留在任务输出中`)
+      }
+    }
     await store.update(jobId, {
       status: 'completed',
       phase: 'completed',
       progress: 100,
-      detail: '生成完成，已回填画布',
+      detail: candidatePromotion.libraryAsset
+        ? '生成完成，已入库并等待镜头候选回填'
+        : candidatePromotion.localCandidateBackfill?.status === 'rejected'
+          ? '生成完成；镜头候选回填因身份或输入变化被拒绝'
+          : '生成完成，已回填画布',
       outputUrl: `/api/assets/${encodeURIComponent(assetFilename)}`,
       output: {
         filename: finalComfyOutput.filename,
@@ -1866,9 +1911,10 @@ async function runVideoJob(jobId, { signal }) {
         type: finalComfyOutput.type || 'output',
       },
       outputVersion,
+      ...candidatePromotion,
       intermediateOutputs,
       delivery,
-      completedAt: Date.now(),
+      completedAt,
       temporaryOutputPath: undefined,
     })
   } catch (error) {
@@ -2841,9 +2887,33 @@ async function createStorageCleanupJob(body, options = {}) {
 }
 
 async function createVideoJob(body, retrySource, options = {}) {
-  const request = retrySource ? { ...retrySource.request, preset: 'fast' } : validateVideoRequest(body)
   const attempt = retrySource ? (retrySource.scheduling?.attempt || 1) + 1 : 1
   const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey)
+  let request = retrySource ? { ...retrySource.request, preset: 'fast' } : validateVideoRequest(body)
+  if (request.candidateBinding) {
+    if (!retrySource && request.candidateBinding.submissionId !== idempotencyKey) {
+      throw Object.assign(new Error('镜头候选提交身份与 Idempotency-Key 不一致'), {
+        code: 'LOCAL_CANDIDATE_SUBMISSION_MISMATCH',
+        status: 409,
+      })
+    }
+    const authority = authoritativeLocalVideoCandidate(request.candidateBinding, { workspaceStore }, {
+      requireProductionRevision: !retrySource,
+    })
+    if (retrySource) {
+      request = {
+        ...request,
+        candidateBinding: retargetLocalVideoCandidateSubmission(request.candidateBinding, {
+          productionRevision: authority.production.revision,
+          continuityRevision: authority.production.continuityGraph.revision,
+          storyRevision: authority.production.continuityGraph.storyRevision,
+          inputFingerprint: authority.shot.inputFingerprint,
+          generationMode: authority.production.settings.generationMode,
+          submissionId: idempotencyKey,
+        }),
+      }
+    }
+  }
   const requestHashValue = retrySource
     ? hashRequest('video-retry', { sourceJobId: retrySource.id, sourceRequestHash: retrySource.requestHash, attempt })
     : hashRequest('video', body)

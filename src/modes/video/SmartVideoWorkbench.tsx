@@ -62,6 +62,8 @@ import {
   synchronizeVideoProductionProjectForStory,
   type VideoProductionProject,
 } from '../../lib/story/productionPipeline.mjs'
+import { createLocalVideoCandidateJobBinding } from '../../lib/story/localVideoCandidate.mjs'
+import { flushWorkspaceModeDocument } from '../../lib/projectApi'
 import {
   cancelVideoJob,
   createFinalCutJob,
@@ -665,14 +667,47 @@ export function SmartVideoWorkbench({
           dataUrl,
         }))
       const submissions = compileConfirmedVideoRequests(current, confirmation, payloads)
+      const workspaceDocumentId = projectId ?? result.project.id
+      const continuityShotByStoryShotId = new Map(result.production.continuityGraph.shots
+        .filter(({ storyShotId }) => Boolean(storyShotId))
+        .map((shot) => [shot.storyShotId as string, shot]))
+      const candidateEligibleItems = new Set(current.items
+        .filter((item) => {
+          const continuityShot = continuityShotByStoryShotId.get(item.shotId)
+          return Boolean(continuityShot && continuityShot.status !== 'blocked')
+        })
+        .map(({ id }) => id))
+      if (workspaceProjectId && candidateEligibleItems.size) {
+        await flushWorkspaceModeDocument(workspaceDocumentId)
+      }
+      let candidateBoundCount = 0
       for (const submission of submissions) {
-        const job = await createVideoJob(submission.request, {
+        const item = current.items.find(({ id }) => id === submission.itemId)
+        const continuityShot = item ? continuityShotByStoryShotId.get(item.shotId) : undefined
+        const candidateBinding = workspaceProjectId && item && continuityShot && candidateEligibleItems.has(item.id)
+          ? createLocalVideoCandidateJobBinding({
+              projectId: workspaceProjectId,
+              documentId: workspaceDocumentId,
+              production: result.production,
+              shotId: continuityShot.id,
+              executionItemId: item.id,
+              submissionId: submission.idempotencyKey,
+            })
+          : undefined
+        const job = await createVideoJob({
+          ...submission.request,
+          ...(candidateBinding ? { candidateBinding } : {}),
+        }, {
           idempotencyKey: submission.idempotencyKey,
           priority: 45,
         })
+        if (candidateBinding) candidateBoundCount += 1
         setJobs((existing) => upsertJob(existing, job))
         setLatestJobIdByItem((existing) => ({ ...existing, [submission.itemId]: job.id }))
         setSubmittedJobIds((existing) => existing.includes(job.id) ? existing : [...existing, job.id])
+      }
+      if (candidateBoundCount) {
+        setBridgeMessage(`${candidateBoundCount} 个本地 H3 任务已绑定到明确镜头；完成后将自动入库并进入候选池。`)
       }
     } catch (nextError) {
       setExecutionError(errorMessage(nextError))
@@ -823,6 +858,20 @@ export function SmartVideoWorkbench({
     onPlanReady?.(next)
   }
 
+  const prepareLocalCandidateShot = (continuityShotId: string) => {
+    const continuityShot = result.production.continuityGraph.shots.find(({ id }) => id === continuityShotId)
+    const storyShotId = continuityShot?.storyShotId
+    if (!continuityShot || !storyShotId || !plannedShots.some(({ shot }) => shot.id === storyShotId)) {
+      setExecutionError('目标镜头与当前故事分镜不再一致，请先重新同步生产图。')
+      return
+    }
+    setSelectedShotIds([storyShotId])
+    invalidateExecution()
+    setExecutionError(null)
+    setBridgeMessage(`已只选择“${continuityShot.label}”；重新检查清单后可提交本地 H3 定向重生。`)
+    revealWorkspace('execution')
+  }
+
   useEffect(() => {
     if (!libraryAsset || consumedLibraryAssetRef.current === libraryAsset.nonce) return
     if (activeWorkspace === 'production') return
@@ -912,6 +961,7 @@ export function SmartVideoWorkbench({
           onLibraryAssetConsumed={onLibraryAssetConsumed}
           jobs={jobs}
           onJobTracked={(job) => setJobs((existing) => upsertJob(existing, job))}
+          onPrepareLocalShot={prepareLocalCandidateShot}
         />
         {activeWorkspace !== 'production' ? (
           <>

@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { startIsolatedBridge } from './qa-runtime.mjs'
+import { ProjectStore } from '../server/project-store.mjs'
+import {
+  createLocalVideoCandidateJobBinding,
+  createReadyLocalVideoCandidateBackfill,
+} from '../src/lib/story/localVideoCandidate.mjs'
 
 const fixturePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg==', 'base64')
 function fixtureMp4(index) {
@@ -89,10 +94,13 @@ const executablePath = process.platform === 'win32'
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const issues = []
+let plannedBridgeRestart = false
 
 page.on('pageerror', (error) => issues.push(`pageerror: ${error.message}`))
 page.on('console', (message) => {
-  if (message.type() === 'error' || message.type() === 'warning') issues.push(`${message.type()}: ${message.text()}`)
+  const entry = `${message.type()}: ${message.text()}`
+  if (plannedBridgeRestart && entry.includes('net::ERR_CONNECTION_RESET')) return
+  if (message.type() === 'error' || message.type() === 'warning') issues.push(entry)
 })
 page.on('response', (response) => {
   if (response.status() >= 400) issues.push(`http ${response.status()}: ${response.url()}`)
@@ -128,6 +136,122 @@ async function bindProjectImageToContinuityCards(studio, group, requiredOnly = f
     await card.getByRole('button', { name: '批准', exact: true }).click()
     await card.getByText('已批准', { exact: true }).waitFor({ state: 'visible' })
   }
+}
+
+async function injectCompletedLocalCandidateJobs(workspaceProjectId) {
+  const catalogResponse = await bridge.request('/api/workspace/catalog')
+  assert.equal(catalogResponse.ok, true)
+  const catalog = await catalogResponse.json()
+  const workspaceProject = catalog.catalog.projects.find(({ id }) => id === workspaceProjectId)
+  const documentId = workspaceProject?.documents.find(({ modeId }) => modeId === 'smart-video')?.id
+  assert.ok(documentId)
+  const documentResponse = await bridge.request(`/api/workspace/documents/${encodeURIComponent(documentId)}?projectId=${encodeURIComponent(workspaceProjectId)}&modeId=smart-video`)
+  assert.equal(documentResponse.ok, true)
+  const stored = (await documentResponse.json()).document
+  const production = JSON.parse(stored.value).production
+  const shot = production.continuityGraph.shots[0]
+  assert.ok(shot)
+  assert.notEqual(shot.status, 'blocked')
+
+  const projectStore = new ProjectStore(join(bridge.runtimeDirectory, 'projects'))
+  const fixtureJobs = []
+  await projectStore.open()
+  try {
+    for (let index = 1; index <= 2; index += 1) {
+      const jobId = `video-qa-local-000${index}-4000-8000-00000000000${index}`
+      const submissionId = `story-local-${String(index).padStart(48, String(index))}`
+      const executionItemId = `execution-local-candidate-${index}`
+      const binding = createLocalVideoCandidateJobBinding({
+        projectId: workspaceProjectId,
+        documentId,
+        production,
+        shotId: shot.id,
+        executionItemId,
+        submissionId,
+      })
+      const bytes = fixtureMp4(10 + index)
+      const libraryAsset = await projectStore.createLibraryAsset({
+        scope: 'project',
+        projectId: workspaceProjectId,
+        title: `P7 本地 H3 候选 ${index}`,
+        description: '隔离 P7 夹具生成的本地 H3 候选；不启动真实 ComfyUI。',
+        tags: ['h3', 'p7', '镜头候选'],
+        dataUrl: `data:video/mp4;base64,${bytes.toString('base64')}`,
+      }, {
+        source: 'local-h3-video-candidate',
+        now: Date.now() + index,
+        provenance: {
+          jobId,
+          retryOf: index === 2 ? fixtureJobs[0].id : null,
+          projectId: workspaceProjectId,
+          documentId,
+          productionId: binding.productionId,
+          productionRevision: binding.productionRevision,
+          continuityRevision: binding.continuityRevision,
+          storyRevision: binding.storyRevision,
+          shotId: binding.shotId,
+          inputFingerprint: binding.inputFingerprint,
+          generationMode: binding.generationMode,
+          executionItemId,
+          submissionId,
+          workflowVersion: 'h3-quality-matrix-v3',
+        },
+      })
+      const createdAt = Date.now() + 100 + index
+      const job = {
+        id: jobId,
+        kind: 'video',
+        tool: 'text-to-video',
+        label: '文生视频',
+        status: 'completed',
+        phase: 'completed',
+        progress: 100,
+        detail: 'P7 隔离夹具：生成完成，已入库并等待镜头候选回填',
+        createdAt,
+        updatedAt: createdAt,
+        completedAt: createdAt,
+        workflowVersion: 'h3-quality-matrix-v3',
+        requestHash: String(index).repeat(64),
+        ...(index === 2 ? { retryOf: fixtureJobs[0].id } : {}),
+        scheduling: {
+          resourceClass: 'gpu',
+          priority: 45,
+          timeoutMs: 7_200_000,
+          idempotencyKey: submissionId,
+          attempt: index,
+          maxAttempts: 3,
+          queuedAt: createdAt - 100,
+        },
+        request: {
+          mode: 'text-to-video',
+          prompt: '隔离夹具：雨夜武侠人物走入山门',
+          aspectRatio: '16:9',
+          duration: 5,
+          preset: 'fast',
+          modelProfile: 'auto',
+          seed: index,
+          audio: false,
+          candidateBinding: binding,
+        },
+        libraryAsset,
+        localCandidateBackfill: createReadyLocalVideoCandidateBackfill({
+          jobId,
+          binding,
+          libraryAsset,
+          now: createdAt,
+        }),
+        logs: [{ at: createdAt, level: 'success', message: 'P7 fixture completed' }],
+      }
+      fixtureJobs.push(job)
+    }
+  } finally {
+    projectStore.close()
+  }
+  const jobsPath = join(bridge.runtimeDirectory, 'jobs.json')
+  const currentJobs = JSON.parse(await readFile(jobsPath, 'utf8'))
+  await writeFile(jobsPath, JSON.stringify([...fixtureJobs, ...currentJobs], null, 2), 'utf8')
+  await bridge.restart()
+  return { documentId, jobIds: fixtureJobs.map(({ id }) => id) }
 }
 
 try {
@@ -300,6 +424,47 @@ try {
   await restoredSoundTimeline.getByText(/sha256:/u).first().waitFor({ state: 'visible' })
   await restoredSoundTimeline.getByText('已批准', { exact: true }).first().waitFor({ state: 'visible' })
   await restoredSoundTimeline.getByRole('link', { name: '试听 WAV', exact: true }).waitFor({ state: 'visible' })
+
+  await page.waitForTimeout(700)
+  plannedBridgeRestart = true
+  const localFixture = await injectCompletedLocalCandidateJobs(workspaceProjectId)
+  assert.equal(localFixture.jobIds.length, 2)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  plannedBridgeRestart = false
+  await page.getByText('多智能体制片工作室', { exact: true }).first().waitFor({ state: 'visible', timeout: 10_000 })
+  const localStudio = page.getByRole('region', { name: '多智能体制片工作室' })
+  await localStudio.getByText('H3 镜头生成', { exact: true }).first().click()
+  const localCandidatePool = localStudio.getByRole('region', { name: '当前镜头视频候选' })
+  await page.waitForFunction(() => document.querySelectorAll('[data-video-candidate]').length === 4)
+  const localCandidateCards = localCandidatePool.locator('[data-video-candidate]').filter({ hasText: '本地 H3' })
+  assert.equal(await localCandidateCards.count(), 2)
+  await localCandidateCards.nth(0).getByRole('button', { name: '设为当前', exact: true }).click()
+  await localStudio.getByLabel('人工结论').selectOption('retry')
+  await localStudio.getByRole('button', { name: '记录人工结论', exact: true }).click()
+  await localStudio.getByText(/候选 #3 · 需定向重生/u).waitFor({ state: 'visible' })
+  await localCandidatePool.getByRole('button', { name: '本地 H3 定向重生', exact: true }).click()
+  await page.getByRole('heading', { name: '故事编排与受控执行', exact: true }).waitFor({ state: 'visible' })
+  await page.getByText(/1 个计划镜头/u).last().waitFor({ state: 'visible' })
+
+  await page.locator('.aq-video-tool-rail').getByRole('button', { name: '制片', exact: true }).click()
+  const returnedStudio = page.getByRole('region', { name: '多智能体制片工作室' })
+  await returnedStudio.getByText('H3 镜头生成', { exact: true }).first().click()
+  const returnedPool = returnedStudio.getByRole('region', { name: '当前镜头视频候选' })
+  const returnedLocalCards = returnedPool.locator('[data-video-candidate]').filter({ hasText: '本地 H3' })
+  await returnedLocalCards.nth(1).getByRole('button', { name: '设为当前', exact: true }).click()
+  await returnedStudio.getByLabel('人工结论').selectOption('accept')
+  await returnedStudio.getByRole('button', { name: '记录人工结论', exact: true }).click()
+  await returnedStudio.getByText(/候选 #4 · 已接受/u).waitFor({ state: 'visible' })
+
+  await page.waitForTimeout(700)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByText('多智能体制片工作室', { exact: true }).first().waitFor({ state: 'visible', timeout: 10_000 })
+  const finalStudio = page.getByRole('region', { name: '多智能体制片工作室' })
+  await finalStudio.getByText('H3 镜头生成', { exact: true }).first().click()
+  const finalCandidatePool = finalStudio.getByRole('region', { name: '当前镜头视频候选' })
+  assert.equal(await finalCandidatePool.locator('[data-video-candidate]').count(), 4)
+  assert.equal(await finalCandidatePool.locator('[data-video-candidate]').filter({ hasText: '本地 H3' }).count(), 2)
+  await finalStudio.getByText(/候选 #4 · 已接受/u).waitFor({ state: 'visible' })
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-desktop.png'), fullPage: true })
 
   await page.setViewportSize({ width: 390, height: 844 })
@@ -308,7 +473,7 @@ try {
   assert.equal(await page.locator('.aq-video-workbench').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-mobile.png'), fullPage: true })
   assert.deepEqual(issues, [])
-  console.log('✓ Production profiles, two-version video candidate replace/accept, batch BYOK TTS, approved mix/subtitles, reload persistence, and responsive layout passed')
+  console.log('✓ Production profiles, BYOK plus two local H3 candidate replace/accept, directed single-shot regeneration, batch TTS, reload idempotency, and responsive layout passed')
 } catch (error) {
   await page.screenshot({ path: join(artifactDirectory, 'production-agent-failure.png'), fullPage: true }).catch(() => undefined)
   console.error(JSON.stringify({ url: page.url(), issues, body: (await page.locator('body').innerText().catch(() => '')).slice(0, 8000), artifactDirectory }, null, 2))
