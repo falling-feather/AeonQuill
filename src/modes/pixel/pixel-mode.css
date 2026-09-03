@@ -2581,3 +2581,190 @@
 @media (max-width: 520px) {
   .aq-pixel-event-row { grid-template-columns: 1fr; }
 }
+
+/* V0.7.44 deterministic 3×3 terrain inference and preview */
+.aq-pixel-terrain-composer {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  margin-top: 3px;
+  padding-top: 8px;
+  border-top: 1px dashed #d9d8e5;
+}
+
+.aq-pixel-terrain-heading,
+.aq-pixel-terrain-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.aq-pixel-terrain-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #423d65;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.aq-pixel-terrain-heading output {
+  color: #6553f5;
+  font: 700 8px/1.2 ui-monospace, monospace;
+}
+
+.aq-pixel-terrain-presets,
+.aq-pixel-terrain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.aq-pixel-terrain-presets button,
+.aq-pixel-terrain-actions button {
+  min-width: 0;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid #cbc7f6;
+  border-radius: 7px;
+  color: #5547d8;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-pixel-terrain-actions button {
+  flex: 1 1 105px;
+}
+
+.aq-pixel-terrain-actions button:disabled {
+  color: #9b9da6;
+  border-color: #e2e3e8;
+  background: #f6f6f8;
+  cursor: not-allowed;
+}
+
+.aq-pixel-terrain-composer-body {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(96px, .8fr) minmax(104px, 1.2fr);
+  align-items: stretch;
+  gap: 7px;
+}
+
+.aq-pixel-terrain-occupancy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.aq-pixel-terrain-occupancy button {
+  min-width: 0;
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  gap: 1px;
+  padding: 2px;
+  overflow: hidden;
+  border: 1px solid #dedfe5;
+  border-radius: 5px;
+  color: #9899a2;
+  background: #f5f5f7;
+  cursor: pointer;
+}
+
+.aq-pixel-terrain-occupancy button span {
+  overflow: hidden;
+  font-size: 7px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aq-pixel-terrain-occupancy button small {
+  color: inherit;
+  font: 700 7px/1 ui-monospace, monospace;
+}
+
+.aq-pixel-terrain-occupancy button.is-active {
+  color: #3f359e;
+  border-color: #8d84f5;
+  background: #eceaff;
+}
+
+.aq-pixel-terrain-occupancy button.is-fallback {
+  color: #9b571d;
+  border-color: #e2a866;
+  background: #fff5e8;
+}
+
+.aq-pixel-terrain-preview {
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.aq-pixel-terrain-preview canvas {
+  display: block;
+  width: 100%;
+  max-height: 150px;
+  aspect-ratio: 1;
+  border: 1px solid #d7d8e1;
+  border-radius: 7px;
+  image-rendering: pixelated;
+  background-color: #f7f7f9;
+  background-image:
+    linear-gradient(45deg, #e5e5ea 25%, transparent 25%),
+    linear-gradient(-45deg, #e5e5ea 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e5e5ea 75%),
+    linear-gradient(-45deg, transparent 75%, #e5e5ea 75%);
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-size: 10px 10px;
+}
+
+.aq-pixel-terrain-preview figcaption,
+.aq-pixel-terrain-warning,
+.aq-pixel-terrain-error {
+  margin: 0;
+  color: #777b87;
+  font-size: 7px;
+  line-height: 1.4;
+}
+
+.aq-pixel-terrain-warning {
+  padding: 5px 6px;
+  border: 1px solid #f0d2ad;
+  border-radius: 6px;
+  color: #87501f;
+  background: #fff8ef;
+}
+
+.aq-pixel-terrain-error {
+  display: grid;
+  place-content: center;
+  min-height: 96px;
+  padding: 8px;
+  border: 1px dashed #dadbe3;
+  border-radius: 7px;
+  text-align: center;
+}
+
+@media (max-width: 420px) {
+  .aq-pixel-terrain-composer-body {
+    grid-template-columns: 1fr;
+  }
+
+  .aq-pixel-terrain-occupancy {
+    max-width: 180px;
+    justify-self: center;
+  }
+}

@@ -2,13 +2,13 @@
 
 > 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、调色板循环、动画事件及游戏交付的可复核事实。
 >
-> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，以及 `PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包。
+> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，`PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包，以及 `PIXEL-008 / V0.7.44` 建立的确定性 Terrain 九宫格推断、预览和 PNG/JSON 交付。
 >
 > **最后一次更新时间**：2026-09-03
 >
 > **更新者**：主开发、像素模式责任域、前端与游戏资产责任域
 >
-> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`
+> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`、`PIXEL-008 / V0.7.44`
 
 ---
 
@@ -206,4 +206,41 @@ type PixelAnimationEvent = {
 
 P7 在 D 盘隔离项目和后台系统 Edge 中建立“灵光轮转”乒乓循环（80ms）、“八方演武”往返片段和绑定帧的“剑鸣”音效事件（`sfx.sword`），播放预览后实际下载两文件活动片段包及既有六文件游戏包。脚本逐项验证项目、manifest 和 clip 为 schema v5，Atlas 8 个唯一帧、播放序列 14 项且事件/循环同源；刷新后控件从 SQLite 正文恢复，1440×900 与 390×844 无页面级横向溢出，页面无 warning/error。
 
-本扩展不实现脚本事件执行、音频资源内嵌、循环曲线、GPU Shader 导出、烘焙 GIF/APNG、自动九宫格拼接、Worker 化或 Godot/Unity/RPG Maker 原生导入器。本检查点没有启动 ComfyUI/H3，没有读取或改写正式项目、既有 output、D 盘正式桌面或快捷方式，也没有重新封装安装包。
+本扩展不实现脚本事件执行、音频资源内嵌、循环曲线、GPU Shader 导出、烘焙 GIF/APNG、Worker 化或 Godot/Unity/RPG Maker 原生导入器。本检查点没有启动 ComfyUI/H3，没有读取或改写正式项目、既有 output、D 盘正式桌面或快捷方式，也没有重新封装安装包。
+
+## 13. V0.7.44 Terrain 九宫格输入与角门
+
+`createPixelTerrainPreviewLayout()` 接受严格的目标 `terrainId` 和固定九项布尔占用数组。数组按行优先表示 3×3 网格；网格外始终视为空，空格不匹配图块。每个占用格继续复用 N/NE/E/SE/S/SW/W/NW 的 `1/2/4/8/16/32/64/128` 位序计算期望 Mask，但四个斜角必须同时满足斜向格和相邻两条正交边均被占用：例如东北位只有北、东、东北三格同时存在时才能置位。该角门避免凹角被错误填成实心圆角。
+
+工作台提供岛屿、走廊、转角和实心四个不可变预设，也允许逐格切换。九宫格布局、匹配结果和 RGBA 都由当前 PixelDocument 与瞬态占用图派生；改变预设、单格或预览不会写正文、revision 或撤销栈。只有“应用本格 Mask”会把中心格推导出的期望规则通过现有 `frames.patch` 写回活动帧，因此整次应用只形成一个可逆修订。
+
+## 14. 精确匹配与可解释降级
+
+候选只来自同一 `terrainId` 的现有帧，且必须已有 `tileRule`。每个占用格依次执行：
+
+1. 优先选择 bitmask 与期望值完全相同的帧；
+2. 没有精确帧时，比较期望 Mask 与候选 Mask 的 XOR 置位数，即 Hamming 距离；
+3. 距离相同则按 PixelDocument 的帧顺序，再按稳定帧 ID 排定；
+4. 布局逐格保存期望 Mask、命中 Mask、来源帧、距离和 `exact`，不得把降级帧冒充精确结果。
+
+未知 Terrain、没有任何候选帧、非九项占用、非布尔值或未知选项均失败关闭。素材不完整不会随机抛弃预览，而是给出稳定、可复现且可追踪的降级数量，便于作者按缺失 Mask 补画图块。
+
+## 15. 两文件预览交付
+
+`renderPixelTerrainPreviewRgba()` 复用核心 `renderPixelFrameRgba()` 合成每个来源帧，把九格按最近邻像素精确复制到透明 3×3 Atlas；相同来源帧只渲染一次并复用缓存。`createPixelTerrainPreviewExportBundle()` 输出：
+
+1. `*-<terrain>-terrain-preview.png`：尺寸固定为 `document.width × 3` 乘 `document.height × 3`；
+2. `*-<terrain>-terrain-preview.json`：`aeonquill.pixel-terrain-preview` schema v1，保存源文档 ID/revision、Terrain、网格与单格尺寸、原始占用、精确/降级计数，以及每格的期望/命中 Mask、来源帧和精确性。
+
+预览包是当前 Terrain 素材完整性的设计/审阅产物，不改变既有六文件游戏包，也不宣称是 Godot、Unity 或 RPG Maker 的原生导入格式。
+
+## 16. V0.7.44 验证口径与边界
+
+- 像素核心、转换与游戏交付专项 30/30；
+- 全仓单元契约 283/283；
+- TypeScript、生产构建和 96 项默认安全基线通过；
+- P7 六阶段集成通过。
+
+固定向量覆盖全满九宫格、斜角门控、精确命中、缺帧 Hamming 降级、同距稳定排序、RGBA 拼接、PNG/JSON 事实一致和非法输入失败关闭。P7 在 D 盘隔离项目和后台系统 Edge 中选择“转角”，得到 1 格精确、3 格降级，随后把活动帧中心规则从 Mask 5 原子更新为 Mask 7，实际下载并解析九宫格 PNG/JSON；刷新后 Mask 7 从 SQLite 正文恢复，1440×900 与 390×844 无页面级横向溢出，页面无 warning/error。
+
+本检查点不实现任意尺寸 Tilemap 绘制、地形笔刷、图块自动生成、嵌套/多 Terrain 混合、Worker 化或三引擎原生导入器；也没有启动 ComfyUI/H3、读取或改写正式项目、既有 output、D 盘正式桌面或快捷方式，或重新封装安装包。

@@ -56,6 +56,7 @@ import {
   PIXEL_PALETTE_CYCLE_DIRECTIONS,
   PIXEL_PROJECT_EXTENSION,
   PIXEL_PROJECT_MIME,
+  PIXEL_TERRAIN_GRID_PRESETS,
   PIXEL_TILE_NEIGHBORS,
   applyPixelCommand,
   convertRgbaToPixelDocument,
@@ -64,6 +65,7 @@ import {
   createPixelExportBundle,
   createPixelAnimationClipExportBundle,
   createPixelGameExportBundle,
+  createPixelTerrainPreviewExportBundle,
   createPixelCommand,
   createPixelDocument,
   createSpriteSheetMetadata,
@@ -76,6 +78,7 @@ import {
   rasterPixelLine,
   rasterPixelRectangle,
   renderPixelFrameRgba,
+  renderPixelTerrainPreviewRgba,
   resolvePixelAnimationFrames,
   safePixelFilename,
   serializePixelProject,
@@ -94,6 +97,7 @@ import {
   type PixelPoint,
   type PixelPaletteCycleDirection,
   type PixelRect,
+  type PixelTerrainPreviewLayout,
   type RgbaImage,
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
@@ -104,6 +108,7 @@ import {
   downloadPixelExportBundle,
   downloadPixelAnimationClipExportBundle,
   downloadPixelGameExportBundle,
+  downloadPixelTerrainPreviewExportBundle,
   downloadPixelText,
   readPixelProjectFile,
 } from './pixelBrowser'
@@ -151,6 +156,8 @@ const PIXEL_TILE_GRID = [
   'south-west', 'south', 'south-east',
 ] as const
 
+const PIXEL_TERRAIN_CELL_LABELS = ['西北', '北', '东北', '西', '本格', '东', '西南', '南', '东南'] as const
+
 type HistoryState = {
   document: PixelDocument
   undo: PixelCommand[]
@@ -168,6 +175,13 @@ type PixelStrokeContext = {
   brushSize: number
   mirrorHorizontal: boolean
   mirrorVertical: boolean
+}
+
+type TerrainPreviewRender = {
+  pixels: Uint8ClampedArray
+  width: number
+  height: number
+  layout: PixelTerrainPreviewLayout
 }
 
 type PixelDragContext = {
@@ -370,8 +384,12 @@ export function PixelModeWorkbench({
   )
   const [paletteCycleElapsedMs, setPaletteCycleElapsedMs] = useState(0)
   const [batchDurationMs, setBatchDurationMs] = useState('140')
+  const [terrainOccupancy, setTerrainOccupancy] = useState<boolean[]>(
+    () => [...(PIXEL_TERRAIN_GRID_PRESETS.find((preset) => preset.id === 'solid')?.occupancy ?? Array(9).fill(true))],
+  )
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const terrainPreviewCanvasRef = useRef<HTMLCanvasElement>(null)
   const importedSourceRef = useRef<ImportedSource | null>(null)
   const paintingRef = useRef(false)
   const strokeContextRef = useRef<PixelStrokeContext | null>(null)
@@ -1044,6 +1062,35 @@ export function PixelModeWorkbench({
     () => createSpriteSheetMetadata(document, { columns: Math.min(4, document.frames.length), padding: 1, spacing: 1 }),
     [document],
   )
+  const terrainPreviewResult = useMemo<{
+    preview: TerrainPreviewRender | null
+    error: string | null
+  }>(() => {
+    const terrainId = activeFrame.gameplay.tileRule?.terrainId
+    if (!terrainId) return { preview: null, error: null }
+    try {
+      return {
+        preview: renderPixelTerrainPreviewRgba(document, { terrainId, occupancy: terrainOccupancy }),
+        error: null,
+      }
+    } catch (error) {
+      return { preview: null, error: readablePixelError(error, '九宫格 Terrain 预览不可用') }
+    }
+  }, [activeFrame.gameplay.tileRule?.terrainId, document, terrainOccupancy])
+
+  useEffect(() => {
+    const canvas = terrainPreviewCanvasRef.current
+    const preview = terrainPreviewResult.preview
+    if (!canvas || !preview) return
+    canvas.width = preview.width
+    canvas.height = preview.height
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.imageSmoothingEnabled = false
+    const image = context.createImageData(preview.width, preview.height)
+    image.data.set(preview.pixels)
+    context.putImageData(image, 0, 0)
+  }, [terrainPreviewResult.preview])
 
   const exportPixelProject = useCallback(async () => {
     setIsExporting(true)
@@ -1307,6 +1354,52 @@ export function PixelModeWorkbench({
       setStatus(`${mode === 'replace' ? '覆盖复制' : '透明合并'}完成：当前图层已同步到「${activeAnimationTag.name}」的 ${targetFrameIds.length} 个目标帧 · 可一次撤销`)
     }
   }, [activeAnimationTag, animationRangeFrameIds, apply])
+
+  const selectTerrainPreset = useCallback((presetId: string) => {
+    const preset = PIXEL_TERRAIN_GRID_PRESETS.find((item) => item.id === presetId)
+    if (!preset) return
+    setTerrainOccupancy([...preset.occupancy])
+    setStatus(`九宫格预设已切换为「${preset.label}」· 仅更新预览`)
+  }, [])
+
+  const toggleTerrainCell = useCallback((index: number) => {
+    setTerrainOccupancy((current) => current.map((occupied, cellIndex) => (
+      cellIndex === index ? !occupied : occupied
+    )))
+    setStatus('九宫格占用图已更新 · 未修改项目 revision')
+  }, [])
+
+  const applyTerrainCenterMask = useCallback(() => {
+    const center = terrainPreviewResult.preview?.layout.cells[4]
+    if (!center?.occupied || center.expectedBitmask === null) {
+      setStatus('请先启用九宫格中心格，再应用本格 Terrain 规则')
+      return
+    }
+    const bitmask = center.expectedBitmask
+    patchActiveFrameGameplay((gameplay) => {
+      if (gameplay.tileRule) gameplay.tileRule.bitmask = bitmask
+    }, `已把九宫格中心期望 Mask ${bitmask} 应用到活动帧 · 可一次撤销`)
+  }, [patchActiveFrameGameplay, terrainPreviewResult.preview])
+
+  const exportTerrainPreview = useCallback(async () => {
+    const current = historyRef.current.document
+    const frame = current.frames.find((item) => item.id === current.activeFrameId)
+    const terrainId = frame?.gameplay.tileRule?.terrainId
+    if (!terrainId) {
+      setStatus('请先为活动帧启用 Terrain，再导出九宫格预览包')
+      return
+    }
+    setIsExporting(true)
+    try {
+      const bundle = createPixelTerrainPreviewExportBundle(current, { terrainId, occupancy: terrainOccupancy })
+      await downloadPixelTerrainPreviewExportBundle(bundle)
+      setStatus(`九宫格预览包完成：${bundle.manifest.value.exactCount} 格精确、${bundle.manifest.value.fallbackCount} 格降级`)
+    } catch (error) {
+      setStatus(readablePixelError(error, '九宫格预览包导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [terrainOccupancy])
 
   const exportPixelGameBundle = useCallback(async () => {
     setIsExporting(true)
@@ -2523,6 +2616,77 @@ export function PixelModeWorkbench({
                     })}
                   </div>
                   <output>Mask {activeFrame.gameplay.tileRule.bitmask}</output>
+                  <section className="aq-pixel-terrain-composer" aria-label="Terrain 九宫格自动推断">
+                    <div className="aq-pixel-terrain-heading">
+                      <span><Grid3X3 size={13} /> 九宫格自动推断</span>
+                      {terrainPreviewResult.preview ? (
+                        <output aria-label="九宫格匹配摘要">
+                          {terrainPreviewResult.preview.layout.exactCount} 精确 · {terrainPreviewResult.preview.layout.fallbackCount} 降级
+                        </output>
+                      ) : null}
+                    </div>
+                    <div className="aq-pixel-terrain-presets" aria-label="九宫格形状预设">
+                      {PIXEL_TERRAIN_GRID_PRESETS.map((preset) => (
+                        <button
+                          type="button"
+                          key={preset.id}
+                          aria-label={`选择九宫格预设 ${preset.label}`}
+                          onClick={() => selectTerrainPreset(preset.id)}
+                        >{preset.label}</button>
+                      ))}
+                    </div>
+                    <div className="aq-pixel-terrain-composer-body">
+                      <div className="aq-pixel-terrain-occupancy" aria-label="九宫格占用图">
+                        {terrainOccupancy.map((occupied, index) => {
+                          const previewCell = terrainPreviewResult.preview?.layout.cells[index]
+                          return (
+                            <button
+                              type="button"
+                              key={PIXEL_TERRAIN_CELL_LABELS[index]}
+                              className={`${occupied ? 'is-active' : ''} ${previewCell?.occupied && !previewCell.exact ? 'is-fallback' : ''}`.trim()}
+                              aria-pressed={occupied}
+                              aria-label={`切换九宫格 ${PIXEL_TERRAIN_CELL_LABELS[index]}`}
+                              title={previewCell?.occupied
+                                ? `期望 Mask ${previewCell.expectedBitmask} · ${previewCell.exact ? '精确匹配' : `降级到 ${previewCell.matchedBitmask}`}`
+                                : '透明空格'}
+                              onClick={() => toggleTerrainCell(index)}
+                            >
+                              <span>{PIXEL_TERRAIN_CELL_LABELS[index]}</span>
+                              <small>{previewCell?.expectedBitmask ?? '—'}</small>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {terrainPreviewResult.preview ? (
+                        <figure className="aq-pixel-terrain-preview">
+                          <canvas
+                            ref={terrainPreviewCanvasRef}
+                            aria-label={`Terrain ${terrainPreviewResult.preview.layout.terrainId} 九宫格像素预览`}
+                          />
+                          <figcaption>
+                            {terrainPreviewResult.preview.width}×{terrainPreviewResult.preview.height} · 角点需两条正交边同时存在
+                          </figcaption>
+                        </figure>
+                      ) : (
+                        <p className="aq-pixel-terrain-error">{terrainPreviewResult.error ?? '启用 Terrain 后可自动编排九宫格。'}</p>
+                      )}
+                    </div>
+                    {terrainPreviewResult.preview?.layout.fallbackCount ? (
+                      <p className="aq-pixel-terrain-warning" role="status">
+                        缺少部分精确 Mask，已按位差、帧顺序和稳定 ID 确定性降级；导出 JSON 会逐格标明。
+                      </p>
+                    ) : null}
+                    <div className="aq-pixel-terrain-actions">
+                      <button
+                        type="button"
+                        disabled={!terrainPreviewResult.preview?.layout.cells[4]?.occupied}
+                        onClick={applyTerrainCenterMask}
+                      >应用本格 Mask</button>
+                      <button type="button" disabled={!terrainPreviewResult.preview || isExporting} onClick={() => void exportTerrainPreview()}>
+                        <Download size={12} /> 导出九宫格预览
+                      </button>
+                    </div>
+                  </section>
                 </div>
               ) : <p className="aq-pixel-gameplay-empty">按帧启用后，可生成 Tiled WangSet 与确定性 8 邻域规则。</p>}
             </div>

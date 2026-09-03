@@ -7,6 +7,7 @@ import {
   type PixelAnimationClipExportBundle,
   type PixelExportBundle,
   type PixelGameExportBundle,
+  type PixelTerrainPreviewExportBundle,
   type RgbaImage,
 } from '../../lib/pixel/index'
 
@@ -151,6 +152,11 @@ export async function downloadPixelGameExportBundle(bundle: PixelGameExportBundl
 }
 
 export async function downloadPixelAnimationClipExportBundle(bundle: PixelAnimationClipExportBundle) {
+  downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
+  downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
+}
+
+export async function downloadPixelTerrainPreviewExportBundle(bundle: PixelTerrainPreviewExportBundle) {
   downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
   downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
 }

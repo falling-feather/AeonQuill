@@ -164,6 +164,14 @@ async function validatePixelGameUi(baseUrl) {
     await gameplayWorkbench.getByRole('button', { name: '北邻居', exact: true }).click()
     await gameplayWorkbench.getByRole('button', { name: '东邻居', exact: true }).click()
     await gameplayWorkbench.getByText('Mask 5', { exact: true }).waitFor({ state: 'visible' })
+    const terrainComposer = gameplayWorkbench.getByLabel('Terrain 九宫格自动推断', { exact: true })
+    await terrainComposer.getByRole('button', { name: '选择九宫格预设 转角', exact: true }).click()
+    await terrainComposer.getByRole('button', { name: '应用本格 Mask', exact: true }).click()
+    await gameplayWorkbench.getByText('Mask 7', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByText('已把九宫格中心期望 Mask 7 应用到活动帧 · 可一次撤销', { exact: true }).waitFor({ state: 'visible' })
+    await terrainComposer.getByRole('button', { name: /导出九宫格预览/u }).click()
+    await waitForDownloads(downloads, 2)
+    await page.getByText(/九宫格预览包完成：1 格精确、3 格降级/u).waitFor({ state: 'visible' })
     assert.equal(await page.getByRole('button', { name: '游戏辅助线', exact: true }).getAttribute('aria-pressed'), 'true')
 
     const animationWorkbench = page.getByLabel('动画片段', { exact: true })
@@ -205,10 +213,10 @@ async function validatePixelGameUi(baseUrl) {
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-animation-desktop.png'), fullPage: true })
 
     await animationWorkbench.getByRole('button', { name: /活动片段包/u }).click()
-    await waitForDownloads(downloads, 2)
+    await waitForDownloads(downloads, 4)
     await page.getByText(/活动片段包完成/u).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: /游戏资产包/u }).click()
-    await waitForDownloads(downloads, 8)
+    await waitForDownloads(downloads, 10)
     await page.getByText(/游戏资产包完成/u).waitFor({ state: 'visible' })
     const byFilename = new Map(downloads.map((download) => [download.suggestedFilename(), download]))
     const filenames = [...byFilename.keys()]
@@ -220,6 +228,8 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(filenames.some((name) => name.endsWith('-preview.html')), true)
     assert.equal(filenames.some((name) => name.endsWith('-clip.png')), true)
     assert.equal(filenames.some((name) => name.endsWith('-clip.json')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-terrain-preview.png')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-terrain-preview.json')), true)
 
     const readDownload = async (suffix) => {
       const entry = [...byFilename.entries()].find(([name]) => name.endsWith(suffix))
@@ -235,7 +245,10 @@ async function validatePixelGameUi(baseUrl) {
     const project = JSON.parse((await readDownload('.aeonpixel.json')).toString('utf8'))
     const clipManifest = JSON.parse((await readDownload('-clip.json')).toString('utf8'))
     const clipSprite = await readDownload('-clip.png')
+    const terrainManifest = JSON.parse((await readDownload('-terrain-preview.json')).toString('utf8'))
+    const terrainSprite = await readDownload('-terrain-preview.png')
     assert.deepEqual([...clipSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+    assert.deepEqual([...terrainSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.equal(project.schemaVersion, 5)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
     assert.equal(project.paletteCycles.some((cycle) => cycle.name === '灵光轮转' && cycle.stepDurationMs === 80 && cycle.direction === 'ping-pong'), true)
@@ -261,7 +274,7 @@ async function validatePixelGameUi(baseUrl) {
     assert.deepEqual(gameplayFrame.anchor, { x: 6, y: 16 })
     assert.equal(gameplayFrame.collisions[0].name, '剑锋')
     assert.equal(gameplayFrame.collisions[0].type, 'hitbox')
-    assert.deepEqual(gameplayFrame.tileRule, { terrainId: 'wuxia-floor', bitmask: 5 })
+    assert.deepEqual(gameplayFrame.tileRule, { terrainId: 'wuxia-floor', bitmask: 7 })
     assert.equal(tileset.image, manifest.image)
     const gameplayTile = tileset.tiles.find((tile) => tile.id === gameplayFrameIndex)
     assert.equal(gameplayTile.objectgroup.objects[0].name, '剑锋')
@@ -276,6 +289,15 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(clipManifest.animation.frameIds.length, 14)
     assert.equal(clipManifest.events.some((event) => event.name === '剑鸣'), true)
     assert.equal(clipManifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
+    assert.equal(terrainManifest.schemaVersion, 1)
+    assert.equal(terrainManifest.kind, 'aeonquill.pixel-terrain-preview')
+    assert.equal(terrainManifest.terrainId, 'wuxia-floor')
+    assert.deepEqual(terrainManifest.occupancy, [false, true, true, false, true, true, false, false, false])
+    assert.equal(terrainManifest.exactCount, 1)
+    assert.equal(terrainManifest.fallbackCount, 3)
+    assert.equal(terrainManifest.cells[4].expectedBitmask, 7)
+    assert.equal(terrainManifest.cells[4].matchedBitmask, 7)
+    assert.equal(terrainManifest.cells[4].exact, true)
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -291,20 +313,20 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(await page.getByLabel('混合模式', { exact: true }).inputValue(), 'screen')
     assert.equal(await page.getByLabel('锚点 X', { exact: true }).inputValue(), '6')
     assert.equal(await page.getByLabel('Terrain ID', { exact: true }).inputValue(), 'wuxia-floor')
-    assert.equal(await page.getByText('Mask 5', { exact: true }).isVisible(), true)
+    assert.equal(await page.getByText('Mask 7', { exact: true }).isVisible(), true)
     assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
     assert.equal(await page.locator('html').evaluate((html) => html.scrollWidth <= html.clientWidth), true)
     await page.getByLabel('当前帧游戏元数据', { exact: true }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel palette cycles, animation events, clip bundle, gameplay metadata and eight-file delivery',
+      label: 'pixel terrain inference, palette cycles, events, clip bundle and ten-file delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel palette cycles, animation events, clip bundle, gameplay metadata and eight-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel terrain inference, palette cycles, events, clip bundle and ten-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

@@ -77,12 +77,57 @@ export type PixelAnimationClipExportBundle = {
   manifest: { filename: string; mime: 'application/json'; text: string; value: PixelAnimationClipMetadata }
 }
 
+export type PixelTerrainPreviewOptions = {
+  terrainId?: string
+  occupancy?: boolean[]
+}
+
+export type PixelTerrainPreviewCell = {
+  index: number
+  row: number
+  column: number
+  occupied: boolean
+  expectedBitmask: number | null
+  frameId: string | null
+  frameName: string | null
+  matchedBitmask: number | null
+  distance: number | null
+  exact: boolean
+}
+
+export type PixelTerrainPreviewLayout = {
+  schemaVersion: 1
+  kind: 'aeonquill.pixel-terrain-preview'
+  sourceDocumentId: string
+  sourceRevision: number
+  terrainId: string
+  grid: { width: 3; height: 3 }
+  tile: { width: number; height: number }
+  occupancy: boolean[]
+  exactCount: number
+  fallbackCount: number
+  cells: PixelTerrainPreviewCell[]
+}
+
+export type PixelTerrainPreviewMetadata = PixelTerrainPreviewLayout & { image: string }
+
+export type PixelTerrainPreviewExportBundle = {
+  sprite: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  manifest: { filename: string; mime: 'application/json'; text: string; value: PixelTerrainPreviewMetadata }
+}
+
 export class PixelGamePipelineError extends Error {
   code: string
   details?: unknown
 }
 
 export const PIXEL_DIRECTIONS: ReadonlyArray<Readonly<{ id: PixelDirectionId; label: string }>>
+export const PIXEL_TERRAIN_GRID_SIZE: 3
+export const PIXEL_TERRAIN_GRID_PRESETS: ReadonlyArray<Readonly<{
+  id: 'island' | 'corridor' | 'corner' | 'solid'
+  label: string
+  occupancy: ReadonlyArray<boolean>
+}>>
 export function normalizePixelGameOptions(
   document: PixelDocument,
   options?: PixelGameOptions,
@@ -94,3 +139,15 @@ export function createPixelAnimationClipExportBundle(
   tagId: string,
   options?: { columns?: number; padding?: number; spacing?: number; baseName?: string },
 ): PixelAnimationClipExportBundle
+export function createPixelTerrainPreviewLayout(
+  document: PixelDocument,
+  options?: PixelTerrainPreviewOptions,
+): PixelTerrainPreviewLayout
+export function renderPixelTerrainPreviewRgba(
+  document: PixelDocument,
+  options?: PixelTerrainPreviewOptions,
+): { pixels: Uint8ClampedArray; width: number; height: number; layout: PixelTerrainPreviewLayout }
+export function createPixelTerrainPreviewExportBundle(
+  document: PixelDocument,
+  options?: PixelTerrainPreviewOptions & { baseName?: string },
+): PixelTerrainPreviewExportBundle

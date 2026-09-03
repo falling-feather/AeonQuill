@@ -1,7 +1,9 @@
 import {
+  PIXEL_TILE_NEIGHBORS,
   assertPixelDocument,
   createSpriteSheetLayout,
   renderPixelAnimationClipRgba,
+  renderPixelFrameRgba,
   resolvePixelAnimationSequences,
 } from './pixelCore.mjs'
 import { createPixelExportBundle, safePixelFilename } from './pixelConversion.mjs'
@@ -16,6 +18,50 @@ export const PIXEL_DIRECTIONS = Object.freeze([
   Object.freeze({ id: 'east', label: '东' }),
   Object.freeze({ id: 'south-east', label: '东南' }),
 ])
+
+export const PIXEL_TERRAIN_GRID_SIZE = 3
+
+export const PIXEL_TERRAIN_GRID_PRESETS = Object.freeze([
+  Object.freeze({
+    id: 'island',
+    label: '孤岛',
+    occupancy: Object.freeze([false, false, false, false, true, false, false, false, false]),
+  }),
+  Object.freeze({
+    id: 'corridor',
+    label: '横向',
+    occupancy: Object.freeze([false, false, false, true, true, true, false, false, false]),
+  }),
+  Object.freeze({
+    id: 'corner',
+    label: '转角',
+    occupancy: Object.freeze([false, true, true, false, true, true, false, false, false]),
+  }),
+  Object.freeze({
+    id: 'solid',
+    label: '全满',
+    occupancy: Object.freeze([true, true, true, true, true, true, true, true, true]),
+  }),
+])
+
+const TERRAIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+const TERRAIN_GRID_CELLS = Object.freeze(Array.from({ length: PIXEL_TERRAIN_GRID_SIZE ** 2 }, (_, index) => Object.freeze({
+  index,
+  row: Math.floor(index / PIXEL_TERRAIN_GRID_SIZE),
+  column: index % PIXEL_TERRAIN_GRID_SIZE,
+})))
+const TERRAIN_NEIGHBOR_OFFSETS = Object.freeze([
+  Object.freeze({ id: 'north', row: -1, column: 0, gateIds: [] }),
+  Object.freeze({ id: 'north-east', row: -1, column: 1, gateIds: ['north', 'east'] }),
+  Object.freeze({ id: 'east', row: 0, column: 1, gateIds: [] }),
+  Object.freeze({ id: 'south-east', row: 1, column: 1, gateIds: ['south', 'east'] }),
+  Object.freeze({ id: 'south', row: 1, column: 0, gateIds: [] }),
+  Object.freeze({ id: 'south-west', row: 1, column: -1, gateIds: ['south', 'west'] }),
+  Object.freeze({ id: 'west', row: 0, column: -1, gateIds: [] }),
+  Object.freeze({ id: 'north-west', row: -1, column: -1, gateIds: ['north', 'west'] }),
+])
+const TERRAIN_BIT_BY_ID = new Map(PIXEL_TILE_NEIGHBORS.map((neighbor) => [neighbor.id, neighbor.bit]))
+const TERRAIN_OFFSET_BY_ID = new Map(TERRAIN_NEIGHBOR_OFFSETS.map((neighbor) => [neighbor.id, neighbor]))
 
 export class PixelGamePipelineError extends Error {
   constructor(code, message, details) {
@@ -51,6 +97,144 @@ function assertInteger(value, path, min, max) {
 function assertFrameId(frameIds, value, path) {
   if (typeof value !== 'string' || !frameIds.has(value)) fail('UNKNOWN_FRAME', `${path} must reference an existing frame`, { path, value })
   return value
+}
+
+function assertTerrainId(value, path) {
+  if (typeof value !== 'string' || !TERRAIN_ID_PATTERN.test(value)) {
+    fail('INVALID_TERRAIN_ID', `${path} must be a stable terrain id`, { path, value })
+  }
+  return value
+}
+
+function assertTerrainOccupancy(value, path) {
+  if (!Array.isArray(value) || value.length !== TERRAIN_GRID_CELLS.length || value.some((entry) => typeof entry !== 'boolean')) {
+    fail('INVALID_TERRAIN_OCCUPANCY', `${path} must contain exactly nine booleans`)
+  }
+  return [...value]
+}
+
+function terrainGridOccupied(occupancy, row, column) {
+  if (row < 0 || column < 0 || row >= PIXEL_TERRAIN_GRID_SIZE || column >= PIXEL_TERRAIN_GRID_SIZE) return false
+  return occupancy[row * PIXEL_TERRAIN_GRID_SIZE + column]
+}
+
+function inferTerrainCellBitmask(occupancy, row, column) {
+  let bitmask = 0
+  for (const neighbor of TERRAIN_NEIGHBOR_OFFSETS) {
+    if (!terrainGridOccupied(occupancy, row + neighbor.row, column + neighbor.column)) continue
+    const gatesOpen = neighbor.gateIds.every((gateId) => {
+      const gate = TERRAIN_OFFSET_BY_ID.get(gateId)
+      return terrainGridOccupied(occupancy, row + gate.row, column + gate.column)
+    })
+    if (gatesOpen) bitmask |= TERRAIN_BIT_BY_ID.get(neighbor.id)
+  }
+  return bitmask
+}
+
+function bitCount8(value) {
+  let remaining = value & 0xff
+  let count = 0
+  while (remaining > 0) {
+    remaining &= remaining - 1
+    count += 1
+  }
+  return count
+}
+
+export function createPixelTerrainPreviewLayout(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['terrainId', 'occupancy']), 'options')
+  const fallbackTerrainId = document.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId
+  const terrainId = assertTerrainId(options.terrainId ?? fallbackTerrainId, 'options.terrainId')
+  const occupancy = assertTerrainOccupancy(
+    options.occupancy ?? PIXEL_TERRAIN_GRID_PRESETS.at(-1).occupancy,
+    'options.occupancy',
+  )
+  const candidates = document.frames
+    .map((frame, frameIndex) => ({ frame, frameIndex }))
+    .filter(({ frame }) => frame.gameplay.tileRule?.terrainId === terrainId)
+  if (candidates.length === 0) {
+    fail('UNKNOWN_TERRAIN', `No frames are registered for terrain ${terrainId}`, { terrainId })
+  }
+  const cells = TERRAIN_GRID_CELLS.map(({ index, row, column }) => {
+    if (!occupancy[index]) {
+      return {
+        index,
+        row,
+        column,
+        occupied: false,
+        expectedBitmask: null,
+        frameId: null,
+        frameName: null,
+        matchedBitmask: null,
+        distance: null,
+        exact: false,
+      }
+    }
+    const expectedBitmask = inferTerrainCellBitmask(occupancy, row, column)
+    const ranked = candidates
+      .map(({ frame, frameIndex }) => ({
+        frame,
+        frameIndex,
+        matchedBitmask: frame.gameplay.tileRule.bitmask,
+        distance: bitCount8(expectedBitmask ^ frame.gameplay.tileRule.bitmask),
+      }))
+      .sort((left, right) => (
+        left.distance - right.distance
+        || left.frameIndex - right.frameIndex
+        || left.frame.id.localeCompare(right.frame.id)
+      ))
+    const match = ranked[0]
+    return {
+      index,
+      row,
+      column,
+      occupied: true,
+      expectedBitmask,
+      frameId: match.frame.id,
+      frameName: match.frame.name,
+      matchedBitmask: match.matchedBitmask,
+      distance: match.distance,
+      exact: match.distance === 0,
+    }
+  })
+  return {
+    schemaVersion: 1,
+    kind: 'aeonquill.pixel-terrain-preview',
+    sourceDocumentId: document.id,
+    sourceRevision: document.revision,
+    terrainId,
+    grid: { width: PIXEL_TERRAIN_GRID_SIZE, height: PIXEL_TERRAIN_GRID_SIZE },
+    tile: { width: document.width, height: document.height },
+    occupancy,
+    exactCount: cells.filter((cell) => cell.occupied && cell.exact).length,
+    fallbackCount: cells.filter((cell) => cell.occupied && !cell.exact).length,
+    cells,
+  }
+}
+
+export function renderPixelTerrainPreviewRgba(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const layout = createPixelTerrainPreviewLayout(document, optionsInput)
+  const width = document.width * PIXEL_TERRAIN_GRID_SIZE
+  const height = document.height * PIXEL_TERRAIN_GRID_SIZE
+  const pixels = new Uint8ClampedArray(width * height * 4)
+  const framePixelsById = new Map()
+  for (const cell of layout.cells) {
+    if (!cell.occupied || cell.frameId === null) continue
+    let framePixels = framePixelsById.get(cell.frameId)
+    if (!framePixels) {
+      framePixels = renderPixelFrameRgba(document, cell.frameId)
+      framePixelsById.set(cell.frameId, framePixels)
+    }
+    for (let sourceRow = 0; sourceRow < document.height; sourceRow += 1) {
+      const sourceStart = sourceRow * document.width * 4
+      const targetStart = ((cell.row * document.height + sourceRow) * width + cell.column * document.width) * 4
+      pixels.set(framePixels.subarray(sourceStart, sourceStart + document.width * 4), targetStart)
+    }
+  }
+  return { pixels, width, height, layout }
 }
 
 function defaultMapSize(frameCount) {
@@ -413,6 +597,36 @@ export function createPixelAnimationClipExportBundle(documentInput, tagId, optio
       mime: 'application/json',
       text: JSON.stringify(clip.metadata, null, 2),
       value: clip.metadata,
+    },
+  }
+}
+
+export function createPixelTerrainPreviewExportBundle(documentInput, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['terrainId', 'occupancy', 'baseName']), 'options')
+  const rendered = renderPixelTerrainPreviewRgba(document, {
+    ...(options.terrainId === undefined ? {} : { terrainId: options.terrainId }),
+    ...(options.occupancy === undefined ? {} : { occupancy: options.occupancy }),
+  })
+  const baseName = safePixelFilename(options.baseName ?? document.name)
+  const terrainName = safePixelFilename(rendered.layout.terrainId, 'terrain')
+  const previewName = `${baseName}-${terrainName}-terrain-preview`
+  const image = `${previewName}.png`
+  const metadata = { ...rendered.layout, image }
+  return {
+    sprite: {
+      filename: image,
+      mime: 'image/png',
+      width: rendered.width,
+      height: rendered.height,
+      pixels: rendered.pixels,
+    },
+    manifest: {
+      filename: `${previewName}.json`,
+      mime: 'application/json',
+      text: JSON.stringify(metadata, null, 2),
+      value: metadata,
     },
   }
 }
