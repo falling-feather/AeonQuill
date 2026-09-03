@@ -10,7 +10,15 @@ import {
 } from '../src/lib/pixel/pixelGamePipeline.mjs'
 
 function createEightFrameDocument() {
-  const layers = [{ id: 'body', name: 'Body', visible: true, locked: false, opacity: 1 }]
+  const layers = [{
+    id: 'body',
+    name: 'Body',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    groupId: 'character',
+    blendMode: 'screen',
+  }]
   const frames = Array.from({ length: 8 }, (_, index) => ({
     id: `direction-${index + 1}`,
     name: `Direction ${index + 1}`,
@@ -22,6 +30,7 @@ function createEightFrameDocument() {
     name: 'Hero Eight Way',
     width: 2,
     height: 2,
+    layerGroups: [{ id: 'character', name: 'Character', visible: true, locked: false }],
     layers,
     frames,
     animationTags: [
@@ -37,7 +46,9 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3, anchor: { x: 1, y: 2 } })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
-  assert.equal(manifest.schemaVersion, 2)
+  assert.equal(manifest.schemaVersion, 3)
+  assert.deepEqual(manifest.layerGroups, document.layerGroups)
+  assert.equal(manifest.layers[0].blendMode, 'screen')
   assert.equal(manifest.animation.id, 'walk')
   assert.deepEqual(manifest.animation.frames.map((frame) => frame.id), ['direction-1', 'direction-2', 'direction-3', 'direction-4'])
   assert.deepEqual(manifest.animations[1].frames.map((frame) => frame.id), [

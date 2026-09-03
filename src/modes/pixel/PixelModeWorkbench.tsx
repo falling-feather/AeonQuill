@@ -49,6 +49,7 @@ import {
 } from 'react'
 import {
   PixelContractError,
+  PIXEL_BLEND_MODES,
   PIXEL_PROJECT_EXTENSION,
   PIXEL_PROJECT_MIME,
   applyPixelCommand,
@@ -74,6 +75,7 @@ import {
   type PixelCommand,
   type PixelCommandType,
   type PixelAnimationDirection,
+  type PixelBlendMode,
   type PixelConversionReport,
   type PixelDitherMode,
   type PixelDocument,
@@ -95,6 +97,13 @@ import {
 import './pixel-mode.css'
 
 type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
+
+const PIXEL_BLEND_LABELS: Record<PixelBlendMode, string> = {
+  normal: '正常',
+  multiply: '正片叠底',
+  screen: '滤色',
+  add: '线性加亮',
+}
 
 type HistoryState = {
   document: PixelDocument
@@ -165,8 +174,8 @@ export function createDefaultPixelProject(input: { id?: string; name?: string } 
     height: 16,
   })
   const layers = [
-    { id: 'silhouette', name: '轮廓', visible: true, locked: false, opacity: 1 },
-    { id: 'light', name: '流光', visible: true, locked: false, opacity: 1 },
+    { id: 'silhouette', name: '轮廓', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' as const },
+    { id: 'light', name: '流光', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' as const },
   ]
   const frameCoordinates = [
     [[3, 12], [4, 11], [5, 10], [6, 9], [7, 8], [8, 7], [9, 6], [10, 5], [11, 4], [12, 3]],
@@ -655,8 +664,12 @@ export function PixelModeWorkbench({
 
     if (tool === 'picker') {
       const frame = current.frames.find((item) => item.id === current.activeFrameId)
+      const groupById = new Map(current.layerGroups.map((group) => [group.id, group]))
       const picked = [...current.layers].reverse().find((layer) => (
-        layer.visible && layer.opacity > 0 && frame?.cels[layer.id]?.[point.y * current.width + point.x]
+        layer.visible
+        && (layer.groupId === null || groupById.get(layer.groupId)?.visible !== false)
+        && layer.opacity > 0
+        && frame?.cels[layer.id]?.[point.y * current.width + point.x]
       ))
       const colorId = picked ? frame?.cels[picked.id]?.[point.y * current.width + point.x] : null
       if (colorId) {
@@ -687,8 +700,15 @@ export function PixelModeWorkbench({
     }
 
     const activeLayer = current.layers.find((layer) => layer.id === current.activeLayerId)
-    if (!activeLayer || activeLayer.locked) {
-      setStatus(activeLayer ? `图层 ${activeLayer.name} 已锁定` : '当前图层不存在')
+    const activeGroup = activeLayer?.groupId === null
+      ? null
+      : current.layerGroups.find((group) => group.id === activeLayer?.groupId)
+    if (!activeLayer || activeLayer.locked || activeGroup?.locked || activeGroup?.visible === false) {
+      setStatus(activeLayer
+        ? activeGroup?.visible === false
+          ? `图层组 ${activeGroup.name} 已隐藏`
+          : activeGroup?.locked ? `图层组 ${activeGroup.name} 已锁定` : `图层 ${activeLayer.name} 已锁定`
+        : '当前图层不存在')
       return
     }
 
@@ -829,8 +849,13 @@ export function PixelModeWorkbench({
     const frame = current.frames.find((item) => item.id === current.activeFrameId)
     const cel = frame?.cels[current.activeLayerId]
     if (!activeLayer || !cel) return false
-    if (activeLayer.locked) {
-      setStatus(`图层 ${activeLayer.name} 已锁定`)
+    const activeGroup = activeLayer.groupId === null
+      ? null
+      : current.layerGroups.find((group) => group.id === activeLayer.groupId)
+    if (activeLayer.locked || activeGroup?.locked || activeGroup?.visible === false) {
+      setStatus(activeGroup?.visible === false
+        ? `图层组 ${activeGroup.name} 已隐藏`
+        : activeGroup?.locked ? `图层组 ${activeGroup.name} 已锁定` : `图层 ${activeLayer.name} 已锁定`)
       return false
     }
     try {
@@ -856,6 +881,9 @@ export function PixelModeWorkbench({
   }, [apply, selection])
 
   const selectedLayer = document.layers.find((layer) => layer.id === document.activeLayerId) ?? document.layers[0]
+  const selectedLayerGroup = selectedLayer.groupId === null
+    ? null
+    : document.layerGroups.find((group) => group.id === selectedLayer.groupId) ?? null
   const selectedColor = document.palette.find((color) => color.id === activeColorId) ?? document.palette[0]
   const selectionPreview = useMemo(() => {
     if (!dragDraft) return selection
@@ -911,8 +939,11 @@ export function PixelModeWorkbench({
       setStatus('当前帧或图层不可用')
       return
     }
-    if (layer.locked) {
-      setStatus(`图层 ${layer.name} 已锁定`)
+    const group = layer.groupId === null ? null : current.layerGroups.find((item) => item.id === layer.groupId)
+    if (layer.locked || group?.locked || group?.visible === false) {
+      setStatus(group?.visible === false
+        ? `图层组 ${group.name} 已隐藏`
+        : group?.locked ? `图层组 ${group.name} 已锁定` : `图层 ${layer.name} 已锁定`)
       return
     }
     try {
@@ -1663,6 +1694,64 @@ export function PixelModeWorkbench({
         </main>
 
         <aside className="aq-pixel-panel aq-pixel-layers-panel">
+          <section className="aq-pixel-group-section" aria-label="图层组">
+            <div className="aq-pixel-panel-heading">
+              <span><FolderOpen size={15} /> 图层组</span>
+              <button
+                type="button"
+                aria-label="添加图层组"
+                onClick={() => {
+                  const id = uniqueId('group', document.layerGroups.map((group) => group.id), document.revision)
+                  apply('groups.add', {
+                    group: { id, name: `图层组 ${document.layerGroups.length + 1}`, visible: true, locked: false },
+                  })
+                }}
+              ><Plus size={14} /></button>
+            </div>
+            {document.layerGroups.length > 0 ? (
+              <div className="aq-pixel-group-list">
+                {document.layerGroups.map((group) => {
+                  const groupLayerCount = document.layers.filter((layer) => layer.groupId === group.id).length
+                  return (
+                    <div className={selectedLayerGroup?.id === group.id ? 'is-active' : ''} key={group.id} data-group-id={group.id}>
+                      <span className="aq-pixel-group-icon"><FolderOpen size={14} /></span>
+                      <label>
+                        <input
+                          aria-label={`${group.name}名称`}
+                          key={`${group.id}-${group.name}`}
+                          defaultValue={group.name}
+                          maxLength={80}
+                          onBlur={(event) => {
+                            const name = event.currentTarget.value.trim()
+                            if (name && name !== group.name) apply('groups.patch', { groupId: group.id, patch: { name } })
+                            else event.currentTarget.value = group.name
+                          }}
+                        />
+                        <small>{groupLayerCount} 个图层</small>
+                      </label>
+                      <button
+                        type="button"
+                        aria-label={group.visible ? `隐藏图层组 ${group.name}` : `显示图层组 ${group.name}`}
+                        onClick={() => apply('groups.patch', { groupId: group.id, patch: { visible: !group.visible } })}
+                      >{group.visible ? <Eye size={13} /> : <EyeOff size={13} />}</button>
+                      <button
+                        type="button"
+                        aria-label={group.locked ? `解锁图层组 ${group.name}` : `锁定图层组 ${group.name}`}
+                        onClick={() => apply('groups.patch', { groupId: group.id, patch: { locked: !group.locked } })}
+                      >{group.locked ? <Lock size={13} /> : <Unlock size={13} />}</button>
+                      <button
+                        type="button"
+                        aria-label={`删除图层组 ${group.name}`}
+                        onClick={() => apply('groups.remove', { groupId: group.id })}
+                      ><Trash2 size={13} /></button>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="aq-pixel-group-empty">建立图层组后，可统一显隐、锁定并整理角色部件。</p>
+            )}
+          </section>
           <div className="aq-pixel-panel-heading">
             <span><Layers size={15} /> 图层</span>
             <div>
@@ -1672,7 +1761,15 @@ export function PixelModeWorkbench({
                 onClick={() => {
                   const id = uniqueId('layer', document.layers.map((layer) => layer.id), document.revision)
                   apply('layers.add', {
-                    layer: { id, name: `图层 ${document.layers.length + 1}`, visible: true, locked: false, opacity: 1 },
+                    layer: {
+                      id,
+                      name: `图层 ${document.layers.length + 1}`,
+                      visible: true,
+                      locked: false,
+                      opacity: 1,
+                      groupId: selectedLayerGroup?.id ?? null,
+                      blendMode: 'normal',
+                    },
                   })
                 }}
               ><Plus size={14} /></button>
@@ -1694,7 +1791,10 @@ export function PixelModeWorkbench({
                   onClick={() => apply('layers.select', { layerId: layer.id })}
                 >
                   <span className="aq-pixel-layer-thumb"><Grid3X3 size={14} /></span>
-                  <span><strong>{layer.name}</strong><small>{Math.round(layer.opacity * 100)}%</small></span>
+                  <span>
+                    <strong>{layer.name}</strong>
+                    <small>{Math.round(layer.opacity * 100)}% · {PIXEL_BLEND_LABELS[layer.blendMode]}</small>
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -1740,6 +1840,35 @@ export function PixelModeWorkbench({
                 }}
               />
             </label>
+            <div className="aq-pixel-layer-routing">
+              <label>
+                <span>所属图层组</span>
+                <select
+                  aria-label="所属图层组"
+                  value={selectedLayer.groupId ?? ''}
+                  onChange={(event) => apply('layers.patch', {
+                    layerId: selectedLayer.id,
+                    patch: { groupId: event.currentTarget.value || null },
+                  })}
+                >
+                  <option value="">不分组</option>
+                  {document.layerGroups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>混合模式</span>
+                <select
+                  aria-label="混合模式"
+                  value={selectedLayer.blendMode}
+                  onChange={(event) => apply('layers.patch', {
+                    layerId: selectedLayer.id,
+                    patch: { blendMode: event.currentTarget.value as PixelBlendMode },
+                  })}
+                >
+                  {PIXEL_BLEND_MODES.map((mode) => <option value={mode} key={mode}>{PIXEL_BLEND_LABELS[mode]}</option>)}
+                </select>
+              </label>
+            </div>
             <div>
               <button
                 type="button"

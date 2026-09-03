@@ -25,7 +25,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 2
+  schemaVersion: 3
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -50,6 +50,8 @@ export type PixelGameManifest = {
     data: number[]
     frameIds: Array<string | null>
   }
+  layerGroups: PixelDocument['layerGroups']
+  layers: PixelDocument['layers']
   palette: PixelDocument['palette']
 }
 

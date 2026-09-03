@@ -493,7 +493,7 @@ export function deserializePixelProject(serialized) {
   if (!Object.prototype.hasOwnProperty.call(project, 'schemaVersion')) {
     fail('MISSING_SCHEMA_VERSION', 'Pixel project must declare schemaVersion')
   }
-  if (![0, 1, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(project.schemaVersion)) {
+  if (![0, 1, 2, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(project.schemaVersion)) {
     fail('UNSUPPORTED_SCHEMA', `Unsupported pixel project schema ${String(project.schemaVersion)}`)
   }
   return migratePixelDocument(project)
@@ -519,12 +519,15 @@ function canonicalPixelDocument(documentInput) {
     height: document.height,
     revision: document.revision,
     palette: document.palette.map((color) => ({ id: color.id, name: color.name, color: color.color })),
+    layerGroups: document.layerGroups.map((group) => ({ ...group })),
     layers: document.layers.map((layer) => ({
       id: layer.id,
       name: layer.name,
       visible: layer.visible,
       locked: layer.locked,
       opacity: layer.opacity,
+      groupId: layer.groupId,
+      blendMode: layer.blendMode,
     })),
     frames: document.frames.map((frame) => ({
       id: frame.id,

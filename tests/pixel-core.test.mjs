@@ -45,7 +45,15 @@ function makeMultiLayerMultiFrameDocument() {
     palette,
   })
   document = execute(document, 'layers.add', {
-    layer: { id: 'highlight', name: 'Highlight', visible: true, locked: false, opacity: 1 },
+    layer: {
+      id: 'highlight',
+      name: 'Highlight',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      groupId: null,
+      blendMode: 'normal',
+    },
   }).document
   document = execute(document, 'frames.add', {
     frame: { id: 'frame-2', name: 'Frame 2', durationMs: 240 },
@@ -212,16 +220,25 @@ test('switches and reorders layers and frames while keeping onion-skin settings 
   assert.deepEqual(onionRestored.document.onionSkin, original.onionSkin)
 })
 
-test('serializes schema v2 without loss and migrates v1 plus the single-layer palette-index format', () => {
+test('serializes schema v3 without loss and migrates v1/v2 plus the single-layer palette-index format', () => {
   const document = makeMultiLayerMultiFrameDocument()
   const serialized = serializePixelDocument(document)
   assert.equal(serializePixelDocument(deserializePixelDocument(serialized)), serialized)
 
-  const schemaOne = structuredClone(document)
+  const schemaTwo = structuredClone(document)
+  schemaTwo.schemaVersion = 2
+  delete schemaTwo.layerGroups
+  schemaTwo.layers = schemaTwo.layers.map(({ groupId: _groupId, blendMode: _blendMode, ...layer }) => layer)
+  const migratedSchemaTwo = migratePixelDocument(schemaTwo)
+  assert.equal(migratedSchemaTwo.schemaVersion, 3)
+  assert.deepEqual(migratedSchemaTwo.layerGroups, [])
+  assert.deepEqual(migratedSchemaTwo.layers.map((layer) => [layer.groupId, layer.blendMode]), [[null, 'normal'], [null, 'normal']])
+
+  const schemaOne = structuredClone(schemaTwo)
   schemaOne.schemaVersion = 1
   delete schemaOne.animationTags
   const migratedSchemaOne = migratePixelDocument(schemaOne)
-  assert.equal(migratedSchemaOne.schemaVersion, 2)
+  assert.equal(migratedSchemaOne.schemaVersion, 3)
   assert.deepEqual(migratedSchemaOne.animationTags, [])
 
   const migrated = migratePixelDocument({
@@ -234,10 +251,93 @@ test('serializes schema v2 without loss and migrates v1 plus the single-layer pa
     pixels: ['1', '.', 2, 0],
     frameDurationMs: 90,
   })
-  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.schemaVersion, 3)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', null, 'color-2', null])
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
+})
+
+test('layer groups and blend modes are strict, reversible, and share one deterministic RGBA truth', () => {
+  const colors = [
+    { id: 'base', name: 'Base', color: '#6496C8FF' },
+    { id: 'top', name: 'Top', color: '#326496FF' },
+  ]
+  let document = createPixelDocument({
+    id: 'blend-fixture',
+    name: 'Blend fixture',
+    width: 1,
+    height: 1,
+    palette: colors,
+    layers: [
+      { id: 'base', name: 'Base', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' },
+      { id: 'top', name: 'Top', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' },
+    ],
+    frames: [{
+      id: 'frame-1',
+      name: 'Frame 1',
+      durationMs: 100,
+      cels: { base: ['base'], top: ['top'] },
+    }],
+    activeLayerId: 'top',
+    activeFrameId: 'frame-1',
+  })
+  assert.throws(
+    () => execute(document, 'layers.patch', { layerId: 'top', patch: { groupId: 'missing-group' } }),
+    (error) => error instanceof PixelContractError && error.code === 'UNKNOWN_LAYER_GROUP',
+  )
+  assert.throws(
+    () => execute(document, 'layers.patch', { layerId: 'top', patch: { blendMode: 'soft-light' } }),
+    (error) => error instanceof PixelContractError && error.code === 'INVALID_BLEND_MODE',
+  )
+
+  const added = execute(document, 'groups.add', {
+    group: { id: 'character', name: 'Character', visible: true, locked: false },
+  })
+  document = execute(added.document, 'layers.patch', {
+    layerId: 'top',
+    patch: { groupId: 'character', blendMode: 'multiply' },
+  }).document
+  assert.deepEqual(Array.from(renderPixelFrameRgba(document, 'frame-1')), [20, 59, 118, 255])
+
+  document = execute(document, 'layers.patch', { layerId: 'top', patch: { blendMode: 'screen' } }).document
+  assert.deepEqual(Array.from(renderPixelFrameRgba(document, 'frame-1')), [130, 191, 232, 255])
+  document = execute(document, 'layers.patch', { layerId: 'top', patch: { blendMode: 'add' } }).document
+  assert.deepEqual(Array.from(renderPixelFrameRgba(document, 'frame-1')), [150, 250, 255, 255])
+
+  const hidden = execute(document, 'groups.patch', { groupId: 'character', patch: { visible: false } })
+  assert.deepEqual(Array.from(renderPixelFrameRgba(hidden.document, 'frame-1')), [100, 150, 200, 255])
+  assert.throws(
+    () => execute(hidden.document, 'pixels.erase', { frameId: 'frame-1', layerId: 'top', pixels: [{ x: 0, y: 0 }] }),
+    (error) => error instanceof PixelContractError && error.code === 'LAYER_GROUP_HIDDEN',
+  )
+  assert.deepEqual(withoutRevision(applyPixelCommand(hidden.document, hidden.inverse).document), withoutRevision(document))
+
+  const locked = execute(document, 'groups.patch', { groupId: 'character', patch: { locked: true } }).document
+  assert.throws(
+    () => execute(locked, 'pixels.erase', { frameId: 'frame-1', layerId: 'top', pixels: [{ x: 0, y: 0 }] }),
+    (error) => error instanceof PixelContractError && error.code === 'LAYER_GROUP_LOCKED',
+  )
+
+  const removed = execute(document, 'groups.remove', { groupId: 'character' })
+  assert.equal(removed.document.layers[1].groupId, null)
+  assert.deepEqual(
+    withoutRevision(applyPixelCommand(removed.document, removed.inverse).document),
+    withoutRevision(document),
+  )
+  assert.deepEqual(withoutRevision(applyPixelCommand(added.document, added.inverse).document), withoutRevision(createPixelDocument({
+    id: 'blend-fixture',
+    name: 'Blend fixture',
+    width: 1,
+    height: 1,
+    palette: colors,
+    layers: [
+      { id: 'base', name: 'Base', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' },
+      { id: 'top', name: 'Top', visible: true, locked: false, opacity: 1, groupId: null, blendMode: 'normal' },
+    ],
+    frames: [{ id: 'frame-1', name: 'Frame 1', durationMs: 100, cels: { base: ['base'], top: ['top'] } }],
+    activeLayerId: 'top',
+    activeFrameId: 'frame-1',
+  })))
 })
 
 test('animation tags, batch durations and cross-frame cel copies are strict and reversible', () => {

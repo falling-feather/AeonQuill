@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 2
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 3
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -7,6 +7,7 @@ export const PIXEL_LIMITS = Object.freeze({
   maxHeight: 512,
   maxPaletteColors: 256,
   maxLayers: 64,
+  maxLayerGroups: 32,
   maxFrames: 256,
   maxAnimationTags: 64,
   maxDocumentCells: 16_777_216,
@@ -24,6 +25,7 @@ const DOCUMENT_FIELDS = new Set([
   'height',
   'revision',
   'palette',
+  'layerGroups',
   'layers',
   'frames',
   'animationTags',
@@ -32,7 +34,8 @@ const DOCUMENT_FIELDS = new Set([
   'onionSkin',
 ])
 const PALETTE_FIELDS = new Set(['id', 'name', 'color'])
-const LAYER_FIELDS = new Set(['id', 'name', 'visible', 'locked', 'opacity'])
+const LAYER_GROUP_FIELDS = new Set(['id', 'name', 'visible', 'locked'])
+const LAYER_FIELDS = new Set(['id', 'name', 'visible', 'locked', 'opacity', 'groupId', 'blendMode'])
 const FRAME_FIELDS = new Set(['id', 'name', 'durationMs', 'cels'])
 const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
@@ -44,6 +47,10 @@ const COMMAND_TYPES = new Set([
   'pixels.patch',
   'pixels.restore',
   'palette.replace',
+  'groups.add',
+  'groups.remove',
+  'groups.restore',
+  'groups.patch',
   'layers.add',
   'layers.remove',
   'layers.restore',
@@ -65,10 +72,19 @@ const COMMAND_TYPES = new Set([
   'animations.patch',
   'onion-skin.set',
 ])
-const INTERNAL_COMMAND_TYPES = new Set(['pixels.restore', 'layers.restore', 'frames.restore', 'cels.restore', 'animations.restore'])
+const INTERNAL_COMMAND_TYPES = new Set([
+  'pixels.restore',
+  'groups.restore',
+  'layers.restore',
+  'frames.restore',
+  'cels.restore',
+  'animations.restore',
+])
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{8}$/
 const ANIMATION_DIRECTIONS = new Set(['forward', 'reverse', 'ping-pong'])
+export const PIXEL_BLEND_MODES = Object.freeze(['normal', 'multiply', 'screen', 'add'])
+const PIXEL_BLEND_MODE_SET = new Set(PIXEL_BLEND_MODES)
 
 const DEFAULT_PALETTE = Object.freeze([
   Object.freeze({ id: 'ink', name: 'Ink', color: '#171821FF' }),
@@ -177,7 +193,17 @@ function assertPaletteColor(input, path) {
   return color
 }
 
-function assertLayer(input, path) {
+function assertLayerGroup(input, path) {
+  const group = assertRecord(input, path)
+  assertKnownFields(group, LAYER_GROUP_FIELDS, path)
+  assertId(group.id, `${path}.id`)
+  assertString(group.name, `${path}.name`, { min: 1, max: 80 })
+  assertBoolean(group.visible, `${path}.visible`)
+  assertBoolean(group.locked, `${path}.locked`)
+  return group
+}
+
+function assertLayer(input, path, groupIds) {
   const layer = assertRecord(input, path)
   assertKnownFields(layer, LAYER_FIELDS, path)
   assertId(layer.id, `${path}.id`)
@@ -185,6 +211,15 @@ function assertLayer(input, path) {
   assertBoolean(layer.visible, `${path}.visible`)
   assertBoolean(layer.locked, `${path}.locked`)
   assertNumber(layer.opacity, `${path}.opacity`, { min: 0, max: 1 })
+  if (layer.groupId !== null) {
+    assertId(layer.groupId, `${path}.groupId`)
+    if (groupIds && !groupIds.has(layer.groupId)) {
+      fail('UNKNOWN_LAYER_GROUP', `${path}.groupId references an unknown layer group`, { groupId: layer.groupId })
+    }
+  }
+  if (!PIXEL_BLEND_MODE_SET.has(layer.blendMode)) {
+    fail('INVALID_BLEND_MODE', `${path}.blendMode is unsupported`, { blendMode: layer.blendMode })
+  }
   return layer
 }
 
@@ -253,10 +288,16 @@ export function assertPixelDocument(input) {
   document.palette.forEach((color, index) => assertPaletteColor(color, `document.palette[${index}]`))
   const paletteIds = assertUniqueIds(document.palette, 'document.palette')
 
+  if (!Array.isArray(document.layerGroups) || document.layerGroups.length > PIXEL_LIMITS.maxLayerGroups) {
+    fail('INVALID_LAYER_GROUPS', `document.layerGroups must contain 0-${PIXEL_LIMITS.maxLayerGroups} groups`)
+  }
+  document.layerGroups.forEach((group, index) => assertLayerGroup(group, `document.layerGroups[${index}]`))
+  const groupIds = assertUniqueIds(document.layerGroups, 'document.layerGroups')
+
   if (!Array.isArray(document.layers) || document.layers.length < 1 || document.layers.length > PIXEL_LIMITS.maxLayers) {
     fail('INVALID_LAYERS', `document.layers must contain 1-${PIXEL_LIMITS.maxLayers} layers`)
   }
-  document.layers.forEach((layer, index) => assertLayer(layer, `document.layers[${index}]`))
+  document.layers.forEach((layer, index) => assertLayer(layer, `document.layers[${index}]`, groupIds))
   const layerIds = assertUniqueIds(document.layers, 'document.layers')
   if (!layerIds.has(document.activeLayerId)) {
     fail('UNKNOWN_LAYER', 'document.activeLayerId must reference an existing layer', { layerId: document.activeLayerId })
@@ -314,7 +355,7 @@ export function createBlankPixelArray(width, height) {
 export function createPixelDocument(input = {}) {
   const options = assertRecord(input, 'input')
   assertKnownFields(options, new Set([
-    'id', 'name', 'width', 'height', 'revision', 'palette', 'layers', 'frames',
+    'id', 'name', 'width', 'height', 'revision', 'palette', 'layerGroups', 'layers', 'frames',
     'animationTags', 'activeLayerId', 'activeFrameId', 'onionSkin',
   ]), 'input')
   const width = options.width ?? 16
@@ -322,13 +363,19 @@ export function createPixelDocument(input = {}) {
   assertInteger(width, 'input.width', { min: 1, max: PIXEL_LIMITS.maxWidth })
   assertInteger(height, 'input.height', { min: 1, max: PIXEL_LIMITS.maxHeight })
   if (options.palette !== undefined && !Array.isArray(options.palette)) fail('INVALID_PALETTE', 'input.palette must be an array')
+  if (options.layerGroups !== undefined && !Array.isArray(options.layerGroups)) fail('INVALID_LAYER_GROUPS', 'input.layerGroups must be an array')
   if (options.layers !== undefined && !Array.isArray(options.layers)) fail('INVALID_LAYERS', 'input.layers must be an array')
   if (options.frames !== undefined && !Array.isArray(options.frames)) fail('INVALID_FRAMES', 'input.frames must be an array')
   if (options.animationTags !== undefined && !Array.isArray(options.animationTags)) fail('INVALID_ANIMATION_TAGS', 'input.animationTags must be an array')
   const palette = options.palette === undefined ? DEFAULT_PALETTE : options.palette
-  const layers = options.layers === undefined
+  const layerGroups = options.layerGroups ?? []
+  const layers = (options.layers === undefined
     ? [{ id: 'layer-1', name: 'Ink', visible: true, locked: false, opacity: 1 }]
-    : options.layers
+    : options.layers).map((layer) => ({
+      ...layer,
+      groupId: layer.groupId ?? null,
+      blendMode: layer.blendMode ?? 'normal',
+    }))
   const frames = options.frames === undefined
     ? [{
         id: 'frame-1',
@@ -346,6 +393,7 @@ export function createPixelDocument(input = {}) {
     height,
     revision: options.revision ?? 0,
     palette,
+    layerGroups,
     layers,
     frames,
     animationTags: options.animationTags ?? [],
@@ -421,13 +469,28 @@ export function migratePixelDocument(input) {
     assertPixelDocument(input)
     return cloneJson(input)
   }
+  if (isRecord(input) && input.schemaVersion === 2) {
+    const legacy = assertRecord(input, 'schemaTwoDocument')
+    const schemaTwoFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'layerGroups'))
+    assertKnownFields(legacy, schemaTwoFields, 'schemaTwoDocument')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      layerGroups: [],
+      layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
+    }
+    assertPixelDocument(migrated)
+    return migrated
+  }
   if (isRecord(input) && input.schemaVersion === 1) {
     const legacy = assertRecord(input, 'schemaOneDocument')
-    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'animationTags'))
+    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['animationTags', 'layerGroups']).has(field)))
     assertKnownFields(legacy, schemaOneFields, 'schemaOneDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      layerGroups: [],
+      layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
       animationTags: [],
     }
     assertPixelDocument(migrated)
@@ -519,6 +582,19 @@ function assertTarget(payload, document, path = 'command.payload') {
   return { frame, layer }
 }
 
+function assertWritableLayer(document, layer) {
+  if (layer.locked) fail('LAYER_LOCKED', `Layer ${layer.id} is locked`, { layerId: layer.id })
+  if (layer.groupId !== null) {
+    const group = document.layerGroups.find((item) => item.id === layer.groupId)
+    if (group && !group.visible) {
+      fail('LAYER_GROUP_HIDDEN', `Layer group ${group.id} is hidden`, { groupId: group.id, layerId: layer.id })
+    }
+    if (group?.locked) {
+      fail('LAYER_GROUP_LOCKED', `Layer group ${group.id} is locked`, { groupId: group.id, layerId: layer.id })
+    }
+  }
+}
+
 function assertPointList(points, path, document, mode) {
   if (!Array.isArray(points) || points.length < 1 || points.length > PIXEL_LIMITS.maxPixelsPerCommand) {
     fail('INVALID_PIXELS', `${path} must contain 1-${PIXEL_LIMITS.maxPixelsPerCommand} unique pixels`)
@@ -567,21 +643,21 @@ export function assertPixelCommand(input, documentInput) {
     case 'pixels.paint': {
       assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
       const { layer } = assertTarget(payload, document)
-      if (layer.locked) fail('LAYER_LOCKED', `Layer ${layer.id} is locked`, { layerId: layer.id })
+      assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, { withColor: true })
       break
     }
     case 'pixels.erase': {
       assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
       const { layer } = assertTarget(payload, document)
-      if (layer.locked) fail('LAYER_LOCKED', `Layer ${layer.id} is locked`, { layerId: layer.id })
+      assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, {})
       break
     }
     case 'pixels.patch': {
       assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
       const { layer } = assertTarget(payload, document)
-      if (layer.locked) fail('LAYER_LOCKED', `Layer ${layer.id} is locked`, { layerId: layer.id })
+      assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, { withValue: true })
       break
     }
@@ -603,9 +679,44 @@ export function assertPixelCommand(input, documentInput) {
       if (payload.name !== undefined) assertString(payload.name, 'command.payload.name', { min: 1, max: 48 })
       break
     }
+    case 'groups.add': {
+      assertKnownFields(payload, new Set(['group', 'index']), 'command.payload')
+      assertLayerGroup(payload.group, 'command.payload.group')
+      if (document.layerGroups.some((group) => group.id === payload.group.id)) fail('DUPLICATE_ID', `Layer group ${payload.group.id} already exists`)
+      if (document.layerGroups.length >= PIXEL_LIMITS.maxLayerGroups) fail('LIMIT_EXCEEDED', 'Maximum layer group count reached')
+      if (payload.index !== undefined) assertIndex(payload.index, 'command.payload.index', document.layerGroups.length)
+      break
+    }
+    case 'groups.remove':
+      assertKnownFields(payload, new Set(['groupId']), 'command.payload')
+      assertId(payload.groupId, 'command.payload.groupId')
+      if (!document.layerGroups.some((group) => group.id === payload.groupId)) fail('UNKNOWN_LAYER_GROUP', `Unknown layer group ${payload.groupId}`)
+      break
+    case 'groups.restore': {
+      assertKnownFields(payload, new Set(['group', 'index', 'layerIds']), 'command.payload')
+      assertLayerGroup(payload.group, 'command.payload.group')
+      if (document.layerGroups.some((group) => group.id === payload.group.id)) fail('DUPLICATE_ID', `Layer group ${payload.group.id} already exists`)
+      assertIndex(payload.index, 'command.payload.index', document.layerGroups.length)
+      const layerIds = assertUniqueStringList(payload.layerIds, 'command.payload.layerIds', { min: 0, max: document.layers.length })
+      for (const layerId of layerIds) {
+        if (!document.layers.some((layer) => layer.id === layerId)) fail('UNKNOWN_LAYER', `Unknown layer ${layerId}`)
+      }
+      break
+    }
+    case 'groups.patch': {
+      assertKnownFields(payload, new Set(['groupId', 'patch']), 'command.payload')
+      assertId(payload.groupId, 'command.payload.groupId')
+      const group = document.layerGroups.find((item) => item.id === payload.groupId)
+      if (!group) fail('UNKNOWN_LAYER_GROUP', `Unknown layer group ${payload.groupId}`)
+      const patch = assertRecord(payload.patch, 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name', 'visible', 'locked']), 'command.payload.patch')
+      if (Object.keys(patch).length === 0) fail('EMPTY_PATCH', 'Layer group patch must change at least one field')
+      assertLayerGroup({ ...group, ...patch }, 'command.payload.patch')
+      break
+    }
     case 'layers.add': {
       assertKnownFields(payload, new Set(['layer', 'index']), 'command.payload')
-      assertLayer(payload.layer, 'command.payload.layer')
+      assertLayer(payload.layer, 'command.payload.layer', new Set(document.layerGroups.map((group) => group.id)))
       if (document.layers.some((layer) => layer.id === payload.layer.id)) fail('DUPLICATE_ID', `Layer ${payload.layer.id} already exists`)
       if (document.layers.length >= PIXEL_LIMITS.maxLayers) fail('LIMIT_EXCEEDED', 'Maximum layer count reached')
       if (payload.index !== undefined) assertIndex(payload.index, 'command.payload.index', document.layers.length)
@@ -619,7 +730,7 @@ export function assertPixelCommand(input, documentInput) {
       break
     case 'layers.restore': {
       assertKnownFields(payload, new Set(['layer', 'index', 'cels', 'activeLayerId']), 'command.payload')
-      assertLayer(payload.layer, 'command.payload.layer')
+      assertLayer(payload.layer, 'command.payload.layer', new Set(document.layerGroups.map((group) => group.id)))
       if (document.layers.some((layer) => layer.id === payload.layer.id)) fail('DUPLICATE_ID', `Layer ${payload.layer.id} already exists`)
       assertIndex(payload.index, 'command.payload.index', document.layers.length)
       const cels = assertRecord(payload.cels, 'command.payload.cels')
@@ -639,12 +750,10 @@ export function assertPixelCommand(input, documentInput) {
       assertId(payload.layerId, 'command.payload.layerId')
       if (!document.layers.some((layer) => layer.id === payload.layerId)) fail('UNKNOWN_LAYER', `Unknown layer ${payload.layerId}`)
       const patch = assertRecord(payload.patch, 'command.payload.patch')
-      assertKnownFields(patch, new Set(['name', 'visible', 'locked', 'opacity']), 'command.payload.patch')
+      assertKnownFields(patch, new Set(['name', 'visible', 'locked', 'opacity', 'groupId', 'blendMode']), 'command.payload.patch')
       if (Object.keys(patch).length === 0) fail('EMPTY_PATCH', 'Layer patch must change at least one field')
-      if (patch.name !== undefined) assertString(patch.name, 'command.payload.patch.name', { min: 1, max: 80 })
-      if (patch.visible !== undefined) assertBoolean(patch.visible, 'command.payload.patch.visible')
-      if (patch.locked !== undefined) assertBoolean(patch.locked, 'command.payload.patch.locked')
-      if (patch.opacity !== undefined) assertNumber(patch.opacity, 'command.payload.patch.opacity', { min: 0, max: 1 })
+      const layer = document.layers.find((item) => item.id === payload.layerId)
+      assertLayer({ ...layer, ...patch }, 'command.payload.patch', new Set(document.layerGroups.map((group) => group.id)))
       break
     }
     case 'layers.reorder':
@@ -754,7 +863,7 @@ export function assertPixelCommand(input, documentInput) {
       for (const layerId of layerIds) {
         const layer = document.layers.find((item) => item.id === layerId)
         if (!layer) fail('UNKNOWN_LAYER', `Unknown layer ${layerId}`)
-        if (layer.locked) fail('LAYER_LOCKED', `Layer ${layerId} is locked`, { layerId })
+        assertWritableLayer(document, layer)
       }
       if (!new Set(['replace', 'non-transparent']).has(payload.mode)) fail('INVALID_COPY_MODE', `Unsupported cel copy mode ${String(payload.mode)}`)
       const cellCount = targetFrameIds.size * layerIds.size * document.width * document.height
@@ -911,6 +1020,42 @@ export function applyPixelCommand(documentInput, commandInput) {
       inversePayload = { colorId: color.id, color: color.color, name: color.name }
       color.color = payload.color.toUpperCase()
       if (payload.name !== undefined) color.name = payload.name
+      break
+    }
+    case 'groups.add': {
+      const index = payload.index ?? next.layerGroups.length
+      next.layerGroups.splice(index, 0, cloneJson(payload.group))
+      inverseType = 'groups.remove'
+      inversePayload = { groupId: payload.group.id }
+      break
+    }
+    case 'groups.remove': {
+      const index = next.layerGroups.findIndex((group) => group.id === payload.groupId)
+      const [group] = next.layerGroups.splice(index, 1)
+      const layerIds = next.layers.filter((layer) => layer.groupId === payload.groupId).map((layer) => layer.id)
+      for (const layer of next.layers) {
+        if (layer.groupId === payload.groupId) layer.groupId = null
+      }
+      inverseType = 'groups.restore'
+      inversePayload = { group, index, layerIds }
+      break
+    }
+    case 'groups.restore': {
+      next.layerGroups.splice(payload.index, 0, cloneJson(payload.group))
+      const layerIds = new Set(payload.layerIds)
+      for (const layer of next.layers) {
+        if (layerIds.has(layer.id)) layer.groupId = payload.group.id
+      }
+      inverseType = 'groups.remove'
+      inversePayload = { groupId: payload.group.id }
+      break
+    }
+    case 'groups.patch': {
+      const group = next.layerGroups.find((item) => item.id === payload.groupId)
+      const previous = Object.fromEntries(Object.keys(payload.patch).map((key) => [key, group[key]]))
+      Object.assign(group, payload.patch)
+      inverseType = 'groups.patch'
+      inversePayload = { groupId: payload.groupId, patch: previous }
       break
     }
     case 'layers.add': {
@@ -1112,15 +1257,34 @@ function parseRgba(color) {
   ]
 }
 
-function blendPixel(output, offset, source, opacity) {
+function blendChannel(mode, source, destination) {
+  switch (mode) {
+    case 'multiply':
+      return (source * destination) / 255
+    case 'screen':
+      return source + destination - (source * destination) / 255
+    case 'add':
+      return Math.min(255, source + destination)
+    default:
+      return source
+  }
+}
+
+function blendPixel(output, offset, source, opacity, mode) {
   const sourceAlpha = (source[3] / 255) * opacity
   if (sourceAlpha <= 0) return
   const destinationAlpha = output[offset + 3] / 255
   const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha)
   if (outputAlpha <= 0) return
-  output[offset] = Math.round((source[0] * sourceAlpha + output[offset] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha)
-  output[offset + 1] = Math.round((source[1] * sourceAlpha + output[offset + 1] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha)
-  output[offset + 2] = Math.round((source[2] * sourceAlpha + output[offset + 2] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha)
+  for (let channel = 0; channel < 3; channel += 1) {
+    const sourceChannel = source[channel]
+    const destinationChannel = output[offset + channel]
+    const blended = blendChannel(mode, sourceChannel, destinationChannel)
+    const premultiplied = sourceAlpha * (1 - destinationAlpha) * sourceChannel
+      + sourceAlpha * destinationAlpha * blended
+      + (1 - sourceAlpha) * destinationAlpha * destinationChannel
+    output[offset + channel] = Math.round(premultiplied / outputAlpha)
+  }
   output[offset + 3] = Math.round(outputAlpha * 255)
 }
 
@@ -1133,14 +1297,16 @@ export function renderPixelFrameRgba(documentInput, frameId, options = {}) {
   const frame = document.frames.find((item) => item.id === frameId)
   if (!frame) fail('UNKNOWN_FRAME', `Unknown frame ${frameId}`)
   const colors = new Map(document.palette.map((color) => [color.id, parseRgba(color.color)]))
+  const groupById = new Map(document.layerGroups.map((group) => [group.id, group]))
   const output = new Uint8ClampedArray(document.width * document.height * 4)
   for (const layer of document.layers) {
-    if ((!layer.visible && !settings.includeHiddenLayers) || layer.opacity <= 0) continue
+    const group = layer.groupId === null ? null : groupById.get(layer.groupId)
+    if (((!layer.visible || (group && !group.visible)) && !settings.includeHiddenLayers) || layer.opacity <= 0) continue
     const pixels = frame.cels[layer.id]
     for (let index = 0; index < pixels.length; index += 1) {
       const colorId = pixels[index]
       if (colorId === null) continue
-      blendPixel(output, index * 4, colors.get(colorId), layer.opacity)
+      blendPixel(output, index * 4, colors.get(colorId), layer.opacity, layer.blendMode)
     }
   }
   return output
@@ -1194,7 +1360,7 @@ export function createSpriteSheetMetadata(documentInput, options = {}) {
 function createSpriteSheetMetadataFromLayout(document, layout) {
   const animationSequences = new Map(document.animationTags.map((tag) => [tag.id, resolveAnimationTagFrames(document, tag)]))
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'aeonquill.sprite-sheet',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -1209,6 +1375,8 @@ function createSpriteSheetMetadataFromLayout(document, layout) {
       ...cloneJson(tag),
       frameIds: animationSequences.get(tag.id),
     })),
+    layerGroups: cloneJson(document.layerGroups),
+    layers: cloneJson(document.layers),
     palette: cloneJson(document.palette),
   }
 }

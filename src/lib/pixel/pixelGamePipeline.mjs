@@ -156,7 +156,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     : null
   const tileIds = new Map(layout.cells.map((cell) => [cell.frameId, cell.index + 1]))
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'aeonquill.pixel-game-bundle',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -188,6 +188,8 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
       data: options.mapFrameIds.map((frameId) => frameId === null ? 0 : tileIds.get(frameId)),
       frameIds: [...options.mapFrameIds],
     },
+    layerGroups: document.layerGroups.map((group) => ({ ...group })),
+    layers: document.layers.map((layer) => ({ ...layer })),
     palette: document.palette.map((color) => ({ ...color })),
   }
 }

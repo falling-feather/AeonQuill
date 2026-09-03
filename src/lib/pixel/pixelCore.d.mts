@@ -5,6 +5,10 @@ export type PixelCommandType =
   | 'pixels.patch'
   | 'pixels.restore'
   | 'palette.replace'
+  | 'groups.add'
+  | 'groups.remove'
+  | 'groups.restore'
+  | 'groups.patch'
   | 'layers.add'
   | 'layers.remove'
   | 'layers.restore'
@@ -32,12 +36,23 @@ export type PixelPaletteColor = {
   color: string
 }
 
+export type PixelLayerGroup = {
+  id: string
+  name: string
+  visible: boolean
+  locked: boolean
+}
+
+export type PixelBlendMode = 'normal' | 'multiply' | 'screen' | 'add'
+
 export type PixelLayer = {
   id: string
   name: string
   visible: boolean
   locked: boolean
   opacity: number
+  groupId: string | null
+  blendMode: PixelBlendMode
 }
 
 export type PixelFrame = {
@@ -67,13 +82,14 @@ export type PixelOnionSkin = {
 
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 2
+  schemaVersion: 3
   id: string
   name: string
   width: number
   height: number
   revision: number
   palette: PixelPaletteColor[]
+  layerGroups: PixelLayerGroup[]
   layers: PixelLayer[]
   frames: PixelFrame[]
   animationTags: PixelAnimationTag[]
@@ -119,7 +135,7 @@ export type SpriteSheetLayout = {
 }
 
 export type SpriteSheetMetadata = {
-  schemaVersion: 2
+  schemaVersion: 3
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -131,6 +147,8 @@ export type SpriteSheetMetadata = {
   spacing: number
   frames: SpriteSheetCell[]
   animations: Array<PixelAnimationTag & { frameIds: string[] }>
+  layerGroups: PixelLayerGroup[]
+  layers: PixelLayer[]
   palette: PixelPaletteColor[]
 }
 
@@ -140,13 +158,15 @@ export class PixelContractError extends Error {
 }
 
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 2
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 3
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
+export const PIXEL_BLEND_MODES: ReadonlyArray<PixelBlendMode>
 export const PIXEL_LIMITS: Readonly<{
   maxWidth: number
   maxHeight: number
   maxPaletteColors: number
   maxLayers: number
+  maxLayerGroups: number
   maxFrames: number
   maxAnimationTags: number
   maxDocumentCells: number

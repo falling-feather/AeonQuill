@@ -119,6 +119,19 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(await frameButtons.count(), 8)
     assert.deepEqual(await frameButtons.locator('strong').allInnerTexts(), ['南', '西南', '西', '西北', '北', '东北', '东', '东南'])
 
+    const groupWorkbench = page.getByLabel('图层组', { exact: true })
+    await groupWorkbench.getByRole('button', { name: '添加图层组', exact: true }).click()
+    const groupCard = groupWorkbench.locator('[data-group-id]').last()
+    const groupId = await groupCard.getAttribute('data-group-id')
+    assert.ok(groupId)
+    const groupName = groupCard.locator('input')
+    await groupName.fill('角色光影')
+    await groupName.press('Tab')
+    await page.getByLabel('所属图层组', { exact: true }).selectOption({ label: '角色光影' })
+    await page.getByLabel('混合模式', { exact: true }).selectOption('screen')
+    await groupWorkbench.getByRole('button', { name: '锁定图层组 角色光影', exact: true }).click()
+    await groupWorkbench.getByRole('button', { name: '解锁图层组 角色光影', exact: true }).click()
+
     const animationWorkbench = page.getByLabel('动画片段', { exact: true })
     await animationWorkbench.waitFor({ state: 'visible' })
     await animationWorkbench.getByRole('button', { name: '新建动画片段', exact: true }).click()
@@ -169,9 +182,14 @@ async function validatePixelGameUi(baseUrl) {
     const tilemap = JSON.parse((await readDownload('-tilemap.tmj')).toString('utf8'))
     const viewer = (await readDownload('-preview.html')).toString('utf8')
     const project = JSON.parse((await readDownload('.aeonpixel.json')).toString('utf8'))
-    assert.equal(project.schemaVersion, 2)
+    assert.equal(project.schemaVersion, 3)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
-    assert.equal(manifest.schemaVersion, 2)
+    assert.equal(project.layerGroups.some((group) => group.id === groupId && group.name === '角色光影'), true)
+    assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
+    assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.groupId, groupId)
+    assert.equal(manifest.schemaVersion, 3)
+    assert.equal(manifest.layerGroups.some((group) => group.id === groupId), true)
+    assert.equal(manifest.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
     assert.equal(manifest.directions.length, 8)
     assert.equal(manifest.frames.length, 8)
     assert.equal(manifest.animations.length, 2)
@@ -187,18 +205,22 @@ async function validatePixelGameUi(baseUrl) {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
     await page.getByRole('button', { name: '选择动画片段 八方演武', exact: true }).waitFor({ state: 'visible' })
+    const restoredGroupName = page.locator('.aq-pixel-group-list input').first()
+    await restoredGroupName.waitFor({ state: 'visible' })
+    assert.equal(await restoredGroupName.inputValue(), '角色光影')
+    assert.equal(await page.getByLabel('混合模式', { exact: true }).inputValue(), 'screen')
     assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
     assert.equal(await page.locator('html').evaluate((html) => html.scrollWidth <= html.clientWidth), true)
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel animation, game UI and six-file delivery',
+      label: 'pixel animation, layer groups, blending, game UI and six-file delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel animation, game UI and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel animation, layer groups, blending, game UI and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

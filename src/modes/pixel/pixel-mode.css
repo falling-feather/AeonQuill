@@ -1735,6 +1735,129 @@
   grid-template-rows: minmax(260px, 1fr) 244px;
 }
 
+/* V0.7.41 layer groups and deterministic blend routing */
+.aq-pixel-group-section {
+  display: grid;
+  gap: 8px;
+  margin: -2px 0 14px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--aq-pixel-line);
+}
+
+.aq-pixel-group-section > .aq-pixel-panel-heading {
+  margin-bottom: 0;
+}
+
+.aq-pixel-group-list {
+  display: grid;
+  gap: 5px;
+}
+
+.aq-pixel-group-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) repeat(3, 26px);
+  align-items: center;
+  gap: 3px;
+  min-height: 42px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #f8f8fa;
+}
+
+.aq-pixel-group-list > div.is-active {
+  border-color: #d8d5ff;
+  background: #f3f1ff;
+  box-shadow: inset 3px 0 #6553f5;
+}
+
+.aq-pixel-group-icon {
+  width: 27px;
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6553f5;
+  border-radius: 7px;
+  background: #eceaff;
+}
+
+.aq-pixel-group-list label {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.aq-pixel-group-list input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  outline: 0;
+  color: #343741;
+  background: transparent;
+  font: 600 10px/1.35 inherit;
+  text-overflow: ellipsis;
+}
+
+.aq-pixel-group-list small,
+.aq-pixel-group-empty {
+  color: #8b909b;
+  font-size: 9px;
+}
+
+.aq-pixel-group-empty {
+  margin: 0;
+  padding: 9px;
+  border: 1px dashed #dedfe5;
+  border-radius: 8px;
+  line-height: 1.55;
+  background: #fafafd;
+}
+
+.aq-pixel-group-list button {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #727783;
+  background: transparent;
+  cursor: pointer;
+}
+
+.aq-pixel-group-list button:hover {
+  color: #4338ca;
+  background: #e9e7ff;
+}
+
+.aq-pixel-layer-editor .aq-pixel-layer-routing {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.aq-pixel-layer-routing select {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0 24px 0 8px;
+  border: 1px solid #dedfe5;
+  border-radius: 7px;
+  color: #343741;
+  background: #fff;
+  font-size: 10px;
+}
+
+@media (max-width: 460px) {
+  .aq-pixel-layer-editor .aq-pixel-layer-routing {
+    grid-template-columns: 1fr;
+  }
+}
+
 .aq-pixel-timeline {
   overflow-y: auto;
 }
