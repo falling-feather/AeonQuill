@@ -28,6 +28,7 @@ import {
   deserializeSmartVideoDocument,
   downloadWorkspaceProjectPackage,
   importWorkspaceProjectPackage,
+  initializeWorkspaceModeDocument,
   listWorkspaceRecoveryPoints,
   loadLocalProject,
   loadWorkspaceCatalog,
@@ -41,6 +42,7 @@ import {
   type StoredProject,
   type WorkspaceRecoveryPoint,
 } from './lib/projectApi'
+import type { InitialWorkspaceModeDocument } from './lib/initialWorkspaceDocument'
 import type { LibraryAsset, LibraryAssetInsertion } from './lib/libraryApi'
 import {
   applyRuntimeRegistryMigration,
@@ -97,6 +99,14 @@ import type {
   RuntimeStatus,
 } from './types'
 import './product-app.css'
+
+async function createInitialModeDocument(
+  project: WorkspaceProject,
+  document: ProjectModeDocument,
+): Promise<InitialWorkspaceModeDocument> {
+  const { createInitialWorkspaceModeDocument } = await import('./lib/initialWorkspaceDocument')
+  return createInitialWorkspaceModeDocument(project, document)
+}
 
 type RuntimeProbe = {
   bridgeReady: boolean
@@ -751,13 +761,22 @@ export default function ProductApp() {
     }, 260)
   }, [flushProjectCatalogBridgeSave])
 
-  const commitProjectCatalog = useCallback((next: ProjectCatalog) => {
+  const commitProjectCatalog = useCallback((next: ProjectCatalog, options: { workspacePersisted?: boolean } = {}) => {
+    if (options.workspacePersisted) {
+      if (catalogBridgeSaveTimerRef.current !== undefined) window.clearTimeout(catalogBridgeSaveTimerRef.current)
+      catalogBridgeSaveTimerRef.current = undefined
+      catalogBridgeSaveRef.current = undefined
+      catalogBridgeBaseRevisionRef.current = next.revision
+      clientStateDirtyRef.current.delete('project-catalog')
+    }
     if (catalogBridgeBaseRevisionRef.current === undefined) {
       catalogBridgeBaseRevisionRef.current = projectCatalogRef.current.revision
     }
     const serialized = serializeProjectCatalog(next)
-    clientStateDirtyRef.current.add('project-catalog')
-    catalogBridgeSaveRef.current = serialized
+    if (!options.workspacePersisted) {
+      clientStateDirtyRef.current.add('project-catalog')
+      catalogBridgeSaveRef.current = serialized
+    }
     projectCatalogRef.current = next
     setProjectCatalog(next)
     try {
@@ -766,7 +785,10 @@ export default function ProductApp() {
     } catch {
       setProjectCatalogError('项目目录仍保留在当前页面，但浏览器本机存储写入失败。刷新前请勿关闭页面。')
     }
-    if (bridgeReadyRef.current) queueProjectCatalogBridgeSave(serialized)
+    if (bridgeReadyRef.current) {
+      if (options.workspacePersisted) void saveClientState('project-catalog', serialized).catch(() => undefined)
+      else queueProjectCatalogBridgeSave(serialized)
+    }
   }, [queueProjectCatalogBridgeSave])
 
   useEffect(() => () => {
@@ -854,26 +876,45 @@ export default function ProductApp() {
     }
   }, [chooseMode])
 
-  const handleCreateProject = useCallback((input: ProjectCreateInput) => {
+  const handleCreateProject = useCallback(async (input: ProjectCreateInput) => {
     try {
+      if (!bridgeReadyRef.current) {
+        throw new Error('本机项目服务尚未连接，无法安全建立项目正文。请稍后重试。')
+      }
+      await flushProjectCatalogBridgeSave()
+      const baseRevision = projectCatalogRef.current.revision
       const created = createWorkspaceProject(projectCatalogRef.current, input)
-      commitProjectCatalog(created.catalog)
+      const authoritative = await initializeWorkspaceModeDocument({
+        catalog: created.catalog,
+        baseRevision,
+        document: await createInitialModeDocument(created.project, created.document),
+        source: 'project-create',
+      })
+      commitProjectCatalog(authoritative.catalog, { workspacePersisted: true })
       const nextRoute = { modeId: input.initialModeId, projectId: created.project.id } as const
       navigate(nextRoute)
       setEntryIntentKey(routeKey(nextRoute))
       setModeNotice({ tone: 'success', message: `已创建项目“${created.project.title}”，三种创作模式可在项目内继续扩展。` })
     } catch (error) {
-      setProjectCatalogError(error instanceof Error ? error.message : '创建项目失败')
+      const message = error instanceof Error ? error.message : '创建项目失败'
+      setProjectCatalogError(message)
+      throw error
     }
-  }, [commitProjectCatalog, navigate])
+  }, [commitProjectCatalog, flushProjectCatalogBridgeSave, navigate])
 
-  const handleOpenProject = useCallback((projectId: string, modeId: ProductModeId) => {
+  const handleOpenProject = useCallback(async (projectId: string, modeId: ProductModeId) => {
     try {
+      if (bridgeReadyRef.current) await flushProjectCatalogBridgeSave()
+      const baseRevision = projectCatalogRef.current.revision
       let nextCatalog = projectCatalogRef.current
       let project = nextCatalog.projects.find((candidate) => candidate.id === projectId)
       if (!project) throw new Error(`找不到项目 ${projectId}`)
       let document = projectModeDocument(project, modeId)
+      let initialDocument: InitialWorkspaceModeDocument | undefined
       if (!document) {
+        if (!bridgeReadyRef.current) {
+          throw new Error('本机项目服务尚未连接，无法安全新增模式正文。请稍后重试。')
+        }
         const added = addProjectDocument(nextCatalog, projectId, {
           modeId,
           title: `${project.title} · ${modeId === 'balanced' ? '均衡画布' : modeId === 'pixel' ? '像素画布' : '智能视频'}`,
@@ -881,9 +922,18 @@ export default function ProductApp() {
         nextCatalog = added.catalog
         project = added.project
         document = added.document
+        initialDocument = await createInitialModeDocument(project, document)
       }
       nextCatalog = openWorkspaceProject(nextCatalog, projectId)
-      commitProjectCatalog(nextCatalog)
+      const authoritative = bridgeReadyRef.current && initialDocument
+        ? await initializeWorkspaceModeDocument({
+            catalog: nextCatalog,
+            baseRevision,
+            document: initialDocument,
+            source: 'project-add-mode',
+          })
+        : null
+      commitProjectCatalog(authoritative?.catalog ?? nextCatalog, { workspacePersisted: Boolean(authoritative) })
       const nextRoute = { modeId, projectId } as const
       navigate(nextRoute)
       setEntryIntentKey(routeKey(nextRoute))
@@ -891,7 +941,7 @@ export default function ProductApp() {
     } catch (error) {
       setProjectCatalogError(error instanceof Error ? error.message : '打开项目失败')
     }
-  }, [commitProjectCatalog, navigate, updatePreferences])
+  }, [commitProjectCatalog, flushProjectCatalogBridgeSave, navigate, updatePreferences])
 
   const handleProjectStatusChange = useCallback((projectId: string, status: 'active' | 'archived' | 'trashed') => {
     try {
@@ -1266,7 +1316,17 @@ export default function ProductApp() {
     setWorkspaceDocumentResolvedKey((current) => current === loadingKey ? current : null)
     void (async () => {
       await flushProjectCatalogBridgeSave()
-      return loadWorkspaceModeDocument(activeWorkspaceProjectId, activeModeDocumentId, activeModeDocumentMode)
+      let stored = await loadWorkspaceModeDocument(activeWorkspaceProjectId, activeModeDocumentId, activeModeDocumentMode)
+      if (!stored && activeWorkspaceProject && activeModeDocument?.revision === 0) {
+        const initialized = await initializeWorkspaceModeDocument({
+          catalog: projectCatalogRef.current,
+          baseRevision: projectCatalogRef.current.revision,
+          document: await createInitialModeDocument(activeWorkspaceProject, activeModeDocument),
+          source: 'revision-zero-backfill',
+        })
+        stored = initialized.document
+      }
+      return stored
     })()
       .then((stored) => {
         if (disposed) return
@@ -1312,6 +1372,8 @@ export default function ProductApp() {
   }, [
     activeModeDocumentId,
     activeModeDocumentMode,
+    activeModeDocument?.revision,
+    activeWorkspaceProject,
     activeWorkspaceProjectId,
     clientStateReady,
     flushProjectCatalogBridgeSave,
@@ -1360,6 +1422,52 @@ export default function ProductApp() {
       : preferences.balancedProjectId
     void refreshProject(projectId)
   }, [activeModeDocument?.id, preferences.balancedProjectId, refreshProject, route.modeId, route.projectId])
+
+  useEffect(() => {
+    if (
+      route.modeId !== 'balanced'
+      || !clientStateReady
+      || !runtimeProbe.bridgeReady
+      || projectProbe.status !== 'empty'
+      || !activeWorkspaceProject
+      || activeModeDocument?.modeId !== 'balanced'
+      || activeModeDocument.revision !== 0
+    ) return
+    let disposed = false
+    void (async () => {
+      await flushProjectCatalogBridgeSave()
+      let stored = await loadWorkspaceModeDocument(
+        activeWorkspaceProject.id,
+        activeModeDocument.id,
+        'balanced',
+      )
+      if (!stored) {
+        stored = (await initializeWorkspaceModeDocument({
+          catalog: projectCatalogRef.current,
+          baseRevision: projectCatalogRef.current.revision,
+          document: await createInitialModeDocument(activeWorkspaceProject, activeModeDocument),
+          source: 'revision-zero-backfill',
+        })).document
+      }
+      if (!disposed && stored) await refreshProject(activeModeDocument.id)
+    })().catch((error) => {
+      if (disposed) return
+      setModeNotice({
+        tone: 'error',
+        message: `均衡项目初始正文恢复失败：${error instanceof Error ? error.message : '未知错误'}`,
+      })
+    })
+    return () => { disposed = true }
+  }, [
+    activeModeDocument,
+    activeWorkspaceProject,
+    clientStateReady,
+    flushProjectCatalogBridgeSave,
+    projectProbe.status,
+    refreshProject,
+    route.modeId,
+    runtimeProbe.bridgeReady,
+  ])
 
   useEffect(() => {
     if (
@@ -1979,7 +2087,7 @@ export default function ProductApp() {
     const requestedWorkspaceKey = activeWorkspaceProjectId && requestedProjectId
       ? `${activeWorkspaceProjectId}:${requestedProjectId}:pixel`
       : null
-    if (requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
+    if (runtimeProbe.bridgeReady && requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
       return (
         <ModeGate
           modeLabel="像素模式"
@@ -1993,8 +2101,11 @@ export default function ProductApp() {
       status: pixelDraft.status,
       documentId: pixelDraft.document?.id,
     })
+    const registeredPristineDocument = Boolean(
+      activeModeDocument?.id === requestedProjectId && activeModeDocument?.revision === 0,
+    )
     const requestedDraftMissing = pixelEntry.requestedDraftMissing
-    if (requestedDraftMissing && entryIntentKey !== currentRouteKey) {
+    if (requestedDraftMissing && !registeredPristineDocument && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="像素模式"
@@ -2028,7 +2139,7 @@ export default function ProductApp() {
         />
       )
     }
-    if (pixelDraft.status === 'empty' && entryIntentKey !== currentRouteKey) {
+    if (pixelDraft.status === 'empty' && !registeredPristineDocument && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="像素模式"
@@ -2071,7 +2182,7 @@ export default function ProductApp() {
     const requestedWorkspaceKey = activeWorkspaceProjectId && requestedProjectId
       ? `${activeWorkspaceProjectId}:${requestedProjectId}:smart-video`
       : null
-    if (requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
+    if (runtimeProbe.bridgeReady && requestedWorkspaceKey && workspaceDocumentResolvedKey !== requestedWorkspaceKey) {
       return (
         <ModeGate
           modeLabel="智能视频"
@@ -2083,7 +2194,10 @@ export default function ProductApp() {
     const requestedSessionMissing = requestedProjectId && (
       videoSession.status !== 'ready' || videoSession.session?.projectId !== requestedProjectId
     )
-    if (requestedSessionMissing && entryIntentKey !== currentRouteKey) {
+    const registeredPristineDocument = Boolean(
+      activeModeDocument?.id === requestedProjectId && activeModeDocument?.revision === 0,
+    )
+    if (requestedSessionMissing && !registeredPristineDocument && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="智能视频"
@@ -2117,7 +2231,7 @@ export default function ProductApp() {
         />
       )
     }
-    if (videoSession.status === 'empty' && entryIntentKey !== currentRouteKey) {
+    if (videoSession.status === 'empty' && !registeredPristineDocument && entryIntentKey !== currentRouteKey) {
       return (
         <ModeGate
           modeLabel="智能视频"

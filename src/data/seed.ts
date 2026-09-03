@@ -1,14 +1,10 @@
-import type { Camera, CanvasElement } from '../types'
+import type { CanvasElement } from '../types'
 import sampleSummerCharacter from '../assets/sample-summer-character.png'
+
+export { seedCamera } from './canvasDefaults'
 
 export const APP_STORAGE_KEY = 'miaohui-canvas:v8'
 export const LEGACY_APP_STORAGE_KEYS = ['miaohui-canvas:v7'] as const
-
-export const seedCamera: Camera = {
-  x: 84,
-  y: 34,
-  zoom: 0.7,
-}
 
 const sprite = [
   '............',

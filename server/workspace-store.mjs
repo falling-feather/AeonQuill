@@ -337,35 +337,136 @@ export class WorkspaceStore {
     assertRevision(now, 'now')
     this.database.exec('BEGIN IMMEDIATE')
     try {
-      const nextProjects = new Map(catalog.projects.map((project) => [project.id, project]))
-      for (const project of current.catalog.projects) {
-        if (JSON.stringify(project) !== JSON.stringify(nextProjects.get(project.id))) {
-          this.insertRecoveryPoint({
-            project,
-            catalogRevision: current.catalog.revision,
-            reason: `catalog-before-${options.source || 'update'}`,
-            createdAt: now,
-          })
-        }
-      }
-      this.database.prepare(`
-        UPDATE workspace_meta SET schema_version = ?, value_json = ?, updated_at = ? WHERE key = ?
-      `).run(WORKSPACE_STORE_SCHEMA_VERSION, serialized, now, 'project-catalog')
-
-      const liveDocuments = new Set(catalog.projects.flatMap((project) => project.documents.map((document) => document.id)))
-      for (const row of this.database.prepare('SELECT document_id AS documentId FROM mode_documents').all()) {
-        if (!liveDocuments.has(row.documentId)) this.database.prepare('DELETE FROM mode_documents WHERE document_id = ?').run(row.documentId)
-      }
-      const liveProjects = new Set(catalog.projects.map((project) => project.id))
-      for (const row of this.database.prepare('SELECT DISTINCT project_id AS projectId FROM recovery_points').all()) {
-        if (!liveProjects.has(row.projectId)) this.database.prepare('DELETE FROM recovery_points WHERE project_id = ?').run(row.projectId)
-      }
+      this.writeCatalogTransaction({
+        catalog,
+        currentCatalog: current.catalog,
+        serialized,
+        now,
+        source: options.source || 'update',
+      })
       this.database.exec('COMMIT')
     } catch (error) {
       this.database.exec('ROLLBACK')
       throw error
     }
     return { catalog: clone(catalog), updatedAt: now }
+  }
+
+  writeCatalogTransaction({ catalog, currentCatalog, serialized, now, source }) {
+    const nextProjects = new Map(catalog.projects.map((project) => [project.id, project]))
+    for (const project of currentCatalog.projects) {
+      if (JSON.stringify(project) !== JSON.stringify(nextProjects.get(project.id))) {
+        this.insertRecoveryPoint({
+          project,
+          catalogRevision: currentCatalog.revision,
+          reason: `catalog-before-${source || 'update'}`,
+          createdAt: now,
+        })
+      }
+    }
+    this.database.prepare(`
+      UPDATE workspace_meta SET schema_version = ?, value_json = ?, updated_at = ? WHERE key = ?
+    `).run(WORKSPACE_STORE_SCHEMA_VERSION, serialized, now, 'project-catalog')
+
+    const liveDocuments = new Set(catalog.projects.flatMap((project) => project.documents.map((document) => document.id)))
+    for (const row of this.database.prepare('SELECT document_id AS documentId FROM mode_documents').all()) {
+      if (!liveDocuments.has(row.documentId)) this.database.prepare('DELETE FROM mode_documents WHERE document_id = ?').run(row.documentId)
+    }
+    const liveProjects = new Set(catalog.projects.map((project) => project.id))
+    for (const row of this.database.prepare('SELECT DISTINCT project_id AS projectId FROM recovery_points').all()) {
+      if (!liveProjects.has(row.projectId)) this.database.prepare('DELETE FROM recovery_points WHERE project_id = ?').run(row.projectId)
+    }
+  }
+
+  initializeModeDocument(catalogInput, input, options = {}) {
+    this.assertOpen()
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      fail('INVALID_MODE_DOCUMENT_REQUEST', 'Initial mode document request must be an object')
+    }
+    const catalog = assertProjectCatalog(catalogInput)
+    const current = this.getCatalog()
+    const baseRevision = assertRevision(options.baseRevision, 'baseRevision')
+    const projectId = assertId(input.projectId, 'projectId')
+    const documentId = assertId(input.documentId, 'documentId')
+    const modeId = assertModeId(input.modeId)
+    const revision = assertRevision(input.revision, 'revision')
+    const serialized = serializeProjectCatalog(catalog)
+    const currentSerialized = serializeProjectCatalog(current.catalog)
+    const catalogUnchanged = catalog.revision === current.catalog.revision && serialized === currentSerialized
+
+    if (!catalogUnchanged) {
+      if (baseRevision !== current.catalog.revision) {
+        fail('WORKSPACE_CATALOG_CONFLICT', `Stored catalog revision ${current.catalog.revision} does not match base ${baseRevision}`, 409, {
+          current,
+        })
+      }
+      if (catalog.revision <= current.catalog.revision) {
+        fail('WORKSPACE_CATALOG_CONFLICT', 'Workspace catalog revision must advance monotonically', 409, { current })
+      }
+      const previousOwners = new Map(current.catalog.projects.flatMap((project) =>
+        project.documents.map((document) => [document.id, project.id])))
+      for (const project of catalog.projects) {
+        for (const document of project.documents) {
+          const previousOwner = previousOwners.get(document.id)
+          if (previousOwner && previousOwner !== project.id) {
+            fail('WORKSPACE_DOCUMENT_OWNERSHIP_CHANGE', `Document ${document.id} cannot move between projects`, 409)
+          }
+        }
+      }
+    }
+
+    const { document: catalogDocument } = projectDocument(catalog, projectId, documentId)
+    if (catalogDocument.modeId !== modeId) {
+      fail('WORKSPACE_MODE_MISMATCH', 'Initial mode document type does not match the workspace catalog', 409)
+    }
+    if (catalogDocument.revision !== 0 || revision !== 0) {
+      fail('WORKSPACE_INITIAL_REVISION', 'Initial mode document and catalog registration must both use revision 0', 409)
+    }
+    const value = normalizeModeDocument(modeId, input.value, documentId)
+    const existing = this.getModeDocument(documentId)
+    if (existing) {
+      if (
+        existing.projectId === projectId
+        && existing.modeId === modeId
+        && existing.revision === revision
+        && existing.value === value
+        && catalogUnchanged
+      ) {
+        return { catalog: current.catalog, updatedAt: current.updatedAt, document: existing }
+      }
+      fail('WORKSPACE_DOCUMENT_CONFLICT', 'Initial mode document already exists with different content or ownership', 409, {
+        current: existing,
+      })
+    }
+
+    const now = options.now ?? Date.now()
+    assertRevision(now, 'now')
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      if (!catalogUnchanged) {
+        this.writeCatalogTransaction({
+          catalog,
+          currentCatalog: current.catalog,
+          serialized,
+          now,
+          source: options.source || 'initialize-document',
+        })
+      }
+      this.database.prepare(`
+        INSERT INTO mode_documents
+          (document_id, project_id, mode_id, revision, value_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(documentId, projectId, modeId, revision, value, now, now)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+    return {
+      catalog: clone(catalog),
+      updatedAt: catalogUnchanged ? current.updatedAt : now,
+      document: this.getModeDocument(documentId),
+    }
   }
 
   getModeDocument(documentId) {

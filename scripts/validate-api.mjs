@@ -349,6 +349,76 @@ try {
     '/api/workspace/documents/qa-pixel-document?projectId=qa-workspace&modeId=pixel',
   )
   assert.equal(JSON.parse(loadedWorkspaceDocument.document.value).name, 'QA Pixel')
+  const atomicWorkspace = createWorkspaceProject(workspaceCatalog, {
+    title: 'QA 原子新建', initialModeId: 'pixel',
+  }, {
+    now: 1_728_000_000_100,
+    projectId: 'qa-atomic-workspace',
+    documentId: 'qa-atomic-pixel',
+  })
+  const atomicPixel = createPixelDocument({
+    id: atomicWorkspace.document.id,
+    name: atomicWorkspace.document.title,
+    width: 16,
+    height: 16,
+    revision: 0,
+  })
+  const atomicInitializationBody = {
+    catalog: atomicWorkspace.catalog,
+    baseRevision: workspaceCatalog.revision,
+    source: 'api-atomic-qa',
+    document: {
+      projectId: atomicWorkspace.project.id,
+      documentId: atomicWorkspace.document.id,
+      modeId: 'pixel',
+      revision: 0,
+      value: serializePixelDocument(atomicPixel),
+    },
+  }
+  const initializedWorkspace = await requestJson(bridge.baseUrl, '/api/workspace/documents/initialize', {
+    method: 'POST', body: JSON.stringify(atomicInitializationBody),
+  }, 201)
+  assert.equal(initializedWorkspace.catalog.revision, atomicWorkspace.catalog.revision)
+  assert.equal(initializedWorkspace.document.documentId, atomicWorkspace.document.id)
+  assert.equal(initializedWorkspace.document.revision, 0)
+  const retriedInitialization = await requestJson(bridge.baseUrl, '/api/workspace/documents/initialize', {
+    method: 'POST', body: JSON.stringify(atomicInitializationBody),
+  }, 201)
+  assert.deepEqual(retriedInitialization.document, initializedWorkspace.document)
+  const invalidInitialization = await requestJson(bridge.baseUrl, '/api/workspace/documents/initialize', {
+    method: 'POST',
+    body: JSON.stringify({ ...atomicInitializationBody, unexpected: true }),
+  }, 400)
+  assert.equal(invalidInitialization.error.code, 'INVALID_WORKSPACE_INITIALIZATION_REQUEST')
+  const staleAtomicWorkspace = createWorkspaceProject(workspaceCatalog, {
+    title: 'QA 过期原子写入', initialModeId: 'pixel',
+  }, {
+    now: 1_728_000_000_200,
+    projectId: 'qa-stale-atomic',
+    documentId: 'qa-stale-atomic-pixel',
+  })
+  const staleAtomicPixel = createPixelDocument({
+    id: staleAtomicWorkspace.document.id,
+    name: staleAtomicWorkspace.document.title,
+    revision: 0,
+  })
+  const staleInitialization = await requestJson(bridge.baseUrl, '/api/workspace/documents/initialize', {
+    method: 'POST',
+    body: JSON.stringify({
+      catalog: staleAtomicWorkspace.catalog,
+      baseRevision: workspaceCatalog.revision,
+      document: {
+        projectId: staleAtomicWorkspace.project.id,
+        documentId: staleAtomicWorkspace.document.id,
+        modeId: 'pixel',
+        revision: 0,
+        value: serializePixelDocument(staleAtomicPixel),
+      },
+    }),
+  }, 409)
+  assert.equal(staleInitialization.error.code, 'WORKSPACE_CATALOG_CONFLICT')
+  const afterStaleInitialization = await requestJson(bridge.baseUrl, '/api/workspace/catalog')
+  assert.equal(afterStaleInitialization.catalog.projects.some(({ id }) => id === 'qa-stale-atomic'), false)
   const manualRecovery = await requestJson(bridge.baseUrl, '/api/workspace/projects/qa-workspace/recovery-points', {
     method: 'POST',
     body: JSON.stringify({ documentId: 'qa-pixel-document', reason: 'api-qa' }),

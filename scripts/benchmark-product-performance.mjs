@@ -192,15 +192,6 @@ async function useHash(page, hash, modeId) {
   await waitModeReady(page, modeId)
 }
 
-async function persistSeedDocument(page, modeId) {
-  if (modeId !== 'smart-video') return
-  await page.getByRole('button', { name: '故事', exact: true }).click()
-  await page.locator('.aq-video-script-field textarea').fill('场景：雨后的竹林。镜头：剑客收剑回望。')
-  await page.getByRole('button', { name: '编译故事计划', exact: true }).click()
-  await page.getByText('计划与执行双重校验', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
-  await delay(500)
-}
-
 async function measureColdHome(browser, bridge, issues) {
   const samples = []
   for (let index = 0; index < sampleCount.cold; index += 1) {
@@ -256,7 +247,6 @@ async function measureCachedModeEntry(browser, bridge, modeId, issues) {
   observePage(page, issues)
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   const created = await createProjectForMode(page, modeId, 'cached-seed')
-  await persistSeedDocument(page, modeId)
   const samples = []
   for (let index = 0; index < sampleCount.mode; index += 1) {
     await returnHome(page)
@@ -352,7 +342,6 @@ async function measureSoak(browser, bridge, issues) {
   for (const modeId of modeIds) {
     const created = await createProjectForMode(page, modeId, 'soak')
     routes[modeId] = created.hash
-    await persistSeedDocument(page, modeId)
     await returnHome(page)
   }
 

@@ -32,10 +32,7 @@ import {
 } from 'lucide-react'
 import {
   StoryContractError,
-  compileStoryProject,
-  createGenerationPlan,
   type FrameStrategy,
-  type GenerationPlan,
   type GenerationTaskStage,
   type StoryAspectRatio,
   type StoryProject,
@@ -58,10 +55,14 @@ import {
   type VideoFrameMode,
 } from '../../lib/story/storyExecution.mjs'
 import {
-  createVideoProductionProjectForStory,
   synchronizeVideoProductionProjectForStory,
   type VideoProductionProject,
 } from '../../lib/story/productionPipeline.mjs'
+import {
+  createSmartVideoPreviewPlan,
+  SMART_VIDEO_STARTER_SCRIPT,
+  type SmartVideoPlanResult,
+} from '../../lib/story/starterStory'
 import {
   createLocalVideoCandidateJobBinding,
   createLocalVideoCandidateTarget,
@@ -85,27 +86,13 @@ import type { LibraryAssetInsertion } from '../../lib/libraryApi'
 import { ProductionStudio, type ApprovedProductionStorySource } from './ProductionStudio'
 import './smart-video-workbench.css'
 
-const starterScript = `场景 1：雨夜·旧城书店
-镜头 1：全景，雨水沿着老街招牌落下，阿砚推开书店木门。
-阿砚：我只想找回被遗忘的那一页。
-镜头 2：缓慢推进到柜台，店主把一枚发光的墨锭推到灯下。
-店主：写下名字，时间就会替你翻页。
-
-场景 2：黎明·河岸
-镜头 1：中景跟拍，阿砚沿河岸奔跑，手中墨锭映出不断变化的旧照片。
-镜头 2：特写，阿砚停下，把墨锭按在空白纸面，晨光从纸上铺开。`
-
 export type SmartVideoRuntimeSummary = {
   state: 'offline' | 'starting' | 'ready' | 'busy' | 'error'
   label: string
   detail?: string
 }
 
-export type SmartVideoPlanResult = {
-  project: StoryProject
-  plan: GenerationPlan
-  production: VideoProductionProject
-}
+export type { SmartVideoPlanResult } from '../../lib/story/starterStory'
 
 export type SmartVideoWorkbenchProps = {
   initialText?: string
@@ -213,35 +200,6 @@ const stageIcons: Record<GenerationTaskStage, typeof Users> = {
   videos: Film,
 }
 
-function createPreviewPlan(
-  text: string,
-  kind: StorySourceKind,
-  aspectRatio: StoryAspectRatio,
-  frameStrategy: FrameStrategy,
-  projectId?: string,
-  projectTitle?: string,
-  production?: VideoProductionProject,
-): SmartVideoPlanResult {
-  const now = Date.now()
-  const project = compileStoryProject({
-    kind,
-    text,
-    projectId,
-    title: projectTitle,
-    aspectRatio,
-    frameStrategy,
-    defaultShotSeconds: 5,
-    now,
-  })
-  return {
-    project,
-    plan: createGenerationPlan(project, { now }),
-    production: production
-      ? synchronizeVideoProductionProjectForStory(production, project, { now })
-      : createVideoProductionProjectForStory(project, { now }),
-  }
-}
-
 function errorMessage(error: unknown) {
   if (error instanceof StoryContractError) return `${error.code} · ${error.message}`
   return error instanceof Error ? error.message : '无法处理当前请求'
@@ -316,7 +274,7 @@ function runtimeSnapshotFromFailure(message: string): ExecutionRuntimeSnapshot {
 }
 
 export function SmartVideoWorkbench({
-  initialText = starterScript,
+  initialText = SMART_VIDEO_STARTER_SCRIPT,
   initialKind = 'script',
   initialResult,
   projectId,
@@ -333,7 +291,7 @@ export function SmartVideoWorkbench({
   const [aspectRatio, setAspectRatio] = useState<StoryAspectRatio>(initialResult?.project.settings.aspectRatio ?? '16:9')
   const [frameStrategy, setFrameStrategy] = useState<FrameStrategy>(initialResult?.project.settings.frameStrategy ?? 'start-end')
   const [result, setResult] = useState<SmartVideoPlanResult>(() => initialResult
-    ?? createPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle))
+    ?? createSmartVideoPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle))
   const firstShotId = result.project.scenes[0]?.shots[0]?.id ?? ''
   const [error, setError] = useState<string | null>(null)
   const [executionError, setExecutionError] = useState<string | null>(null)
@@ -482,7 +440,7 @@ export function SmartVideoWorkbench({
 
   const compile = () => {
     try {
-      const next = createPreviewPlan(text, kind, aspectRatio, frameStrategy, projectId, projectTitle)
+      const next = createSmartVideoPreviewPlan(text, kind, aspectRatio, frameStrategy, projectId, projectTitle)
       const nextFirstShotId = next.project.scenes[0]?.shots[0]?.id ?? ''
       setResult(next)
       setActiveSceneId(next.project.scenes[0]?.id ?? '')
@@ -779,7 +737,7 @@ export function SmartVideoWorkbench({
 
   const bridgeProductionSource = (source: ApprovedProductionStorySource) => {
     try {
-      const next = createPreviewPlan(
+      const next = createSmartVideoPreviewPlan(
         source.text,
         source.kind,
         source.aspectRatio,

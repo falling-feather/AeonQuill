@@ -220,6 +220,29 @@ export async function saveWorkspaceCatalog(catalog: ProjectCatalog, baseRevision
 const workspaceDocumentRevisions = new Map<string, number | null>()
 const workspaceDocumentWrites = new Map<string, Promise<WorkspaceModeDocument>>()
 
+export async function initializeWorkspaceModeDocument(input: {
+  catalog: ProjectCatalog
+  baseRevision: number
+  document: Pick<WorkspaceModeDocument, 'projectId' | 'documentId' | 'modeId' | 'revision' | 'value'>
+  source?: string
+}) {
+  const payload = await api<WorkspaceCatalogRecord & { document: WorkspaceModeDocument }>(
+    '/api/workspace/documents/initialize',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        catalog: input.catalog,
+        baseRevision: input.baseRevision,
+        document: input.document,
+        source: input.source ?? 'product-shell-create',
+      }),
+    },
+  )
+  workspaceDocumentRevisions.set(payload.document.documentId, payload.document.revision)
+  return payload
+}
+
 export async function loadWorkspaceModeDocument(
   projectId: string,
   documentId: string,

@@ -4386,6 +4386,32 @@ const server = createServer(async (request, response) => {
         source: body.source || 'client',
       }))
     }
+    if (request.method === 'POST' && pathname === '/api/workspace/documents/initialize') {
+      const body = await readJsonBody(request, 72 * 1024 * 1024)
+      const allowed = new Set(['catalog', 'baseRevision', 'document', 'source'])
+      const documentAllowed = new Set(['projectId', 'documentId', 'modeId', 'revision', 'value'])
+      if (
+        !body
+        || typeof body !== 'object'
+        || Array.isArray(body)
+        || Object.keys(body).some((key) => !allowed.has(key))
+        || !('catalog' in body)
+        || !('baseRevision' in body)
+        || !body.document
+        || typeof body.document !== 'object'
+        || Array.isArray(body.document)
+        || Object.keys(body.document).some((key) => !documentAllowed.has(key))
+        || [...documentAllowed].some((key) => !(key in body.document))
+        || (body.source !== undefined && (typeof body.source !== 'string' || body.source.length > 80))
+      ) {
+        return sendError(response, 400, 'INVALID_WORKSPACE_INITIALIZATION_REQUEST', '项目与初始正文请求字段无效')
+      }
+      const initialized = workspaceStore.initializeModeDocument(body.catalog, body.document, {
+        baseRevision: body.baseRevision,
+        source: body.source || 'client-create',
+      })
+      return sendJson(response, 201, initialized)
+    }
     const workspacePackageMatch = /^\/api\/workspace\/projects\/([^/]+)\/package$/u.exec(pathname)
     const workspacePackagePreviewMatch = /^\/api\/workspace\/projects\/([^/]+)\/package\/preview$/u.exec(pathname)
     if (request.method === 'GET' && workspacePackagePreviewMatch) {
@@ -4743,7 +4769,25 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && pathname === '/api/projects/current') {
       const projectId = url.searchParams.get('id') || 'local-project'
-      const project = projectStore.getProject(projectId)
+      let project = projectStore.getProject(projectId)
+      if (!project) {
+        const workspaceDocument = workspaceStore.getModeDocument(projectId)
+        if (workspaceDocument?.modeId === 'balanced') {
+          const document = JSON.parse(workspaceDocument.value)
+          assertCanvasDocument(document)
+          project = {
+            id: document.id,
+            title: document.title,
+            schemaVersion: 1,
+            revision: document.revision,
+            document,
+            createdAt: workspaceDocument.createdAt,
+            updatedAt: workspaceDocument.updatedAt,
+            assets: [],
+            assetVersions: [],
+          }
+        }
+      }
       return sendJson(response, 200, { project })
     }
     if (request.method === 'POST' && pathname === '/api/projects/gc') {

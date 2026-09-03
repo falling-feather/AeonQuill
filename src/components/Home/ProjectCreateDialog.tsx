@@ -1,4 +1,4 @@
-import { Blend, ChevronRight, Clapperboard, Grid3X3, ImagePlus, X } from 'lucide-react'
+import { Blend, ChevronRight, Clapperboard, Grid3X3, ImagePlus, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ProjectCreateInput } from '../../shell/contracts'
 import type { ProductModeId } from '../../shell/modeRegistry'
@@ -15,7 +15,7 @@ interface ProjectCreateDialogProps {
   open: boolean
   initialModeId: ProductModeId
   onClose: () => void
-  onCreate: (input: ProjectCreateInput) => void
+  onCreate: (input: ProjectCreateInput) => void | Promise<void>
 }
 
 export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: ProjectCreateDialogProps) {
@@ -23,9 +23,13 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
   const [description, setDescription] = useState('')
   const [modeId, setModeId] = useState<ProductModeId>(initialModeId)
   const [color, setColor] = useState<ProjectCreateInput['color']>('amber')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const titleRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLFormElement>(null)
   const onCloseRef = useRef(onClose)
+  const busyRef = useRef(busy)
+  busyRef.current = busy
 
   useEffect(() => {
     onCloseRef.current = onClose
@@ -34,9 +38,10 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
   useEffect(() => {
     if (!open) return
     setModeId(initialModeId)
+    setError(null)
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus())
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Escape' && !busyRef.current) onCloseRef.current()
       if (event.key !== 'Tab') return
       const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -71,13 +76,22 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
         role="dialog"
         aria-modal="true"
         aria-labelledby="aq-project-dialog-title"
-        onSubmit={(event) => {
+        aria-busy={busy}
+        onSubmit={async (event) => {
           event.preventDefault()
           const normalizedTitle = title.trim()
-          if (!normalizedTitle) return
-          onCreate({ title: normalizedTitle, description: description.trim(), initialModeId: modeId, color })
-          setTitle('')
-          setDescription('')
+          if (!normalizedTitle || busy) return
+          setBusy(true)
+          setError(null)
+          try {
+            await onCreate({ title: normalizedTitle, description: description.trim(), initialModeId: modeId, color })
+            setTitle('')
+            setDescription('')
+          } catch (nextError) {
+            setError(nextError instanceof Error ? nextError.message : '项目创建失败，请重试。')
+          } finally {
+            setBusy(false)
+          }
         }}
       >
         <header>
@@ -85,7 +99,7 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
             <h2 id="aq-project-dialog-title">创建新项目</h2>
             <p>先选择入口，项目建立后仍可使用全部三种创作模式。</p>
           </div>
-          <button type="button" className="aq-project-dialog__close" aria-label="关闭创建项目" onClick={onClose}>
+          <button type="button" className="aq-project-dialog__close" aria-label="关闭创建项目" onClick={onClose} disabled={busy}>
             <X size={18} />
           </button>
         </header>
@@ -133,11 +147,15 @@ export function ProjectCreateDialog({ open, initialModeId, onClose, onCreate }: 
             <summary><ChevronRight size={15} /> 高级选项</summary>
             <p>当前原型将项目目录保存在本机用户数据，并为每份模式文档建立独立引用；可配置项目根目录将在 P0 后续版本接入。</p>
           </details>
+
+          {error ? <p className="aq-project-dialog__error" role="alert">{error}</p> : null}
         </div>
 
         <footer>
-          <button type="button" className="aq-project-cancel" onClick={onClose}>取消</button>
-          <button type="submit" className="aq-project-create" disabled={!title.trim()}>创建并进入</button>
+          <button type="button" className="aq-project-cancel" onClick={onClose} disabled={busy}>取消</button>
+          <button type="submit" className="aq-project-create" disabled={!title.trim() || busy}>
+            {busy ? <><Loader2 size={15} className="aq-spin" /> 正在建立正文</> : '创建并进入'}
+          </button>
         </footer>
       </form>
     </div>

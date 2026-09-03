@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 
+import { createCanvasDocument } from '../src/lib/canvasCore.mjs'
 import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
 import {
   addProjectDocument,
@@ -44,6 +45,120 @@ function twoProjectCatalog() {
   }, { now: 2_000, projectId: 'project-pixel', documentId: 'document-pixel' })
   return result.catalog
 }
+
+function initialPixelDocument(created) {
+  return {
+    projectId: created.project.id,
+    documentId: created.document.id,
+    modeId: 'pixel',
+    revision: 0,
+    value: serializePixelDocument(createPixelDocument({
+      id: created.document.id,
+      name: created.document.title,
+      width: 16,
+      height: 16,
+      revision: 0,
+    })),
+  }
+}
+
+test('catalog and revision-zero mode body initialize atomically and retry idempotently', async () => {
+  await withStore(async (store) => {
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: '原子像素项目', initialModeId: 'pixel',
+    }, { now: 1_000, projectId: 'project-atomic', documentId: 'document-atomic' })
+    const document = initialPixelDocument(created)
+    const first = store.initializeModeDocument(created.catalog, document, {
+      baseRevision: 0,
+      now: 2_000,
+      source: 'unit-create',
+    })
+
+    assert.equal(first.catalog.revision, 1)
+    assert.equal(first.document.revision, 0)
+    assert.equal(JSON.parse(first.document.value).id, created.document.id)
+    assert.equal(store.getCatalog().catalog.projects[0].id, created.project.id)
+
+    const retry = store.initializeModeDocument(created.catalog, document, {
+      baseRevision: 0,
+      now: 3_000,
+      source: 'unit-retry',
+    })
+    assert.deepEqual(retry.document, first.document)
+    assert.equal(store.getCatalog().catalog.revision, 1)
+  })
+})
+
+test('initialization rejects stale catalog writers without leaving a catalog-only project', async () => {
+  await withStore(async (store) => {
+    const first = createWorkspaceProject(createProjectCatalog(), {
+      title: '已提交项目', initialModeId: 'pixel',
+    }, { now: 1_000, projectId: 'project-first', documentId: 'document-first' })
+    store.initializeModeDocument(first.catalog, initialPixelDocument(first), {
+      baseRevision: 0,
+      now: 2_000,
+    })
+    const stale = createWorkspaceProject(createProjectCatalog(), {
+      title: '过期写入', initialModeId: 'pixel',
+    }, { now: 3_000, projectId: 'project-stale', documentId: 'document-stale' })
+
+    assert.throws(
+      () => store.initializeModeDocument(stale.catalog, initialPixelDocument(stale), {
+        baseRevision: 0,
+        now: 4_000,
+      }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_CATALOG_CONFLICT',
+    )
+    assert.equal(store.getCatalog().catalog.projects.some(({ id }) => id === 'project-stale'), false)
+    assert.equal(store.getModeDocument('document-stale'), null)
+  })
+})
+
+test('invalid initial body fails before the catalog transaction and leaves no partial entry', async () => {
+  await withStore(async (store) => {
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: '非法正文', initialModeId: 'balanced',
+    }, { now: 1_000, projectId: 'project-invalid', documentId: 'document-invalid' })
+    const wrongId = createCanvasDocument({
+      id: 'other-document',
+      title: created.document.title,
+      elements: [],
+      camera: { x: 0, y: 0, zoom: 1 },
+      now: 1_000,
+    })
+
+    assert.throws(
+      () => store.initializeModeDocument(created.catalog, {
+        projectId: created.project.id,
+        documentId: created.document.id,
+        modeId: 'balanced',
+        revision: 0,
+        value: JSON.stringify(wrongId),
+      }, { baseRevision: 0, now: 2_000 }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'MODE_DOCUMENT_ID_MISMATCH',
+    )
+    assert.deepEqual(store.getCatalog().catalog.projects, [])
+    assert.equal(store.getModeDocument(created.document.id), null)
+  })
+})
+
+test('revision-zero catalog-only entries are backfilled without advancing the catalog', async () => {
+  await withStore(async (store) => {
+    const created = createWorkspaceProject(createProjectCatalog(), {
+      title: '历史空入口', initialModeId: 'pixel',
+    }, { now: 1_000, projectId: 'project-backfill', documentId: 'document-backfill' })
+    store.saveCatalog(created.catalog, { baseRevision: 0, now: 2_000 })
+    const recovered = store.initializeModeDocument(created.catalog, initialPixelDocument(created), {
+      baseRevision: created.catalog.revision,
+      now: 3_000,
+      source: 'unit-backfill',
+    })
+
+    assert.equal(recovered.catalog.revision, created.catalog.revision)
+    assert.equal(recovered.document.revision, 0)
+    assert.equal(store.getModeDocument(created.document.id).documentId, created.document.id)
+  })
+})
 
 test('SQLite catalog is authoritative, monotonic and survives reopen', async () => {
   await withStore(async (store, root) => {

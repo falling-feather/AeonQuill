@@ -65,7 +65,7 @@ export interface AeonQuillShellProps {
   projectCatalogReady?: boolean
   refreshingRuntime?: boolean
   onModeSelect?: (modeId: ProductModeId) => void
-  onCreateProject?: (input: ProjectCreateInput) => void
+  onCreateProject?: (input: ProjectCreateInput) => void | Promise<void>
   onOpenProject?: (projectId: string, modeId: ProductModeId) => void
   onProjectStatusChange?: (projectId: string, status: ProjectStatus) => void
   onOpenProjectRecovery?: (projectId: string) => void
@@ -135,9 +135,9 @@ export function AeonQuillShell({
     if (modeId !== 'all') onModeSelect?.(modeId)
   }
 
-  const create = (input: ProjectCreateInput) => {
+  const create = async (input: ProjectCreateInput) => {
     if (!projectCatalogReady) return
-    onCreateProject?.(input)
+    await onCreateProject?.(input)
     setDialogOpen(false)
   }
 
