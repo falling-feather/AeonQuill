@@ -1,4 +1,9 @@
-import { assertPixelDocument, createSpriteSheetLayout, resolvePixelAnimationSequences } from './pixelCore.mjs'
+import {
+  assertPixelDocument,
+  createSpriteSheetLayout,
+  renderPixelAnimationClipRgba,
+  resolvePixelAnimationSequences,
+} from './pixelCore.mjs'
 import { createPixelExportBundle, safePixelFilename } from './pixelConversion.mjs'
 
 export const PIXEL_DIRECTIONS = Object.freeze([
@@ -151,7 +156,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     : null
   const tileIds = new Map(layout.cells.map((cell) => [cell.frameId, cell.index + 1]))
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'aeonquill.pixel-game-bundle',
     sourceDocumentId: document.id,
     sourceRevision: document.revision,
@@ -173,6 +178,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
       frames: frames.map((frame) => ({ id: frame.id, durationMs: frame.durationMs })),
     },
     animations,
+    animationEvents: document.animationEvents.map((event) => ({ ...event })),
     frames,
     directions,
     tilemap: {
@@ -186,6 +192,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     layerGroups: document.layerGroups.map((group) => ({ ...group })),
     layers: document.layers.map((layer) => ({ ...layer })),
     palette: document.palette.map((color) => ({ ...color })),
+    paletteCycles: document.paletteCycles.map((cycle) => ({ ...cycle, colorIds: [...cycle.colorIds] })),
   }
 }
 
@@ -325,7 +332,11 @@ function draw(frame){
   const ax=Math.min(canvas.width-.25,Math.max(.25,frame.anchor.x));const ay=Math.min(canvas.height-.25,Math.max(.25,frame.anchor.y));
   ctx.strokeStyle='#B596FF';ctx.lineWidth=.5;ctx.beginPath();ctx.moveTo(Math.max(0,ax-1.5),ay);ctx.lineTo(Math.min(canvas.width,ax+1.5),ay);ctx.moveTo(ax,Math.max(0,ay-1.5));ctx.lineTo(ax,Math.min(canvas.height,ay+1.5));ctx.stroke();
   const tile=frame.tileRule?'\\nTerrain '+frame.tileRule.terrainId+' · mask '+frame.tileRule.bitmask:'\\nTerrain 未设置';
-  document.querySelector('#meta').textContent=frame.name+' · '+frame.durationMs+'ms\\n锚点 '+frame.anchor.x+','+frame.anchor.y+'\\n碰撞区 '+frame.collisions.length+tile+'\\n图块 '+manifest.tilemap.width+'×'+manifest.tilemap.height;
+  const events=manifest.animationEvents.filter(event=>event.animationTagId===manifest.animation.id&&event.frameId===frame.id);
+  const eventText=events.length?'\\n事件 '+events.map(event=>event.name+' ['+event.type+']'+(event.value?' = '+event.value:'')).join(' / '):'\\n事件 无';
+  const activeCycles=manifest.paletteCycles.filter(cycle=>cycle.enabled);
+  const cycleText='\\n调色板循环 '+(activeCycles.length?activeCycles.map(cycle=>cycle.name+' · '+cycle.direction+' · '+cycle.stepDurationMs+'ms').join(' / '):'无');
+  document.querySelector('#meta').textContent=frame.name+' · '+frame.durationMs+'ms\\n锚点 '+frame.anchor.x+','+frame.anchor.y+'\\n碰撞区 '+frame.collisions.length+tile+eventText+cycleText+'\\n图块 '+manifest.tilemap.width+'×'+manifest.tilemap.height;
 }
 function loop(now){const seq=manifest.animation.frames;if(image.complete&&seq.length){const ref=manual?frames.get(manual):frames.get(seq[index].id);draw(ref);if(playing&&!manual&&now-last>=seq[index].durationMs){last=now;index=(index+1)%seq.length;}}requestAnimationFrame(loop)}
 document.querySelector('#play').onclick=e=>{playing=!playing;manual=null;e.target.textContent=playing?'暂停动画':'播放动画'};
@@ -370,6 +381,38 @@ export function createPixelGameExportBundle(documentInput, optionsInput = {}) {
       filename: `${options.baseName}-preview.html`,
       mime: 'text/html',
       text: createViewerHtml(manifest),
+    },
+  }
+}
+
+export function createPixelAnimationClipExportBundle(documentInput, tagId, optionsInput = {}) {
+  const document = assertPixelDocument(documentInput)
+  const options = assertRecord(optionsInput, 'options')
+  assertKnownFields(options, new Set(['columns', 'padding', 'spacing', 'baseName']), 'options')
+  const tag = document.animationTags.find((item) => item.id === tagId)
+  if (!tag) fail('UNKNOWN_ANIMATION_TAG', `Unknown animation tag ${String(tagId)}`)
+  const fromIndex = document.frames.findIndex((frame) => frame.id === tag.fromFrameId)
+  const toIndex = document.frames.findIndex((frame) => frame.id === tag.toFrameId)
+  const uniqueFrameCount = toIndex - fromIndex + 1
+  const columns = assertInteger(options.columns ?? Math.min(4, uniqueFrameCount), 'options.columns', 1, uniqueFrameCount)
+  const padding = assertInteger(options.padding ?? 1, 'options.padding', 0, 64)
+  const spacing = assertInteger(options.spacing ?? 1, 'options.spacing', 0, 64)
+  const baseName = safePixelFilename(options.baseName ?? document.name)
+  const clipName = `${baseName}-${safePixelFilename(tag.name, tag.id)}-clip`
+  const clip = renderPixelAnimationClipRgba(document, tag.id, { columns, padding, spacing })
+  return {
+    sprite: {
+      filename: `${clipName}.png`,
+      mime: 'image/png',
+      width: clip.layout.width,
+      height: clip.layout.height,
+      pixels: clip.pixels,
+    },
+    manifest: {
+      filename: `${clipName}.json`,
+      mime: 'application/json',
+      text: JSON.stringify(clip.metadata, null, 2),
+      value: clip.metadata,
     },
   }
 }

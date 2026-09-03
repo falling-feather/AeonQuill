@@ -83,7 +83,7 @@ async function waitForDownloads(downloads, count, timeoutMs = 15_000) {
   while (downloads.length < count && Date.now() < deadline) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
   }
-  assert.equal(downloads.length, count, `Expected ${count} game bundle downloads, received ${downloads.length}`)
+  assert.equal(downloads.length, count, `Expected ${count} pixel delivery downloads, received ${downloads.length}`)
 }
 
 async function validatePixelGameUi(baseUrl) {
@@ -118,6 +118,17 @@ async function validatePixelGameUi(baseUrl) {
     const frameButtons = page.locator('.aq-pixel-frame-strip > button')
     assert.equal(await frameButtons.count(), 8)
     assert.deepEqual(await frameButtons.locator('strong').allInnerTexts(), ['南', '西南', '西', '西北', '北', '东北', '东', '东南'])
+
+    const paletteCycleWorkbench = page.getByLabel('调色板循环', { exact: true })
+    await paletteCycleWorkbench.getByRole('button', { name: '新建调色板循环', exact: true }).click()
+    const cycleName = paletteCycleWorkbench.getByLabel('调色板循环名称', { exact: true })
+    await cycleName.fill('灵光轮转')
+    await cycleName.press('Tab')
+    await paletteCycleWorkbench.getByRole('button', { name: '选择调色板循环 灵光轮转', exact: true }).waitFor({ state: 'visible' })
+    await paletteCycleWorkbench.getByLabel('调色板循环方向', { exact: true }).selectOption('ping-pong')
+    const cycleStep = paletteCycleWorkbench.getByLabel('调色板循环步长', { exact: true })
+    await cycleStep.fill('80')
+    await cycleStep.press('Tab')
 
     const groupWorkbench = page.getByLabel('图层组', { exact: true })
     await groupWorkbench.getByRole('button', { name: '添加图层组', exact: true }).click()
@@ -168,6 +179,18 @@ async function validatePixelGameUi(baseUrl) {
     await page.getByText(/八方演武.*8 帧统一设为 180 ms/u).waitFor({ state: 'visible' })
     assert.deepEqual(await frameButtons.locator('small').allInnerTexts(), Array(8).fill('180 ms'))
 
+    const eventWorkbench = animationWorkbench.getByLabel('动画事件', { exact: true })
+    await eventWorkbench.getByRole('button', { name: '添加动画事件', exact: true }).click()
+    const eventRow = eventWorkbench.locator('.aq-pixel-event-row').first()
+    await eventRow.waitFor({ state: 'visible' })
+    const eventName = eventRow.locator('input').first()
+    await eventName.fill('剑鸣')
+    await eventName.press('Tab')
+    await eventRow.locator('select').first().selectOption('sfx')
+    const eventPayload = eventRow.locator('input').nth(1)
+    await eventPayload.fill('sfx.sword')
+    await eventPayload.press('Tab')
+
     await animationWorkbench.getByRole('button', { name: '覆盖复制当前图层', exact: true }).click()
     await page.getByText(/覆盖复制完成.*7 个目标帧/u).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: '撤销', exact: true }).click()
@@ -181,8 +204,11 @@ async function validatePixelGameUi(baseUrl) {
     await page.getByRole('button', { name: '停止预览', exact: true }).click()
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-animation-desktop.png'), fullPage: true })
 
+    await animationWorkbench.getByRole('button', { name: /活动片段包/u }).click()
+    await waitForDownloads(downloads, 2)
+    await page.getByText(/活动片段包完成/u).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: /游戏资产包/u }).click()
-    await waitForDownloads(downloads, 6)
+    await waitForDownloads(downloads, 8)
     await page.getByText(/游戏资产包完成/u).waitFor({ state: 'visible' })
     const byFilename = new Map(downloads.map((download) => [download.suggestedFilename(), download]))
     const filenames = [...byFilename.keys()]
@@ -192,6 +218,8 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(filenames.some((name) => name.endsWith('-tileset.tsj')), true)
     assert.equal(filenames.some((name) => name.endsWith('-tilemap.tmj')), true)
     assert.equal(filenames.some((name) => name.endsWith('-preview.html')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-clip.png')), true)
+    assert.equal(filenames.some((name) => name.endsWith('-clip.json')), true)
 
     const readDownload = async (suffix) => {
       const entry = [...byFilename.entries()].find(([name]) => name.endsWith(suffix))
@@ -205,12 +233,19 @@ async function validatePixelGameUi(baseUrl) {
     const tilemap = JSON.parse((await readDownload('-tilemap.tmj')).toString('utf8'))
     const viewer = (await readDownload('-preview.html')).toString('utf8')
     const project = JSON.parse((await readDownload('.aeonpixel.json')).toString('utf8'))
-    assert.equal(project.schemaVersion, 4)
+    const clipManifest = JSON.parse((await readDownload('-clip.json')).toString('utf8'))
+    const clipSprite = await readDownload('-clip.png')
+    assert.deepEqual([...clipSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+    assert.equal(project.schemaVersion, 5)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
+    assert.equal(project.paletteCycles.some((cycle) => cycle.name === '灵光轮转' && cycle.stepDurationMs === 80 && cycle.direction === 'ping-pong'), true)
+    assert.equal(project.animationEvents.some((event) => event.name === '剑鸣' && event.type === 'sfx' && event.value === 'sfx.sword'), true)
     assert.equal(project.layerGroups.some((group) => group.id === groupId && group.name === '角色光影'), true)
     assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
     assert.equal(project.layers.find((layer) => layer.id === project.activeLayerId)?.groupId, groupId)
-    assert.equal(manifest.schemaVersion, 4)
+    assert.equal(manifest.schemaVersion, 5)
+    assert.equal(manifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
+    assert.equal(manifest.animationEvents.some((event) => event.name === '剑鸣'), true)
     assert.equal(manifest.layerGroups.some((group) => group.id === groupId), true)
     assert.equal(manifest.layers.find((layer) => layer.id === project.activeLayerId)?.blendMode, 'screen')
     assert.equal(manifest.directions.length, 8)
@@ -234,11 +269,22 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(tilemap.tilesets[0].source.endsWith('-tileset.tsj'), true)
     assert.equal(/https?:\/\//u.test(viewer), false)
     assert.match(viewer, /collisionColors/u)
+    assert.match(viewer, /paletteCycles/u)
+    assert.equal(clipManifest.schemaVersion, 5)
+    assert.equal(clipManifest.kind, 'aeonquill.pixel-animation-clip')
+    assert.equal(clipManifest.frames.length, 8)
+    assert.equal(clipManifest.animation.frameIds.length, 14)
+    assert.equal(clipManifest.events.some((event) => event.name === '剑鸣'), true)
+    assert.equal(clipManifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 10_000 })
-    await page.getByRole('button', { name: '选择动画片段 八方演武', exact: true }).waitFor({ state: 'visible' })
+    const restoredAnimationButton = page.getByRole('button', { name: '选择动画片段 八方演武', exact: true })
+    await restoredAnimationButton.waitFor({ state: 'visible' })
+    await restoredAnimationButton.click()
+    await page.getByRole('button', { name: '选择调色板循环 灵光轮转', exact: true }).waitFor({ state: 'visible' })
+    await page.getByLabel('动画事件', { exact: true }).getByLabel('事件名称 剑鸣', { exact: true }).waitFor({ state: 'visible' })
     const restoredGroupName = page.locator('.aq-pixel-group-list input').first()
     await restoredGroupName.waitFor({ state: 'visible' })
     assert.equal(await restoredGroupName.inputValue(), '角色光影')
@@ -252,13 +298,13 @@ async function validatePixelGameUi(baseUrl) {
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-mobile.png'), fullPage: true })
     assert.deepEqual(issues, [])
     phases.push({
-      label: 'pixel animation, layer groups, gameplay metadata, Tiled WangSet and six-file delivery',
+      label: 'pixel palette cycles, animation events, clip bundle, gameplay metadata and eight-file delivery',
       status: 'passed',
       durationMs: Date.now() - startedAt,
       downloads: filenames.sort(),
     })
   } catch (error) {
-    phases.push({ label: 'pixel animation, layer groups, gameplay metadata, Tiled WangSet and six-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
+    phases.push({ label: 'pixel palette cycles, animation events, clip bundle, gameplay metadata and eight-file delivery', status: 'failed', durationMs: Date.now() - startedAt, error: error.message })
     await page.screenshot({ path: join(artifactDirectory, 'p7-pixel-game-failure.png'), fullPage: true }).catch(() => undefined)
     throw error
   } finally {

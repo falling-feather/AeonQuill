@@ -12,6 +12,8 @@ import {
   migratePixelDocument,
   resolvePixelAnimationSequences,
   resolvePixelAnimationFrames,
+  resolvePixelPaletteCycleMap,
+  renderPixelAnimationClipRgba,
   renderPixelFrameRgba,
   renderSpriteSheetRgba,
   serializePixelDocument,
@@ -220,16 +222,25 @@ test('switches and reorders layers and frames while keeping onion-skin settings 
   assert.deepEqual(onionRestored.document.onionSkin, original.onionSkin)
 })
 
-test('serializes schema v4 without loss and migrates v1/v2/v3 plus the single-layer palette-index format', () => {
+test('serializes schema v5 without loss and migrates v1/v2/v3/v4 plus the single-layer palette-index format', () => {
   const document = makeMultiLayerMultiFrameDocument()
   const serialized = serializePixelDocument(document)
   assert.equal(serializePixelDocument(deserializePixelDocument(serialized)), serialized)
 
-  const schemaThree = structuredClone(document)
+  const schemaFour = structuredClone(document)
+  schemaFour.schemaVersion = 4
+  delete schemaFour.paletteCycles
+  delete schemaFour.animationEvents
+  const migratedSchemaFour = migratePixelDocument(schemaFour)
+  assert.equal(migratedSchemaFour.schemaVersion, 5)
+  assert.deepEqual(migratedSchemaFour.paletteCycles, [])
+  assert.deepEqual(migratedSchemaFour.animationEvents, [])
+
+  const schemaThree = structuredClone(schemaFour)
   schemaThree.schemaVersion = 3
   schemaThree.frames = schemaThree.frames.map(({ gameplay: _gameplay, ...frame }) => frame)
   const migratedSchemaThree = migratePixelDocument(schemaThree)
-  assert.equal(migratedSchemaThree.schemaVersion, 4)
+  assert.equal(migratedSchemaThree.schemaVersion, 5)
   assert.deepEqual(migratedSchemaThree.frames.map((frame) => frame.gameplay), [
     { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
     { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null },
@@ -240,7 +251,7 @@ test('serializes schema v4 without loss and migrates v1/v2/v3 plus the single-la
   delete schemaTwo.layerGroups
   schemaTwo.layers = schemaTwo.layers.map(({ groupId: _groupId, blendMode: _blendMode, ...layer }) => layer)
   const migratedSchemaTwo = migratePixelDocument(schemaTwo)
-  assert.equal(migratedSchemaTwo.schemaVersion, 4)
+  assert.equal(migratedSchemaTwo.schemaVersion, 5)
   assert.deepEqual(migratedSchemaTwo.layerGroups, [])
   assert.deepEqual(migratedSchemaTwo.layers.map((layer) => [layer.groupId, layer.blendMode]), [[null, 'normal'], [null, 'normal']])
 
@@ -248,7 +259,7 @@ test('serializes schema v4 without loss and migrates v1/v2/v3 plus the single-la
   schemaOne.schemaVersion = 1
   delete schemaOne.animationTags
   const migratedSchemaOne = migratePixelDocument(schemaOne)
-  assert.equal(migratedSchemaOne.schemaVersion, 4)
+  assert.equal(migratedSchemaOne.schemaVersion, 5)
   assert.deepEqual(migratedSchemaOne.animationTags, [])
 
   const migrated = migratePixelDocument({
@@ -261,7 +272,7 @@ test('serializes schema v4 without loss and migrates v1/v2/v3 plus the single-la
     pixels: ['1', '.', 2, 0],
     frameDurationMs: 90,
   })
-  assert.equal(migrated.schemaVersion, 4)
+  assert.equal(migrated.schemaVersion, 5)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', null, 'color-2', null])
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
@@ -307,7 +318,7 @@ test('frame gameplay metadata is strict, reversible, copied with frames and pres
     tileRule: null,
   })
   const metadata = createSpriteSheetMetadata(blank.document, { columns: 2 })
-  assert.equal(metadata.schemaVersion, 4)
+  assert.equal(metadata.schemaVersion, 5)
   assert.deepEqual(metadata.frames[0].gameplay, gameplay)
 
   const invalidCases = [
@@ -494,6 +505,69 @@ test('animation and bulk commands reject inverted ranges, duplicate targets and 
   )
 })
 
+test('palette cycles and animation events are strict, reversible, preview-only and clip-exportable', () => {
+  let document = makeMultiLayerMultiFrameDocument()
+  document = execute(document, 'frames.add', {
+    frame: { id: 'frame-3', name: 'Frame 3', durationMs: 180 },
+    copyFromFrameId: 'frame-2',
+  }).document
+  document = execute(document, 'animations.add', {
+    tag: {
+      id: 'attack', name: 'Attack', fromFrameId: 'frame-1', toFrameId: 'frame-3', direction: 'ping-pong', loop: true,
+    },
+  }).document
+
+  const beforeCycle = document
+  const cycleChange = execute(document, 'palette-cycles.add', {
+    cycle: {
+      id: 'magic', name: 'Magic', colorIds: ['red', 'blue', 'mist'], stepDurationMs: 100, direction: 'ping-pong', enabled: true,
+    },
+  })
+  assert.deepEqual(withoutRevision(applyPixelCommand(cycleChange.document, cycleChange.inverse).document), withoutRevision(beforeCycle))
+  document = cycleChange.document
+  assert.deepEqual(resolvePixelPaletteCycleMap(document, 0), { red: 'red', blue: 'blue', mist: 'mist' })
+  assert.deepEqual(resolvePixelPaletteCycleMap(document, 100), { red: 'blue', blue: 'mist', mist: 'red' })
+  assert.deepEqual(resolvePixelPaletteCycleMap(document, 300), { red: 'blue', blue: 'mist', mist: 'red' })
+  assert.deepEqual(Array.from(renderPixelFrameRgba(document, 'frame-1').slice(0, 4)), [0, 0, 255, 255])
+  assert.deepEqual(Array.from(renderPixelFrameRgba(document, 'frame-1', { paletteCycleElapsedMs: 100 }).slice(0, 4)), [255, 255, 255, 255])
+  assert.equal(document.revision, cycleChange.document.revision)
+
+  assert.throws(
+    () => execute(document, 'palette-cycles.add', {
+      cycle: { id: 'conflict', name: 'Conflict', colorIds: ['red', 'blue'], stepDurationMs: 80, direction: 'forward', enabled: true },
+    }),
+    (error) => error instanceof PixelContractError && error.code === 'PALETTE_CYCLE_CONFLICT',
+  )
+
+  const beforeEvent = document
+  const eventChange = execute(document, 'animation-events.add', {
+    event: {
+      id: 'sword-sfx', name: 'Sword', type: 'sfx', animationTagId: 'attack', frameId: 'frame-2', value: 'sfx.sword',
+    },
+  })
+  assert.deepEqual(withoutRevision(applyPixelCommand(eventChange.document, eventChange.inverse).document), withoutRevision(beforeEvent))
+  document = eventChange.document
+  assert.throws(
+    () => execute(document, 'frames.remove', { frameId: 'frame-2' }),
+    (error) => error instanceof PixelContractError && error.code === 'FRAME_IN_ANIMATION_EVENT',
+  )
+  assert.throws(
+    () => execute(document, 'animations.remove', { tagId: 'attack' }),
+    (error) => error instanceof PixelContractError && error.code === 'ANIMATION_IN_EVENT',
+  )
+  assert.throws(
+    () => execute(document, 'animations.patch', { tagId: 'attack', patch: { toFrameId: 'frame-1' } }),
+    (error) => error instanceof PixelContractError && error.code === 'EVENT_OUTSIDE_ANIMATION',
+  )
+
+  const clip = renderPixelAnimationClipRgba(document, 'attack', { columns: 2, padding: 1, spacing: 1 })
+  assert.equal(clip.metadata.kind, 'aeonquill.pixel-animation-clip')
+  assert.deepEqual(clip.metadata.frames.map((frame) => frame.frameId), ['frame-1', 'frame-2', 'frame-3'])
+  assert.deepEqual(clip.metadata.animation.frameIds, ['frame-1', 'frame-2', 'frame-3', 'frame-2'])
+  assert.deepEqual(clip.metadata.events.map((event) => event.id), ['sword-sfx'])
+  assert.deepEqual(clip.metadata.paletteCycles, document.paletteCycles)
+})
+
 test('produces bounded sprite-sheet layout, metadata and RGBA pixels in document frame order', () => {
   let document = makeMultiLayerMultiFrameDocument()
   document = execute(document, 'frames.add', {
@@ -513,7 +587,7 @@ test('produces bounded sprite-sheet layout, metadata and RGBA pixels in document
 
   const metadata = createSpriteSheetMetadata(document, { columns: 2, padding: 1, spacing: 1 })
   assert.equal(metadata.kind, 'aeonquill.sprite-sheet')
-  assert.equal(metadata.schemaVersion, 4)
+  assert.equal(metadata.schemaVersion, 5)
   assert.deepEqual(metadata.frames.map((frame) => frame.durationMs), [120, 240, 360])
 
   const rendered = renderSpriteSheetRgba(document, { columns: 2, padding: 1, spacing: 1 })

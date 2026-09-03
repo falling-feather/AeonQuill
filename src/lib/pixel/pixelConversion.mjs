@@ -493,7 +493,7 @@ export function deserializePixelProject(serialized) {
   if (!Object.prototype.hasOwnProperty.call(project, 'schemaVersion')) {
     fail('MISSING_SCHEMA_VERSION', 'Pixel project must declare schemaVersion')
   }
-  if (![0, 1, 2, 3, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(project.schemaVersion)) {
+  if (![0, 1, 2, 3, 4, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(project.schemaVersion)) {
     fail('UNSUPPORTED_SCHEMA', `Unsupported pixel project schema ${String(project.schemaVersion)}`)
   }
   return migratePixelDocument(project)
@@ -519,6 +519,7 @@ function canonicalPixelDocument(documentInput) {
     height: document.height,
     revision: document.revision,
     palette: document.palette.map((color) => ({ id: color.id, name: color.name, color: color.color })),
+    paletteCycles: document.paletteCycles.map((cycle) => ({ ...cycle, colorIds: [...cycle.colorIds] })),
     layerGroups: document.layerGroups.map((group) => ({ ...group })),
     layers: document.layers.map((layer) => ({
       id: layer.id,
@@ -537,6 +538,7 @@ function canonicalPixelDocument(documentInput) {
       cels: Object.fromEntries(document.layers.map((layer) => [layer.id, [...frame.cels[layer.id]]])),
     })),
     animationTags: document.animationTags.map((tag) => ({ ...tag })),
+    animationEvents: document.animationEvents.map((event) => ({ ...event })),
     activeLayerId: document.activeLayerId,
     activeFrameId: document.activeFrameId,
     onionSkin: { ...document.onionSkin },

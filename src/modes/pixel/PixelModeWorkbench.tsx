@@ -50,8 +50,10 @@ import {
 } from 'react'
 import {
   PixelContractError,
+  PIXEL_ANIMATION_EVENT_TYPES,
   PIXEL_BLEND_MODES,
   PIXEL_COLLISION_TYPES,
+  PIXEL_PALETTE_CYCLE_DIRECTIONS,
   PIXEL_PROJECT_EXTENSION,
   PIXEL_PROJECT_MIME,
   PIXEL_TILE_NEIGHBORS,
@@ -60,6 +62,7 @@ import {
   createBlankPixelArray,
   createDefaultPixelFrameGameplay,
   createPixelExportBundle,
+  createPixelAnimationClipExportBundle,
   createPixelGameExportBundle,
   createPixelCommand,
   createPixelDocument,
@@ -79,6 +82,7 @@ import {
   type PixelCommand,
   type PixelCommandType,
   type PixelAnimationDirection,
+  type PixelAnimationEventType,
   type PixelBlendMode,
   type PixelCollisionShape,
   type PixelCollisionType,
@@ -88,6 +92,7 @@ import {
   type PixelFitMode,
   type PixelFrameGameplay,
   type PixelPoint,
+  type PixelPaletteCycleDirection,
   type PixelRect,
   type RgbaImage,
   type SpriteSheetMetadata,
@@ -97,6 +102,7 @@ import {
   PixelBrowserError,
   decodePixelImageFile,
   downloadPixelExportBundle,
+  downloadPixelAnimationClipExportBundle,
   downloadPixelGameExportBundle,
   downloadPixelText,
   readPixelProjectFile,
@@ -124,6 +130,19 @@ const PIXEL_COLLISION_COLORS: Record<PixelCollisionType, string> = {
   hitbox: '#FF4D6D',
   hurtbox: '#4CC9F0',
   interaction: '#32B884',
+}
+
+const PIXEL_CYCLE_DIRECTION_LABELS: Record<PixelPaletteCycleDirection, string> = {
+  forward: '正向轮换',
+  reverse: '反向轮换',
+  'ping-pong': '往返轮换',
+}
+
+const PIXEL_EVENT_TYPE_LABELS: Record<PixelAnimationEventType, string> = {
+  marker: '标记',
+  sfx: '音效',
+  hit: '命中',
+  custom: '自定义',
 }
 
 const PIXEL_TILE_GRID = [
@@ -346,6 +365,10 @@ export function PixelModeWorkbench({
   const [activeAnimationTagId, setActiveAnimationTagId] = useState<string | null>(
     () => history.document.animationTags[0]?.id ?? null,
   )
+  const [activePaletteCycleId, setActivePaletteCycleId] = useState<string | null>(
+    () => history.document.paletteCycles[0]?.id ?? null,
+  )
+  const [paletteCycleElapsedMs, setPaletteCycleElapsedMs] = useState(0)
   const [batchDurationMs, setBatchDurationMs] = useState('140')
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -369,6 +392,7 @@ export function PixelModeWorkbench({
   const stopPlayback = useCallback(() => {
     setIsPlaying(false)
     setPreviewFrameCursor(null)
+    setPaletteCycleElapsedMs(0)
   }, [])
 
   const apply = useCallback((type: PixelCommandType, payload: Record<string, unknown>) => {
@@ -434,6 +458,7 @@ export function PixelModeWorkbench({
     replaceHistory({ document: nextDocument, undo: [], redo: [] })
     setActiveColorId(nextDocument.palette[0].id)
     setActiveAnimationTagId(nextDocument.animationTags[0]?.id ?? null)
+    setActivePaletteCycleId(nextDocument.paletteCycles[0]?.id ?? null)
     setBatchDurationMs(String(nextDocument.frames[0]?.durationMs ?? 140))
     setSelection(null)
     setDragDraft(null)
@@ -554,6 +579,9 @@ export function PixelModeWorkbench({
   const activeAnimationTag = document.animationTags.find((tag) => tag.id === activeAnimationTagId)
     ?? document.animationTags[0]
     ?? null
+  const activePaletteCycle = document.paletteCycles.find((cycle) => cycle.id === activePaletteCycleId)
+    ?? document.paletteCycles[0]
+    ?? null
   const animationRangeFrameIds = useMemo(() => {
     if (!activeAnimationTag) return document.frames.map((frame) => frame.id)
     const fromIndex = document.frames.findIndex((frame) => frame.id === activeAnimationTag.fromFrameId)
@@ -566,6 +594,24 @@ export function PixelModeWorkbench({
       : document.frames.map((frame) => frame.id),
     [activeAnimationTag, document],
   )
+  const activeAnimationEvents = useMemo(
+    () => activeAnimationTag
+      ? document.animationEvents.filter((event) => event.animationTagId === activeAnimationTag.id)
+      : [],
+    [activeAnimationTag, document.animationEvents],
+  )
+
+  useEffect(() => {
+    if (!isPlaying || !document.paletteCycles.some((cycle) => cycle.enabled)) {
+      setPaletteCycleElapsedMs(0)
+      return undefined
+    }
+    const startedAt = performance.now()
+    const timer = window.setInterval(() => {
+      setPaletteCycleElapsedMs(Math.max(0, Math.floor(performance.now() - startedAt)))
+    }, 32)
+    return () => window.clearInterval(timer)
+  }, [document.paletteCycles, isPlaying])
 
   useEffect(() => {
     if (!isPlaying) return undefined
@@ -643,7 +689,9 @@ export function PixelModeWorkbench({
     }
     putRgbaOnCanvas(
       context,
-      renderPixelFrameRgba(document, displayedFrameId),
+      renderPixelFrameRgba(document, displayedFrameId, {
+        paletteCycleElapsedMs: isPlaying ? paletteCycleElapsedMs : 0,
+      }),
       document.width,
       document.height,
     )
@@ -676,7 +724,7 @@ export function PixelModeWorkbench({
         context.restore()
       }
     }
-  }, [displayedFrameId, document, gameOverlayVisible, isPlaying, strokePreviewRevision])
+  }, [displayedFrameId, document, gameOverlayVisible, isPlaying, paletteCycleElapsedMs, strokePreviewRevision])
 
   const pixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget
@@ -1091,6 +1139,68 @@ export function PixelModeWorkbench({
       : '当前前八帧已经是标准八方向槽')
   }, [apply])
 
+  const createPaletteCycle = useCallback(() => {
+    const current = historyRef.current.document
+    const claimed = new Set(current.paletteCycles.flatMap((cycle) => cycle.colorIds))
+    const available = current.palette.filter((color) => !claimed.has(color.id))
+    if (available.length < 2) {
+      setStatus('新循环至少需要两个尚未被其他循环占用的颜色')
+      return
+    }
+    const id = uniqueId('palette-cycle', current.paletteCycles.map((cycle) => cycle.id), current.revision)
+    if (apply('palette-cycles.add', {
+      cycle: {
+        id,
+        name: `色彩循环 ${current.paletteCycles.length + 1}`,
+        colorIds: available.slice(0, 2).map((color) => color.id),
+        stepDurationMs: 120,
+        direction: 'forward',
+        enabled: true,
+      },
+    })) {
+      setActivePaletteCycleId(id)
+      setStatus('已建立调色板循环；播放动画即可实时预览，不会写入像素或增加修订号')
+    }
+  }, [apply])
+
+  const patchActivePaletteCycle = useCallback((patch: Record<string, unknown>) => {
+    if (!activePaletteCycle) {
+      setStatus('请先建立调色板循环')
+      return false
+    }
+    return apply('palette-cycles.patch', { cycleId: activePaletteCycle.id, patch })
+  }, [activePaletteCycle, apply])
+
+  const togglePaletteCycleColor = useCallback((colorId: string) => {
+    if (!activePaletteCycle) return
+    const ownedByOther = historyRef.current.document.paletteCycles.some(
+      (cycle) => cycle.id !== activePaletteCycle.id && cycle.colorIds.includes(colorId),
+    )
+    if (ownedByOther) {
+      setStatus('同一颜色不能同时属于两个调色板循环')
+      return
+    }
+    const included = activePaletteCycle.colorIds.includes(colorId)
+    if (included && activePaletteCycle.colorIds.length <= 2) {
+      setStatus('调色板循环至少需要保留两个颜色')
+      return
+    }
+    const colorIds = included
+      ? activePaletteCycle.colorIds.filter((id) => id !== colorId)
+      : [...activePaletteCycle.colorIds, colorId]
+    if (patchActivePaletteCycle({ colorIds })) setStatus(`循环色序已更新：${colorIds.length} 色 · 可撤销`)
+  }, [activePaletteCycle, patchActivePaletteCycle])
+
+  const removeActivePaletteCycle = useCallback(() => {
+    if (!activePaletteCycle) return
+    const current = historyRef.current.document
+    const fallback = current.paletteCycles.find((cycle) => cycle.id !== activePaletteCycle.id)?.id ?? null
+    if (apply('palette-cycles.remove', { cycleId: activePaletteCycle.id })) {
+      setActivePaletteCycleId(fallback)
+      setStatus('调色板循环已删除；原始色板与像素索引保持不变')
+    }
+  }, [activePaletteCycle, apply])
+
   const createAnimationTag = useCallback(() => {
     const current = historyRef.current.document
     const id = uniqueId('animation', current.animationTags.map((tag) => tag.id), current.revision)
@@ -1129,6 +1239,36 @@ export function PixelModeWorkbench({
       setStatus('动画片段已删除；像素帧本身保持不变')
     }
   }, [activeAnimationTag?.id, apply])
+
+  const createAnimationEvent = useCallback(() => {
+    if (!activeAnimationTag) {
+      setStatus('请先建立动画片段，再添加事件')
+      return
+    }
+    const current = historyRef.current.document
+    const frameId = animationRangeFrameIds.includes(current.activeFrameId)
+      ? current.activeFrameId
+      : animationRangeFrameIds[0]
+    const id = uniqueId('animation-event', current.animationEvents.map((event) => event.id), current.revision)
+    if (apply('animation-events.add', {
+      event: {
+        id,
+        name: `事件 ${activeAnimationEvents.length + 1}`,
+        type: 'marker',
+        animationTagId: activeAnimationTag.id,
+        frameId,
+        value: '',
+      },
+    })) setStatus(`已在「${current.frames.find((frame) => frame.id === frameId)?.name ?? frameId}」添加动画事件 · 可撤销`)
+  }, [activeAnimationEvents.length, activeAnimationTag, animationRangeFrameIds, apply])
+
+  const patchAnimationEvent = useCallback((eventId: string, patch: Record<string, unknown>) => (
+    apply('animation-events.patch', { eventId, patch })
+  ), [apply])
+
+  const removeAnimationEvent = useCallback((eventId: string) => {
+    if (apply('animation-events.remove', { eventId })) setStatus('动画事件已删除 · 可撤销')
+  }, [apply])
 
   const applyAnimationDuration = useCallback(() => {
     if (!activeAnimationTag) {
@@ -1188,6 +1328,31 @@ export function PixelModeWorkbench({
       setStatus('游戏资产包完成：项目、Sprite、八方向/锚点 manifest、Tiled Tileset/Tilemap 与离线预览页')
     } catch (error) {
       setStatus(readablePixelError(error, '游戏资产包导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }, [activeAnimationTagId])
+
+  const exportActiveAnimationClip = useCallback(async () => {
+    const current = historyRef.current.document
+    const tag = current.animationTags.find((item) => item.id === activeAnimationTagId) ?? current.animationTags[0]
+    if (!tag) {
+      setStatus('请先建立动画片段，再导出活动片段包')
+      return
+    }
+    setIsExporting(true)
+    try {
+      const fromIndex = current.frames.findIndex((frame) => frame.id === tag.fromFrameId)
+      const toIndex = current.frames.findIndex((frame) => frame.id === tag.toFrameId)
+      const bundle = createPixelAnimationClipExportBundle(current, tag.id, {
+        columns: Math.min(4, toIndex - fromIndex + 1),
+        padding: 1,
+        spacing: 1,
+      })
+      await downloadPixelAnimationClipExportBundle(bundle)
+      setStatus(`活动片段包完成：「${tag.name}」专属 Atlas、精确播放序列、事件与调色板循环 metadata`)
+    } catch (error) {
+      setStatus(readablePixelError(error, '活动片段包导出失败'))
     } finally {
       setIsExporting(false)
     }
@@ -1493,6 +1658,117 @@ export function PixelModeWorkbench({
             />
             <code>{selectedColor.color}</code>
           </label>
+          <section className="aq-pixel-cycle-card" aria-label="调色板循环">
+            <div className="aq-pixel-cycle-heading">
+              <span><Sparkles size={14} /> 调色板循环</span>
+              <button type="button" onClick={createPaletteCycle} aria-label="新建调色板循环">
+                <Plus size={12} /> 新建
+              </button>
+            </div>
+            {document.paletteCycles.length > 0 ? (
+              <>
+                <div className="aq-pixel-cycle-tabs">
+                  {document.paletteCycles.map((cycle) => (
+                    <button
+                      type="button"
+                      key={cycle.id}
+                      className={cycle.id === activePaletteCycle?.id ? 'is-active' : ''}
+                      aria-pressed={cycle.id === activePaletteCycle?.id}
+                      aria-label={`选择调色板循环 ${cycle.name}`}
+                      onClick={() => setActivePaletteCycleId(cycle.id)}
+                    >{cycle.name}</button>
+                  ))}
+                </div>
+                {activePaletteCycle ? (
+                  <div className="aq-pixel-cycle-editor">
+                    <label>
+                      <span>名称</span>
+                      <input
+                        key={`${activePaletteCycle.id}-${activePaletteCycle.name}`}
+                        aria-label="调色板循环名称"
+                        defaultValue={activePaletteCycle.name}
+                        maxLength={80}
+                        onBlur={(event) => {
+                          const name = event.currentTarget.value.trim()
+                          if (!name) event.currentTarget.value = activePaletteCycle.name
+                          else if (name !== activePaletteCycle.name) patchActivePaletteCycle({ name })
+                        }}
+                      />
+                    </label>
+                    <div className="aq-pixel-cycle-row">
+                      <label>
+                        <span>方向</span>
+                        <select
+                          aria-label="调色板循环方向"
+                          value={activePaletteCycle.direction}
+                          onChange={(event) => patchActivePaletteCycle({
+                            direction: event.currentTarget.value as PixelPaletteCycleDirection,
+                          })}
+                        >
+                          {PIXEL_PALETTE_CYCLE_DIRECTIONS.map((direction) => (
+                            <option key={direction} value={direction}>{PIXEL_CYCLE_DIRECTION_LABELS[direction]}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>步长</span>
+                        <input
+                          key={`${activePaletteCycle.id}-${activePaletteCycle.stepDurationMs}`}
+                          type="number"
+                          min={20}
+                          max={60_000}
+                          aria-label="调色板循环步长"
+                          defaultValue={activePaletteCycle.stepDurationMs}
+                          onBlur={(event) => {
+                            const stepDurationMs = Number(event.currentTarget.value)
+                            if (Number.isSafeInteger(stepDurationMs) && stepDurationMs >= 20 && stepDurationMs <= 60_000) {
+                              if (stepDurationMs !== activePaletteCycle.stepDurationMs) patchActivePaletteCycle({ stepDurationMs })
+                            } else event.currentTarget.value = String(activePaletteCycle.stepDurationMs)
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div className="aq-pixel-cycle-colors" aria-label="循环颜色顺序">
+                      {document.palette.map((color) => {
+                        const order = activePaletteCycle.colorIds.indexOf(color.id)
+                        const ownedByOther = document.paletteCycles.some(
+                          (cycle) => cycle.id !== activePaletteCycle.id && cycle.colorIds.includes(color.id),
+                        )
+                        return (
+                          <button
+                            type="button"
+                            key={color.id}
+                            className={order >= 0 ? 'is-active' : ''}
+                            disabled={ownedByOther}
+                            aria-pressed={order >= 0}
+                            aria-label={`${order >= 0 ? '从循环移除颜色' : '将颜色加入循环'} ${color.name}`}
+                            title={ownedByOther ? '已被其他循环占用' : color.name}
+                            onClick={() => togglePaletteCycleColor(color.id)}
+                          >
+                            <span style={{ backgroundColor: color.color }} />
+                            {order >= 0 ? <b>{order + 1}</b> : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <div className="aq-pixel-cycle-footer">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={activePaletteCycle.enabled}
+                          onChange={(event) => patchActivePaletteCycle({ enabled: event.currentTarget.checked })}
+                        /> 启用预览
+                      </label>
+                      <button type="button" className="is-danger" onClick={removeActivePaletteCycle} aria-label="删除当前调色板循环">
+                        <Trash2 size={12} /> 删除
+                      </button>
+                    </div>
+                    <small>{activePaletteCycle.colorIds.length} 色 · 播放时实时轮换 · 不改写原像素</small>
+                  </div>
+                ) : null}
+              </>
+            ) : <p className="aq-pixel-cycle-empty">用颜色索引驱动火焰、水面与霓虹动画，无需复制像素帧。</p>}
+          </section>
           <div className="aq-pixel-contract-note">
             <strong>非破坏性入口</strong>
             <p>图层、帧和像素命令均返回逆命令；主线只需接管文档版本与资产落盘。</p>
@@ -1672,6 +1948,11 @@ export function PixelModeWorkbench({
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <strong>{frame.name}</strong>
                   <small>{frame.durationMs} ms</small>
+                  {activeAnimationEvents.some((event) => event.frameId === frame.id) ? (
+                    <em className="aq-pixel-frame-event-badge" title="动画事件数">
+                      {activeAnimationEvents.filter((event) => event.frameId === frame.id).length}
+                    </em>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -1787,13 +2068,93 @@ export function PixelModeWorkbench({
                     <button type="button" onClick={applyAnimationDuration}>应用片段时长</button>
                     <button type="button" onClick={() => copyActiveLayerAcrossAnimation('replace')}>覆盖复制当前图层</button>
                     <button type="button" onClick={() => copyActiveLayerAcrossAnimation('non-transparent')}>透明合并当前图层</button>
+                    <button type="button" onClick={() => void exportActiveAnimationClip()} disabled={isExporting}>
+                      <Download size={12} /> 活动片段包
+                    </button>
                     <button type="button" className="is-danger" onClick={removeActiveAnimationTag} aria-label="删除当前动画片段">
                       <Trash2 size={12} /> 删除片段
                     </button>
                   </div>
                   <small className="aq-pixel-animation-summary">
-                    {animationRangeFrameIds.length} 个基础帧 · 播放序列 {playbackFrameIds.length} 帧 · 当前源图层「{selectedLayer.name}」
+                    {animationRangeFrameIds.length} 个基础帧 · 播放序列 {playbackFrameIds.length} 帧 · {activeAnimationEvents.length} 个事件 · 当前源图层「{selectedLayer.name}」
                   </small>
+                  <section className="aq-pixel-event-editor" aria-label="动画事件">
+                    <div className="aq-pixel-event-heading">
+                      <span><Crosshair size={13} /> 动画事件</span>
+                      <button type="button" onClick={createAnimationEvent} aria-label="添加动画事件">
+                        <Plus size={12} /> 添加事件
+                      </button>
+                    </div>
+                    {activeAnimationEvents.length > 0 ? (
+                      <div className="aq-pixel-event-list">
+                        {activeAnimationEvents.map((animationEvent) => (
+                          <div className="aq-pixel-event-row" key={animationEvent.id} data-event-id={animationEvent.id}>
+                            <label className="is-name">
+                              <span>名称</span>
+                              <input
+                                key={`${animationEvent.id}-${animationEvent.name}`}
+                                aria-label={`事件名称 ${animationEvent.name}`}
+                                defaultValue={animationEvent.name}
+                                maxLength={64}
+                                onBlur={(event) => {
+                                  const name = event.currentTarget.value.trim()
+                                  if (!name) event.currentTarget.value = animationEvent.name
+                                  else if (name !== animationEvent.name) patchAnimationEvent(animationEvent.id, { name })
+                                }}
+                              />
+                            </label>
+                            <label>
+                              <span>类型</span>
+                              <select
+                                aria-label={`事件类型 ${animationEvent.name}`}
+                                value={animationEvent.type}
+                                onChange={(event) => patchAnimationEvent(animationEvent.id, {
+                                  type: event.currentTarget.value as PixelAnimationEventType,
+                                })}
+                              >
+                                {PIXEL_ANIMATION_EVENT_TYPES.map((eventType) => (
+                                  <option key={eventType} value={eventType}>{PIXEL_EVENT_TYPE_LABELS[eventType]}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              <span>触发帧</span>
+                              <select
+                                aria-label={`事件触发帧 ${animationEvent.name}`}
+                                value={animationEvent.frameId}
+                                onChange={(event) => patchAnimationEvent(animationEvent.id, { frameId: event.currentTarget.value })}
+                              >
+                                {document.frames.filter((frame) => animationRangeFrameIds.includes(frame.id)).map((frame) => (
+                                  <option key={frame.id} value={frame.id}>{frame.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="is-value">
+                              <span>载荷</span>
+                              <input
+                                key={`${animationEvent.id}-${animationEvent.value}`}
+                                aria-label={`事件载荷 ${animationEvent.name}`}
+                                defaultValue={animationEvent.value}
+                                maxLength={160}
+                                placeholder="例如 sfx.sword"
+                                onBlur={(event) => {
+                                  if (event.currentTarget.value !== animationEvent.value) {
+                                    patchAnimationEvent(animationEvent.id, { value: event.currentTarget.value })
+                                  }
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="is-danger"
+                              aria-label={`删除动画事件 ${animationEvent.name}`}
+                              onClick={() => removeAnimationEvent(animationEvent.id)}
+                            ><Trash2 size={12} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <p>为关键帧绑定标记、音效、命中或自定义载荷；导出时保留稳定 ID。</p>}
+                  </section>
                 </div>
               ) : (
                 <p className="aq-pixel-animation-empty">建立片段后，可以限定帧范围、往返播放、批量时长与跨帧图层复制。</p>

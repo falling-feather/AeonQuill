@@ -5,6 +5,7 @@ import { createSmartPixelCleanupPatch } from '../src/lib/pixel/pixelTools.mjs'
 import {
   PIXEL_DIRECTIONS,
   PixelGamePipelineError,
+  createPixelAnimationClipExportBundle,
   createPixelGameExportBundle,
   createPixelGameManifest,
 } from '../src/lib/pixel/pixelGamePipeline.mjs'
@@ -44,6 +45,13 @@ function createEightFrameDocument() {
       { id: 'walk', name: 'Walk', fromFrameId: 'direction-1', toFrameId: 'direction-4', direction: 'forward', loop: true },
       { id: 'turn', name: 'Turn', fromFrameId: 'direction-5', toFrameId: 'direction-8', direction: 'ping-pong', loop: false },
     ],
+    animationEvents: [
+      { id: 'step', name: 'Step', type: 'sfx', animationTagId: 'walk', frameId: 'direction-2', value: 'sfx.step' },
+      { id: 'turn-hit', name: 'Turn hit', type: 'hit', animationTagId: 'turn', frameId: 'direction-7', value: 'sword' },
+    ],
+    paletteCycles: [{
+      id: 'ink-pulse', name: 'Ink pulse', colorIds: ['ink', 'paper'], stepDurationMs: 80, direction: 'ping-pong', enabled: true,
+    }],
     activeLayerId: 'body',
     activeFrameId: frames[0].id,
   })
@@ -53,7 +61,9 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3 })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
-  assert.equal(manifest.schemaVersion, 4)
+  assert.equal(manifest.schemaVersion, 5)
+  assert.deepEqual(manifest.animationEvents, document.animationEvents)
+  assert.deepEqual(manifest.paletteCycles, document.paletteCycles)
   assert.deepEqual(manifest.layerGroups, document.layerGroups)
   assert.equal(manifest.layers[0].blendMode, 'screen')
   assert.equal(manifest.animation.id, 'walk')
@@ -94,7 +104,25 @@ test('exports one sprite fact into manifest, Tiled map and an offline viewer', (
   assert.match(bundle.viewer.text, /image-rendering:pixelated/)
   assert.match(bundle.viewer.text, /collisionColors/)
   assert.match(bundle.viewer.text, /Terrain/)
+  assert.match(bundle.viewer.text, /paletteCycles/)
   assert.equal(/https?:\/\//.test(bundle.viewer.text), false)
+})
+
+test('exports one active animation clip with a unique atlas and exact playback, event and palette facts', () => {
+  const document = createEightFrameDocument()
+  const bundle = createPixelAnimationClipExportBundle(document, 'turn', { columns: 2, padding: 1, spacing: 1 })
+  assert.equal(bundle.sprite.filename, 'Hero-Eight-Way-Turn-clip.png')
+  assert.equal(bundle.manifest.value.kind, 'aeonquill.pixel-animation-clip')
+  assert.equal(bundle.manifest.value.schemaVersion, 5)
+  assert.deepEqual(bundle.manifest.value.frames.map((frame) => frame.frameId), [
+    'direction-5', 'direction-6', 'direction-7', 'direction-8',
+  ])
+  assert.deepEqual(bundle.manifest.value.animation.frameIds, [
+    'direction-5', 'direction-6', 'direction-7', 'direction-8', 'direction-7', 'direction-6',
+  ])
+  assert.deepEqual(bundle.manifest.value.events.map((event) => event.id), ['turn-hit'])
+  assert.deepEqual(bundle.manifest.value.paletteCycles, document.paletteCycles)
+  assert.equal(bundle.sprite.pixels.length, bundle.sprite.width * bundle.sprite.height * 4)
 })
 
 test('fails closed when a direction or map points at an unknown frame', () => {

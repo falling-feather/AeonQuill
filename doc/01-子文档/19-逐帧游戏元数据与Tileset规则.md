@@ -1,14 +1,14 @@
-# 光阴砚 AEONQUILL — 逐帧游戏元数据与 Tileset 规则
+# 光阴砚 AEONQUILL — 逐帧游戏元数据、调色板循环与动画事件
 
-> 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码及游戏交付的可复核事实。
+> 该文档隶属于[01-开发者文档第 6 节](../01-开发者文档.md#6-模块实现)，用于补充像素逐帧锚点、碰撞区、地形位掩码、调色板循环、动画事件及游戏交付的可复核事实。
 >
-> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据编辑、画布辅助线、Tiled 碰撞对象/WangSet 和六文件同源交付。
+> **文档梗概**：说明 `PIXEL-006 / V0.7.42` 建立的 PixelDocument schema v4、逐帧游戏元数据与 Tiled 交付，以及 `PIXEL-007 / V0.7.43` 升级的 schema v5、无修订污染调色板循环、片段内动画事件和唯一基础帧活动片段包。
 >
 > **最后一次更新时间**：2026-09-03
 >
 > **更新者**：主开发、像素模式责任域、前端与游戏资产责任域
 >
-> **对应检查点**：`PIXEL-006 / V0.7.42`
+> **对应检查点**：`PIXEL-006 / V0.7.42`、`PIXEL-007 / V0.7.43`
 
 ---
 
@@ -139,3 +139,71 @@ Sprite metadata 同步升级为 schema v4，并在每个布局单元附带该帧
 P7 在 D 盘隔离项目和后台系统 Edge 中，把活动帧锚点改为 `(6, 16)`，建立名为“剑锋”的 `hitbox`，启用 `wuxia-floor` 并切换北/东邻居得到 `Mask 5`。六个实际下载文件被逐项读取：项目与 manifest 均为 v4，TSJ 找到对应攻击区和 WangSet，离线页无外部 URL；刷新后元数据仍从 SQLite 正文恢复，1440×900 与 390×844 均无页面级横向溢出。
 
 本检查点不启动 ComfyUI/H3，不下载模型，不读取或改写正式项目、用户 `output`、D 盘正式桌面或快捷方式。
+
+## 8. schema v5 调色板循环与动画事件扩展
+
+`PIXEL-007/V0.7.43` 把调色板循环和动画事件纳入唯一权威 `PixelDocument`，而不是把它们保存成工作台临时状态或导出器私有参数。调色板循环适合火焰、水面、霓虹和能量流等“像素索引不变、显示颜色随时间切换”的效果；动画事件用于在某一命名片段的某个基础帧触发标记、音效、命中或自定义载荷。
+
+文档新增两个顶层数组：
+
+```ts
+type PixelPaletteCycle = {
+  id: string
+  name: string
+  colorIds: string[]
+  stepDurationMs: number
+  direction: 'forward' | 'reverse' | 'ping-pong'
+  enabled: boolean
+}
+
+type PixelAnimationEvent = {
+  id: string
+  name: string
+  type: 'marker' | 'sfx' | 'hit' | 'custom'
+  animationTagId: string
+  frameId: string
+  value: string
+}
+```
+
+当前限制为最多 16 个循环、每循环 2—32 个现有颜色、20—60000ms 整数步长和最多 256 个事件。同一颜色最多属于一个循环；事件必须同时引用现有片段和该片段闭区间内的现有帧，`value` 最长 160 字符。事件内容只作数据交付，工作台、查看器和导出器不会执行脚本，也不内嵌音频文件。
+
+`paletteCycles[].colorIds` 的顺序就是显示映射顺序。正向循环按步数向前映射，反向使用相反偏移；往返采用 `0 → … → length-1 → … → 1`，不额外重复折返点。禁用循环回到恒等映射。v4 迁移时补空循环和事件，v3/v2/v1/v0 继续经既有显式链进入 v5；缺失版本、未知版本或伪装旧版本却携带新字段的输入失败关闭。
+
+## 9. 引用完整性与可逆命令
+
+循环的创建、删除、恢复和局部修改分别使用 `palette-cycles.add/remove/restore/patch`；事件使用 `animation-events.add/remove/restore/patch`。全部公开命令先构造完整候选并通过 `assertPixelDocument()`，成功后只增加一个 revision，并返回可直接应用的完整逆命令。
+
+引用约束包括：
+
+1. 循环只能引用当前调色板中的唯一颜色 ID，跨循环复用颜色被拒绝；
+2. 仍被事件引用的帧不能删除，即使它不是片段边界；
+3. 仍有事件的片段不能删除；
+4. 调整片段范围或重排帧时重新验证全部事件，任何事件被排除在新闭区间外则整笔命令失败；
+5. 删除循环引用颜色前必须先修改或删除相应循环。
+
+## 10. 预览与确定性合成
+
+`resolvePixelPaletteCycleMap(document, elapsedMs)` 只返回颜色 ID 到颜色 ID 的确定性映射。`renderPixelFrameRgba()` 在混合图层前对 Cel 颜色索引应用该映射，再读取目标 RGBA；图层组、显隐、透明度和 `normal/multiply/screen/add` 仍由同一核心合成器处理。
+
+工作台只在播放且至少一个循环启用时以约 32ms 频率更新瞬态 `paletteCycleElapsedMs`。停止、编辑、撤销、重做或打开项目会把时间归零。时间不进入 PixelDocument，因此播放前后序列化字节、活动帧、revision 和撤销栈不变。Sprite 与游戏 Atlas 默认导出零时刻颜色；循环定义进入 metadata，由消费端在运行时复现。
+
+## 11. 活动片段两文件交付
+
+`createPixelAnimationClipExportBundle()` 为活动片段输出：
+
+1. `*-clip.png`：片段范围内每个唯一基础帧只保存一次；
+2. `*-clip.json`：保存源文档/revision、Atlas 布局、片段定义、精确播放序列与逐项时长、片段事件、逐帧游戏元数据、图层组、混合模式、调色板与循环。
+
+八帧往返片段的 Atlas 只有 8 个单元格，播放序列仍为 14 项：`1,2,3,4,5,6,7,8,7,6,5,4,3,2`。因此回程不会重复复制 PNG 像素，也不会丢失实际播放语义。既有六文件游戏资产包仍输出项目、Sprite、manifest、Tiled TSJ/TMJ 和离线查看器；PixelDocument、Sprite metadata 与 manifest 均升级为 schema v5，并携带循环和事件事实。
+
+## 12. V0.7.43 验证口径
+
+- 像素核心、转换与游戏交付专项 28/28；
+- 全仓单元契约 281/281；
+- TypeScript、生产构建和 96 项默认安全基线通过；
+- P7 六阶段集成通过。
+
+P7 在 D 盘隔离项目和后台系统 Edge 中建立“灵光轮转”乒乓循环（80ms）、“八方演武”往返片段和绑定帧的“剑鸣”音效事件（`sfx.sword`），播放预览后实际下载两文件活动片段包及既有六文件游戏包。脚本逐项验证项目、manifest 和 clip 为 schema v5，Atlas 8 个唯一帧、播放序列 14 项且事件/循环同源；刷新后控件从 SQLite 正文恢复，1440×900 与 390×844 无页面级横向溢出，页面无 warning/error。
+
+本扩展不实现脚本事件执行、音频资源内嵌、循环曲线、GPU Shader 导出、烘焙 GIF/APNG、自动九宫格拼接、Worker 化或 Godot/Unity/RPG Maker 原生导入器。本检查点没有启动 ComfyUI/H3，没有读取或改写正式项目、既有 output、D 盘正式桌面或快捷方式，也没有重新封装安装包。

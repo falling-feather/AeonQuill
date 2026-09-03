@@ -4,6 +4,7 @@ import {
   assertRgbaImage,
   deserializePixelProject,
   type PixelDocument,
+  type PixelAnimationClipExportBundle,
   type PixelExportBundle,
   type PixelGameExportBundle,
   type RgbaImage,
@@ -147,4 +148,9 @@ export async function downloadPixelGameExportBundle(bundle: PixelGameExportBundl
   downloadPixelText(bundle.tiledTileset.text, bundle.tiledTileset.filename, bundle.tiledTileset.mime)
   downloadPixelText(bundle.tiledMap.text, bundle.tiledMap.filename, bundle.tiledMap.mime)
   downloadPixelText(bundle.viewer.text, bundle.viewer.filename, bundle.viewer.mime)
+}
+
+export async function downloadPixelAnimationClipExportBundle(bundle: PixelAnimationClipExportBundle) {
+  downloadPixelBlob(await rgbaToPngBlob(bundle.sprite.pixels, bundle.sprite.width, bundle.sprite.height), bundle.sprite.filename)
+  downloadPixelText(bundle.manifest.text, bundle.manifest.filename, bundle.manifest.mime)
 }

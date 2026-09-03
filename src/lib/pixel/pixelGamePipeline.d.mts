@@ -1,4 +1,9 @@
-import type { PixelCollisionShape, PixelDocument, PixelTileRule } from './pixelCore.mjs'
+import type {
+  PixelAnimationClipMetadata,
+  PixelCollisionShape,
+  PixelDocument,
+  PixelTileRule,
+} from './pixelCore.mjs'
 
 export type PixelDirectionId = 'south' | 'south-west' | 'west' | 'north-west' | 'north' | 'north-east' | 'east' | 'south-east'
 
@@ -24,7 +29,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 4
+  schemaVersion: 5
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -33,6 +38,7 @@ export type PixelGameManifest = {
   atlas: { width: number; height: number; columns: number; rows: number; padding: number; spacing: number }
   animation: PixelGameAnimation
   animations: PixelGameAnimation[]
+  animationEvents: PixelDocument['animationEvents']
   frames: Array<{
     id: string
     name: string
@@ -54,6 +60,7 @@ export type PixelGameManifest = {
   layerGroups: PixelDocument['layerGroups']
   layers: PixelDocument['layers']
   palette: PixelDocument['palette']
+  paletteCycles: PixelDocument['paletteCycles']
 }
 
 export type PixelGameExportBundle = {
@@ -63,6 +70,11 @@ export type PixelGameExportBundle = {
   tiledTileset: { filename: string; mime: 'application/json'; text: string }
   tiledMap: { filename: string; mime: 'application/json'; text: string }
   viewer: { filename: string; mime: 'text/html'; text: string }
+}
+
+export type PixelAnimationClipExportBundle = {
+  sprite: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
+  manifest: { filename: string; mime: 'application/json'; text: string; value: PixelAnimationClipMetadata }
 }
 
 export class PixelGamePipelineError extends Error {
@@ -77,3 +89,8 @@ export function normalizePixelGameOptions(
 ): Required<Omit<PixelGameOptions, 'animationTagId'>> & { animationTagId: string | null }
 export function createPixelGameManifest(document: PixelDocument, options?: PixelGameOptions): PixelGameManifest
 export function createPixelGameExportBundle(document: PixelDocument, options?: PixelGameOptions): PixelGameExportBundle
+export function createPixelAnimationClipExportBundle(
+  document: PixelDocument,
+  tagId: string,
+  options?: { columns?: number; padding?: number; spacing?: number; baseName?: string },
+): PixelAnimationClipExportBundle
