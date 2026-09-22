@@ -180,6 +180,24 @@ function normalizeModeDocument(modeId, value, documentId) {
   return JSON.stringify(document)
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function modeDocumentValuesEqual(modeId, incomingValue, existingValue, documentId) {
+  if (incomingValue === existingValue) return true
+  try {
+    return canonicalJson(JSON.parse(normalizeModeDocument(modeId, existingValue, documentId)))
+      === canonicalJson(JSON.parse(incomingValue))
+  } catch {
+    return false
+  }
+}
+
 export function validateWorkspaceModeDocument(modeId, value, documentId) {
   assertModeId(modeId)
   assertId(documentId, 'documentId')
@@ -469,7 +487,7 @@ export class WorkspaceStore {
         existing.projectId === projectId
         && existing.modeId === modeId
         && existing.revision === revision
-        && existing.value === value
+        && modeDocumentValuesEqual(modeId, value, existing.value, documentId)
         && catalogUnchanged
       ) {
         return { catalog: current.catalog, updatedAt: current.updatedAt, document: existing }
@@ -547,13 +565,13 @@ export class WorkspaceStore {
       fail('WORKSPACE_DOCUMENT_CONFLICT', 'A new mode document must use a null base revision', 409)
     }
     if (existing && baseRevision !== existing.revision) {
-      if (revision === existing.revision && value === existing.value) return existing
+      if (revision === existing.revision && modeDocumentValuesEqual(modeId, value, existing.value, documentId)) return existing
       fail('WORKSPACE_DOCUMENT_CONFLICT', `Stored document revision ${existing.revision} does not match base ${String(baseRevision)}`, 409, {
         current: existing,
       })
     }
     if (existing && revision <= existing.revision) {
-      if (revision === existing.revision && value === existing.value) return existing
+      if (revision === existing.revision && modeDocumentValuesEqual(modeId, value, existing.value, documentId)) return existing
       fail('WORKSPACE_DOCUMENT_CONFLICT', 'Mode document revision must advance monotonically', 409, { current: existing })
     }
 

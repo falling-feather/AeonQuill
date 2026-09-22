@@ -16,6 +16,11 @@ import {
 } from '../src/lib/project/projectCatalog.mjs'
 import { compileStoryProject, createGenerationPlan } from '../src/lib/story/storyProject.mjs'
 import {
+  applyVideoProductionCommand,
+  createVideoProductionCommand,
+  createVideoProductionProjectForStory,
+} from '../src/lib/story/productionPipeline.mjs'
+import {
   SMART_VIDEO_DOCUMENT_SCHEMA_VERSION,
   WorkspaceStore,
   WorkspaceStoreError,
@@ -350,6 +355,128 @@ test('pixel and smart-video documents remain isolated by project and document id
       }),
       (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_DOCUMENT_NOT_FOUND',
     )
+  })
+})
+
+test('same-revision pixel v7 retry compares normalized legacy SQLite content without rewriting the raw row', async () => {
+  await withStore(async (store) => {
+    const catalog = twoProjectCatalog()
+    store.saveCatalog(catalog, { baseRevision: 0, now: 3_000 })
+    const current = createPixelDocument({
+      id: 'document-pixel',
+      name: '旧版 Terrain',
+      width: 4,
+      height: 4,
+      revision: 1,
+      terrainMaps: [{
+        id: 'yard',
+        name: 'Yard',
+        width: 1,
+        height: 1,
+        cells: ['grass'],
+        terrainLayer: { visible: true, locked: false },
+        objectLayers: [],
+      }],
+    })
+    const canonical = serializePixelDocument(current)
+    store.saveModeDocument({
+      projectId: 'project-pixel', documentId: 'document-pixel', modeId: 'pixel',
+      baseRevision: null, revision: 1, value: canonical,
+    }, { now: 4_000 })
+    const legacy = structuredClone(current)
+    legacy.schemaVersion = 7
+    legacy.terrainMaps = legacy.terrainMaps.map(({ terrainLayer, objectLayers, ...terrainMap }) => terrainMap)
+    const legacyBytes = JSON.stringify(legacy)
+    store.database.prepare('UPDATE mode_documents SET value_json = ? WHERE document_id = ?').run(legacyBytes, 'document-pixel')
+
+    const retry = store.saveModeDocument({
+      projectId: 'project-pixel', documentId: 'document-pixel', modeId: 'pixel',
+      baseRevision: 1, revision: 1, value: canonical,
+    }, { now: 5_000 })
+    assert.equal(retry.documentId, 'document-pixel')
+    assert.equal(retry.revision, 1)
+    assert.equal(retry.value, legacyBytes)
+    assert.equal(store.getModeDocument('document-pixel').value, legacyBytes)
+
+    assert.throws(
+      () => store.saveModeDocument({
+        projectId: 'project-pixel', documentId: 'document-pixel', modeId: 'pixel',
+        baseRevision: 1, revision: 1, value: serializePixelDocument({ ...current, name: '实际改名' }),
+      }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT',
+    )
+
+    const next = { ...current, name: '实际改名', revision: 2 }
+    const saved = store.saveModeDocument({
+      projectId: 'project-pixel', documentId: 'document-pixel', modeId: 'pixel',
+      baseRevision: 1, revision: 2, value: serializePixelDocument(next),
+    }, { now: 6_000 })
+    assert.equal(saved.revision, 2)
+    assert.equal(JSON.parse(saved.value).schemaVersion, 8)
+    assert.equal(JSON.parse(saved.value).name, '实际改名')
+  })
+})
+
+test('same-revision production v5 retry is idempotent while real edits advance to production v6', async () => {
+  await withStore(async (store) => {
+    const catalog = twoProjectCatalog()
+    store.saveCatalog(catalog, { baseRevision: 0, now: 3_000 })
+    const fixtureNow = Date.now() + 60_000
+    const story = compileStoryProject({
+      projectId: 'document-video',
+      title: '旧版声音生产图',
+      kind: 'idea',
+      text: '场景 1：书房\n镜头 1：灵感落在桌面。',
+      aspectRatio: '16:9',
+      frameStrategy: 'start-end',
+      defaultShotSeconds: 5,
+      now: fixtureNow,
+    })
+    const plan = createGenerationPlan(story, { now: story.updatedAt + 1 })
+    const production = createVideoProductionProjectForStory(story, { now: story.updatedAt + 2 })
+    const currentValue = JSON.stringify({ schemaVersion: 2, project: story, plan, production })
+    store.saveModeDocument({
+      projectId: 'project-ad', documentId: 'document-video', modeId: 'smart-video',
+      baseRevision: null, revision: 1, value: currentValue,
+    }, { now: 5_000 })
+    const legacy = JSON.parse(currentValue)
+    legacy.production.schemaVersion = 5
+    delete legacy.production.mediaRuns
+    const legacyBytes = JSON.stringify(legacy)
+    store.database.prepare('UPDATE mode_documents SET value_json = ? WHERE document_id = ?').run(legacyBytes, 'document-video')
+
+    const retry = store.saveModeDocument({
+      projectId: 'project-ad', documentId: 'document-video', modeId: 'smart-video',
+      baseRevision: 1, revision: 1, value: currentValue,
+    }, { now: 6_000 })
+    assert.equal(retry.documentId, 'document-video')
+    assert.equal(retry.revision, 1)
+    assert.equal(retry.value, legacyBytes)
+    assert.equal(store.getModeDocument('document-video').value, legacyBytes)
+
+    assert.throws(
+      () => store.saveModeDocument({
+        projectId: 'project-ad', documentId: 'document-video', modeId: 'smart-video',
+        baseRevision: 1, revision: 1,
+        value: JSON.stringify({ ...JSON.parse(currentValue), project: { ...story, title: '真实内容变化' } }),
+      }),
+      (error) => error instanceof WorkspaceStoreError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT',
+    )
+
+    const nextProduction = applyVideoProductionCommand(
+      production,
+      createVideoProductionCommand(production, 'project.patch', { brief: '真实的下一版生产需求' }, { id: 'workspace-production-v6-edit' }),
+      { now: production.updatedAt + 1 },
+    )
+    const nextValue = JSON.stringify({ schemaVersion: 2, project: story, plan, production: nextProduction })
+    const saved = store.saveModeDocument({
+      projectId: 'project-ad', documentId: 'document-video', modeId: 'smart-video',
+      baseRevision: 1, revision: 2, value: nextValue,
+    }, { now: 7_000 })
+    const parsed = JSON.parse(saved.value)
+    assert.equal(saved.revision, 2)
+    assert.equal(parsed.production.schemaVersion, 6)
+    assert.equal(parsed.production.brief, '真实的下一版生产需求')
   })
 })
 

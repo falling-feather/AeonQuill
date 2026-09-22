@@ -33,7 +33,7 @@ test('desktop release identity and version mirrors resolve from package.json', a
   assert.equal(metadata.productName, 'AEONQUILL')
   assert.equal(metadata.displayName, '光阴砚 AEONQUILL')
   assert.equal(metadata.version, '0.7.1')
-  assert.equal(metadata.functionalTrack, 'V0.7.82')
+  assert.equal(metadata.functionalTrack, 'V0.7.83')
   assert.equal(metadata.buildIdentityVersion, 'aeonquill-build-identity-v1')
   assert.equal(metadata.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.equal(metadata.identifier, 'com.miaohui.desktop')
