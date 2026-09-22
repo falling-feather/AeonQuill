@@ -218,6 +218,7 @@ export async function fetchArchivedJobs(cursor?: string, limit = 30) {
 export type CreateVideoJobOptions = {
   idempotencyKey?: string
   priority?: number
+  mediaBinding?: import('./story/mediaJobBinding.mjs').MediaJobBinding
 }
 
 export async function createVideoJob(request: VideoJobRequest, options: CreateVideoJobOptions = {}) {
@@ -230,7 +231,7 @@ export async function createVideoJob(request: VideoJobRequest, options: CreateVi
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/video', {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, ...(options.mediaBinding ? { mediaBinding: options.mediaBinding } : {}) }),
   })
   return payload.job
 }
@@ -250,7 +251,7 @@ export async function createFinalCutJob(request: FinalCutJobRequest, options: Cr
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/final-cut', {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, ...(options.mediaBinding ? { mediaBinding: options.mediaBinding } : {}) }),
   })
   return payload.job
 }
@@ -265,7 +266,7 @@ export async function createSoundRenderJob(request: SoundRenderJobRequest, optio
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/sound-render', {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, ...(options.mediaBinding ? { mediaBinding: options.mediaBinding } : {}) }),
   })
   return payload.job
 }
@@ -280,7 +281,7 @@ export async function createVideoChainJob(request: VideoChainJobRequest, options
   const payload = await api<{ job: ProcessingJob }>('/api/jobs/video-chain', {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, ...(options.mediaBinding ? { mediaBinding: options.mediaBinding } : {}) }),
   })
   return payload.job
 }

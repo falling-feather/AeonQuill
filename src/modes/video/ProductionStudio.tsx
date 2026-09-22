@@ -18,7 +18,7 @@ import {
   Square,
   Users,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ProcessingJob } from '../../types'
 import {
   VideoProductionError,
@@ -48,6 +48,16 @@ import { cancelVideoJob, createSoundRenderJob, retryVideoJob } from '../../lib/v
 import type { CreativePlan } from '../../lib/agent/creativePlan.mjs'
 import { evaluateVideoSupervisor, type VideoSupervisorDecision } from '../../lib/story/videoSupervisor.mjs'
 import {
+  assertCanConfirmMediaRun,
+  assertMediaJobForRun,
+  createMediaRunProposal,
+  evaluateMediaSupervisor,
+  MediaSupervisorError,
+  reconcileMediaRunJob,
+  type MediaRun,
+  type MediaRunKind,
+} from '../../lib/story/mediaSupervisor.mjs'
+import {
   AGENT_ADAPTER_STATUS_EVENT,
   clearTextAgentAdapter,
   configureTextAgentAdapter,
@@ -57,7 +67,7 @@ import {
   type AgentAdapterStatus,
 } from '../../lib/agentAdapterApi'
 import { GenerationAdaptersPanel, type VideoCandidateContext } from './GenerationAdaptersPanel'
-import { SoundTimelinePanel } from './SoundTimelinePanel'
+import { ConnectedSoundTimelinePanel } from './ConnectedSoundTimelinePanel'
 import './production-studio.css'
 
 export type ApprovedProductionStorySource = {
@@ -77,6 +87,18 @@ export type ProductionAgentPlanRequest = {
   input: { cardId: string }
 }
 
+export type MediaStepPreparation = {
+  targetId: string | null
+  inputFingerprint: string
+  requestSummary: string
+}
+
+export type MediaStepPreparationInput = {
+  nodeId: string
+  kind: MediaRunKind
+  targetId: string | null
+}
+
 type ProductionStudioProps = {
   active: boolean
   runtimeLabel: string
@@ -91,6 +113,10 @@ type ProductionStudioProps = {
   jobs: ProcessingJob[]
   onJobTracked: (job: ProcessingJob) => void
   onPrepareLocalShot?: (continuityShotId: string) => void
+  onRunMediaStep?: (proposal: MediaRun) => Promise<ProcessingJob>
+  onCancelMediaJob?: (jobId: string) => Promise<ProcessingJob>
+  onPrepareMediaStep?: (input: MediaStepPreparationInput) => MediaStepPreparation | null | Promise<MediaStepPreparation | null>
+  renderMediaSettings?: (nodeId: string) => ReactNode
   onReviewAgentPlan?: (request: ProductionAgentPlanRequest) => void
   onReviewSupervisorPlan?: (plan: CreativePlan) => void
 }
@@ -125,6 +151,7 @@ const REVIEW_DIMENSIONS = [
 
 function messageOf(error: unknown) {
   if (error instanceof VideoProductionError) return `${error.code} · ${error.message}`
+  if (error instanceof MediaSupervisorError) return `${error.code} · ${error.message}`
   return error instanceof Error ? error.message : '制片命令执行失败'
 }
 
@@ -139,6 +166,10 @@ function supervisorActionLabel(decision: VideoSupervisorDecision) {
   if (decision.status === 'node-review') return '前往节点审批'
   if (decision.status === 'change-card-review') return '前往变更卡'
   if (decision.status === 'node-failed') return '检查失败节点'
+  if (decision.status === 'media-proposed') return '确认媒体提议'
+  if (decision.status === 'media-running') return '等待媒体Job'
+  if (decision.status === 'media-review') return '复核媒体结果'
+  if (decision.status === 'media-failed' || decision.status === 'media-cancelled') return '重试媒体任务'
   if (decision.status === 'runtime-required') return '前往真实执行节点'
   if (decision.status === 'completed') return '全部节点已完成'
   return '检查依赖门'
@@ -163,7 +194,15 @@ function NodeStatusIcon({ status }: { status: VideoProductionNodeStatus }) {
   return <CircleDashed size={14} />
 }
 
-export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, workspaceRevision, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot, onReviewAgentPlan, onReviewSupervisorPlan }: ProductionStudioProps) {
+const MEDIA_STEP_OPTIONS: Array<{ nodeId: string; kind: MediaRunKind; label: string; detail: string }> = [
+  { nodeId: 'asset-producer', kind: 'image', label: '图像素材', detail: '使用已启用的图像工作流生成素材候选。' },
+  { nodeId: 'video-director', kind: 'video', label: 'H3 视频', detail: '提交固定 H3/候选执行计划，完成后停在候选复核。' },
+  { nodeId: 'sound-director', kind: 'prepare-speech', label: '对白生成', detail: '提交已批准声音时间线的对白任务。' },
+  { nodeId: 'sound-director', kind: 'render-mix', label: '混音', detail: '提交已批准对白、字幕和混音规格。' },
+  { nodeId: 'editor', kind: 'final-cut', label: '最终成片', detail: '提交已完成视频与声音Job的成片任务。' },
+]
+
+export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, workspaceDocumentId, workspaceRevision, project, onProjectChange, onBridgeToStory, libraryAsset, onLibraryAssetConsumed, jobs, onJobTracked, onPrepareLocalShot, onRunMediaStep, onCancelMediaJob, onPrepareMediaStep, renderMediaSettings, onReviewAgentPlan, onReviewSupervisorPlan }: ProductionStudioProps) {
   const [selectedNodeId, setSelectedNodeId] = useState('screenwriter')
   const [brief, setBrief] = useState(project.brief)
   const [durationMinutes, setDurationMinutes] = useState(project.settings.durationMinutes)
@@ -188,6 +227,8 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const consumedLibraryAssetRef = useRef<number | null>(null)
   const consumedSoundBindingsRef = useRef(new Set<string>())
   const consumedLocalCandidateJobsRef = useRef(new Set<string>())
+  const consumedMediaJobStatesRef = useRef(new Set<string>())
+  const mediaConfirmInFlightRef = useRef(new Set<string>())
   const [soundJobBusy, setSoundJobBusy] = useState<'prepare-speech' | 'render-mix' | 'cancel' | 'retry' | null>(null)
   const [adapterStatus, setAdapterStatus] = useState<AgentAdapterStatus>({ text: { configured: false, persistence: 'memory-only' } })
   const [adapterBusy, setAdapterBusy] = useState<'load' | 'save' | 'clear' | 'propose' | null>('load')
@@ -213,6 +254,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId) ?? project.nodes[0]
   const progress = useMemo(() => productionProgress(project), [project])
   const supervisorDecision = useMemo(() => evaluateVideoSupervisor(project), [project])
+  const mediaDecision = useMemo(() => evaluateMediaSupervisor(project), [project])
   const continuitySummary = useMemo(() => continuityGraphSummary(project.continuityGraph), [project.continuityGraph])
   const continuityShot = project.continuityGraph.shots.find(({ id }) => id === continuityShotId) ?? project.continuityGraph.shots[0] ?? null
   const continuitySlots = useMemo<ContinuitySlotView[]>(() => {
@@ -358,6 +400,94 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
     }
   }, [onProjectChange])
 
+  const proposeMediaStep = useCallback(async (option: { nodeId: string; kind: MediaRunKind; label: string }) => {
+    try {
+      const prepared = await onPrepareMediaStep?.({ nodeId: option.nodeId, kind: option.kind, targetId: null })
+      if (!prepared) throw new Error('当前没有可执行的严格目标或输入；父层尚未接入该媒体处理器。')
+      const run = createMediaRunProposal({
+        nodeId: option.nodeId,
+        kind: option.kind,
+        targetId: prepared.targetId,
+        inputFingerprint: prepared.inputFingerprint,
+        requestSummary: prepared.requestSummary,
+      }, { now: Math.max(Date.now(), projectRef.current.updatedAt) })
+      execute('media-runs.propose', { run }, `已提出${option.label}媒体任务；确认前不会调用真实执行器。`)
+    } catch (error) {
+      setNotice(messageOf(error))
+    }
+  }, [execute, onPrepareMediaStep])
+
+  const confirmMediaStep = useCallback(async (run: MediaRun) => {
+    if (mediaConfirmInFlightRef.current.has(run.id)) {
+      setNotice('该媒体提议正在确认中，请等待当前Job响应。')
+      return
+    }
+    mediaConfirmInFlightRef.current.add(run.id)
+    try {
+      const prepared = await onPrepareMediaStep?.({ nodeId: run.nodeId, kind: run.kind, targetId: run.targetId })
+      assertCanConfirmMediaRun(projectRef.current, run.id, {
+        currentInputFingerprint: prepared?.inputFingerprint,
+        hasPreparedTarget: Boolean(prepared),
+      })
+      if (!onRunMediaStep) throw new Error('当前页面没有接入媒体执行回调；提议仍保持待确认。')
+      const job = await onRunMediaStep(run)
+      assertMediaJobForRun(run, job, { projectId: workspaceProjectId, documentId: workspaceDocumentId })
+      onJobTracked(job)
+      const attached = execute('media-runs.attach-job', {
+        runId: run.id,
+        jobId: job.id,
+        status: job.status === 'running' ? 'running' : 'queued',
+      }, `已确认${run.kind}媒体任务并绑定Job ${job.id}。`)
+      if (!attached) return
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+        const reconciliation = reconcileMediaRunJob(attached, run.id, job, { projectId: workspaceProjectId, documentId: workspaceDocumentId })
+        if (reconciliation.changed) execute('media-runs.reconcile', reconciliation.payload)
+      }
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      mediaConfirmInFlightRef.current.delete(run.id)
+    }
+  }, [execute, onJobTracked, onPrepareMediaStep, onRunMediaStep, workspaceDocumentId, workspaceProjectId])
+
+  const rejectMediaStep = useCallback((run: MediaRun) => {
+    execute('media-runs.reject', { runId: run.id, errorCode: 'USER_REJECTED' }, '已拒绝媒体提议；不会创建Job。')
+  }, [execute])
+
+  const cancelMediaStep = useCallback(async (run: MediaRun) => {
+    if (!run.jobId || !onCancelMediaJob) {
+      setNotice('当前页面没有接入媒体取消回调。')
+      return
+    }
+    try {
+      const job = await onCancelMediaJob(run.jobId)
+      onJobTracked(job)
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+        const reconciliation = reconcileMediaRunJob(projectRef.current, run.id, job, { projectId: workspaceProjectId, documentId: workspaceDocumentId })
+        if (reconciliation.changed) execute('media-runs.reconcile', reconciliation.payload)
+      }
+    } catch (error) {
+      setNotice(messageOf(error))
+    }
+  }, [execute, onCancelMediaJob, onJobTracked, workspaceDocumentId, workspaceProjectId])
+
+  const reproposeMediaStep = useCallback(async (run: MediaRun) => {
+    try {
+      const prepared = await onPrepareMediaStep?.({ nodeId: run.nodeId, kind: run.kind, targetId: run.targetId })
+      if (!prepared) throw new Error('当前没有可执行的严格目标或输入，不能重新提议媒体任务。')
+      const nextRun = createMediaRunProposal({
+        nodeId: run.nodeId,
+        kind: run.kind,
+        targetId: prepared.targetId,
+        inputFingerprint: prepared.inputFingerprint,
+        requestSummary: prepared.requestSummary,
+      }, { now: Math.max(Date.now(), projectRef.current.updatedAt) })
+      execute('media-runs.propose', { run: nextRun }, '已根据当前输入重新提出媒体任务；请再次确认后才会调用执行器。')
+    } catch (error) {
+      setNotice(messageOf(error))
+    }
+  }, [execute, onPrepareMediaStep])
+
   useEffect(() => {
     let next = projectRef.current
     let applied = 0
@@ -443,6 +573,51 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
       setNotice(`已把 ${registered} 个本地 H3 成品写入对应镜头候选池；未自动替换当前选择。`)
     } else if (rejected.length) {
       setNotice(`本地 H3 候选未回填：${rejected.at(-1)}`)
+    }
+  }, [jobs, onProjectChange, workspaceDocumentId, workspaceProjectId])
+
+  useEffect(() => {
+    let next = projectRef.current
+    let applied = 0
+    for (const run of next.mediaRuns) {
+      try {
+        const job = run.jobId
+          ? jobs.find((item) => item.id === run.jobId)
+          : jobs.find((item) => (item as ProcessingJob & { mediaBinding?: { runId?: string } }).mediaBinding?.runId === run.id)
+        if (!job) continue
+        if (!run.jobId) {
+          if (run.status !== 'proposed') continue
+          assertMediaJobForRun(run, job, { projectId: workspaceProjectId, documentId: workspaceDocumentId })
+          const attachCommand = createVideoProductionCommand(next, 'media-runs.attach-job', {
+            runId: run.id,
+            jobId: job.id,
+            status: job.status === 'running' ? 'running' : 'queued',
+          }, { id: `production-media-recovered-${sequenceRef.current++}`, actor: 'orchestrator' })
+          next = applyVideoProductionCommand(next, attachCommand, { now: Math.max(Date.now(), next.updatedAt) })
+          applied += 1
+        }
+        if (!['completed', 'failed', 'cancelled'].includes(job.status)) continue
+        const stateKey = `${run.id}:${job.id}:${job.status}:${job.error?.code ?? ''}`
+        if (consumedMediaJobStatesRef.current.has(stateKey)) continue
+        consumedMediaJobStatesRef.current.add(stateKey)
+        const reconciliation = reconcileMediaRunJob(next, run.id, job, {
+          projectId: workspaceProjectId,
+          documentId: workspaceDocumentId,
+        })
+        if (!reconciliation.changed) continue
+        const command = createVideoProductionCommand(next, 'media-runs.reconcile', reconciliation.payload, {
+          id: `production-media-reconcile-${sequenceRef.current++}`,
+          actor: 'orchestrator',
+        })
+        next = applyVideoProductionCommand(next, command, { now: Math.max(Date.now(), next.updatedAt) })
+        applied += 1
+      } catch (error) {
+        setNotice(messageOf(error))
+      }
+    }
+    if (applied) {
+      projectRef.current = next
+      onProjectChange(next)
     }
   }, [jobs, onProjectChange, workspaceDocumentId, workspaceProjectId])
 
@@ -841,12 +1016,65 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
               || workspaceRevision === undefined
               || supervisorDecision.status === 'project-paused'
               || supervisorDecision.status === 'completed'
+              || supervisorDecision.status.startsWith('media-')
               || (supervisorDecision.modelCallRequired && !adapterStatus.text.configured)
             }
           >
             {supervisorBusy ? <Loader2 size={15} className="is-spinning" /> : <Bot size={15} />}
             {supervisorBusy ? '正在读取并规划' : supervisorActionLabel(supervisorDecision)}
           </button>
+        </section>
+
+        <section className="aq-production-media-supervisor" aria-label="媒体执行提议">
+          <header>
+            <div>
+              <span>跨媒体执行</span>
+              <strong>{mediaDecision.status === 'none' ? '等待受控媒体提议' : mediaDecision.message}</strong>
+            </div>
+            <small>先检查生成方案，再确认开始。完成后可预览、试听和选择结果。</small>
+          </header>
+          {renderMediaSettings?.(mediaDecision.run?.nodeId ?? supervisorDecision.node?.id ?? selectedNode.id)}
+          <div className="aq-production-media-options">
+            {MEDIA_STEP_OPTIONS.map((option) => {
+              const handlerReady = Boolean(onPrepareMediaStep && onRunMediaStep)
+              return (
+                <button
+                  key={`${option.nodeId}:${option.kind}`}
+                  type="button"
+                  disabled={!handlerReady || project.globalPaused}
+                  onClick={() => proposeMediaStep(option)}
+                  title={handlerReady ? option.detail : '请先保存当前项目并完成运行环境配置。'}
+                >
+                  <span>{option.label}</span>
+                  <small>{project.nodes.find(({ id }) => id === option.nodeId)?.title}</small>
+                </button>
+              )
+            })}
+          </div>
+          <div className="aq-production-media-runs">
+            {project.mediaRuns.length ? project.mediaRuns.slice().sort((left, right) => right.updatedAt - left.updatedAt).map((run) => {
+              const job = run.jobId ? jobs.find((item) => item.id === run.jobId) : null
+              const canConfirm = run.status === 'proposed' && Boolean(onRunMediaStep && onPrepareMediaStep)
+              return (
+                <article key={run.id} className={`aq-production-media-run is-${run.status}`}>
+                  <div>
+                    <strong>{MEDIA_STEP_OPTIONS.find(({ kind }) => kind === run.kind)?.label}</strong>
+                    <span>{run.requestSummary}</span>
+                  </div>
+                  <small>{run.status}{run.jobId ? ` · Job ${run.jobId}` : ''}{job?.detail ? ` · ${job.detail}` : ''}</small>
+                  <div className="aq-production-media-run-actions">
+                    {run.status === 'proposed' ? <>
+                      <button type="button" disabled={!canConfirm || project.globalPaused} onClick={() => void confirmMediaStep(run)}>确认并排队</button>
+                      <button type="button" className="is-secondary" onClick={() => rejectMediaStep(run)}>拒绝</button>
+                    </> : null}
+                    {['queued', 'running'].includes(run.status) && run.jobId && onCancelMediaJob ? <button type="button" className="is-secondary" onClick={() => void cancelMediaStep(run)}>取消</button> : null}
+                    {['failed', 'cancelled'].includes(run.status) ? <button type="button" disabled={!onPrepareMediaStep} onClick={() => reproposeMediaStep(run)}>重新提议</button> : null}
+                    {run.status === 'completed' ? <span className="aq-production-media-review-note">待候选/试听复核</span> : null}
+                  </div>
+                </article>
+              )
+            }) : <p className="aq-production-media-empty">选择一个步骤，检查方案后开始生成。</p>}
+          </div>
         </section>
 
         <div className="aq-production-track-wrap">
@@ -1065,12 +1293,16 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
         ) : null}
 
         {['editor', 'sound-director', 'quality-controller'].includes(selectedNode.id) ? (
-          <SoundTimelinePanel
+          <ConnectedSoundTimelinePanel
             project={project}
+            workspaceProjectId={workspaceProjectId}
+            workspaceDocumentId={workspaceDocumentId}
+            onJobTracked={onJobTracked}
             assetTargetId={soundTargetId}
             onChooseAsset={chooseSoundAsset}
             onCommand={(type, payload = {}, successMessage) => { execute(type, payload, successMessage) }}
             jobs={soundJobs}
+            alignmentJobs={jobs.filter((job) => job.kind === 'speech-alignment')}
             executionAvailable={Boolean(workspaceProjectId && workspaceDocumentId)}
             busy={soundJobBusy}
             onPrepareSpeech={(format, speechBudgetUsd) => { void submitSoundJob('prepare-speech', { format, speechBudgetUsd }) }}

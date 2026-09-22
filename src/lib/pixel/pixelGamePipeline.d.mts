@@ -2,6 +2,8 @@ import type {
   PixelAnimationClipMetadata,
   PixelCollisionShape,
   PixelDocument,
+  PixelTerrainLayer,
+  PixelTerrainObjectLayer,
   PixelTileRule,
 } from './pixelCore.mjs'
 
@@ -29,7 +31,7 @@ export type PixelGameAnimation = {
 }
 
 export type PixelGameManifest = {
-  schemaVersion: 7
+  schemaVersion: 8
   kind: 'aeonquill.pixel-game-bundle'
   sourceDocumentId: string
   sourceRevision: number
@@ -140,7 +142,42 @@ export type PixelTerrainMapLayout = {
   cells: PixelTerrainMapCell[]
 }
 
-export type PixelTerrainMapMetadata = PixelTerrainMapLayout & { image: string; atlas: string }
+export type PixelTerrainMapMetadata = PixelTerrainMapLayout & {
+  image: string
+  atlas: string
+  terrainLayer: PixelTerrainLayer
+  objectLayers: PixelTerrainObjectLayer[]
+}
+
+export type PixelTerrainCoverageCell = {
+  index: number
+  row: number
+  column: number
+  terrainId: string
+  bitmask: number
+  covered: boolean
+}
+export type PixelTerrainCoverageMissing = {
+  terrainId: string
+  bitmask: number
+  cells: Array<{ index: number; row: number; column: number }>
+  count: number
+}
+export type PixelTerrainCoverage = {
+  schemaVersion: 1
+  kind: 'aeonquill.pixel-terrain-coverage'
+  sourceDocumentId: string
+  sourceRevision: number
+  terrainMapId: string
+  terrainMapName: string
+  checkedCellCount: number
+  occupiedCellCount: number
+  missingCount: number
+  missingTerrainIds: string[]
+  missingBitmasks: Array<{ terrainId: string; bitmask: number; count: number }>
+  missing: PixelTerrainCoverageMissing[]
+  cells: PixelTerrainCoverageCell[]
+}
 
 export type PixelTerrainMapExportBundle = {
   preview: { filename: string; mime: 'image/png'; width: number; height: number; pixels: Uint8ClampedArray }
@@ -257,6 +294,7 @@ export function createPixelTerrainMapLayout(
   document: PixelDocument,
   options?: PixelTerrainMapOptions,
 ): PixelTerrainMapLayout
+export function inspectPixelTerrainCoverage(document: PixelDocument, mapId: string): PixelTerrainCoverage
 export function renderPixelTerrainMapRgba(
   document: PixelDocument,
   options?: PixelTerrainMapOptions,

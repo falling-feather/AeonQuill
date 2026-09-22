@@ -43,7 +43,7 @@ test('fixed RGBA conversion is deterministic and matches the checked contract ha
   const second = convertRgbaToPixelDocument(fixedRgba, options)
   assert.deepEqual(first, second)
   const digest = createHash('sha256').update(serializePixelDocument(first.document)).digest('hex')
-  assert.equal(digest, 'd6de14ca83e08bbed41c3f6c9dc7cee1bb0e569fa28857f518b0ed4dd5a5569d')
+  assert.equal(digest, '9c6643bbe74f8d19ded2df3ed53df9553b3038f92432856e6a7fe6bb2b6e0cde')
   assert.deepEqual(first.report, {
     sourceWidth: 4,
     sourceHeight: 4,
@@ -220,7 +220,7 @@ test('project JSON round-trip is semantically exact and schema v0 migrates expli
     pixels: [1, 2],
     frameDurationMs: 90,
   }))
-  assert.equal(migrated.schemaVersion, 7)
+  assert.equal(migrated.schemaVersion, 8)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', 'color-2'])
   assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 1 }, collisions: [], tileRule: null })
 })

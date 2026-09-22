@@ -46,6 +46,7 @@ import type {
 } from '../types'
 import { MaskEditor } from './MaskEditor'
 import { SemanticPointEditor } from './SemanticPointEditor'
+import { ImageComparison } from './ImageComparison'
 
 export type ImageLabResult =
   | {
@@ -335,6 +336,7 @@ export function ImageLab({
   const [capabilityLoading, setCapabilityLoading] = useState(true)
   const [capabilityError, setCapabilityError] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [comparisonMode, setComparisonMode] = useState<'side' | 'slider'>('side')
   const [previewDimensions, setPreviewDimensions] = useState({ width: 0, height: 0 })
   const [pixelDraft, setPixelDraft] = useState<PixelDraft | null>(null)
   const [maskDraft, setMaskDraft] = useState<MaskDraft | null>(null)
@@ -821,6 +823,14 @@ export function ImageLab({
 
         <div className="image-lab-body">
           <div className={`image-compare-area mode-${mode}`}>
+            {previewSource && !isMaskEditor ? <nav className="image-lab-comparison-tools" aria-label="预览对比方式">
+              <button type="button" aria-pressed={comparisonMode === 'side'} onClick={() => setComparisonMode('side')}>并排对比</button>
+              <button type="button" aria-pressed={comparisonMode === 'slider'} onClick={() => setComparisonMode('slider')}>滑杆对比</button>
+            </nav> : null}
+            {previewSource && !isMaskEditor && comparisonMode === 'slider' ? <ImageComparison
+              before={source || element.src || ''} after={previewSource} afterLabel={definition.previewLabel}
+              afterFilter={mode === 'adjust' ? imageAdjustmentFilter(adjustments) : undefined} pixelated={mode === 'pixelate'}
+            /> : <>
             <figure className="image-preview-frame">
               <figcaption>原图</figcaption>
               <div className="image-preview-stage">
@@ -876,6 +886,7 @@ export function ImageLab({
                 )}
               </div>
             </figure>
+            </>}
           </div>
 
           <aside className="image-lab-settings">

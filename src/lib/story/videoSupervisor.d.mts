@@ -8,6 +8,11 @@ export type VideoSupervisorDecisionStatus =
   | 'node-review'
   | 'node-failed'
   | 'node-paused'
+  | 'media-proposed'
+  | 'media-running'
+  | 'media-review'
+  | 'media-failed'
+  | 'media-cancelled'
   | 'text-turn-ready'
   | 'runtime-required'
   | 'completed'
@@ -16,7 +21,7 @@ export type VideoSupervisorDecisionStatus =
 export type VideoSupervisorDecision = {
   schemaVersion: 1
   status: VideoSupervisorDecisionStatus
-  action: 'resume-project' | 'review-change-card' | 'review-node' | 'reset-node' | 'resume-node' | 'compose-text-turn' | 'open-runtime' | 'none' | 'resolve-dependency'
+  action: 'resume-project' | 'review-change-card' | 'review-node' | 'reset-node' | 'resume-node' | 'compose-text-turn' | 'open-runtime' | 'none' | 'resolve-dependency' | 'confirm-media' | 'wait-media' | 'review-media' | 'retry-media'
   node: null | {
     id: string
     order: number
@@ -35,5 +40,5 @@ export type VideoSupervisorDecision = {
   message: string
 }
 
-export function evaluateVideoSupervisor(project: VideoProductionProject): VideoSupervisorDecision
+export function evaluateVideoSupervisor(project: VideoProductionProject, options?: Record<string, unknown>): VideoSupervisorDecision
 export function isVideoSupervisorTextNode(nodeId: string): boolean

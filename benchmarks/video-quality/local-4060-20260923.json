@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-22T18:31:21.364Z",
+  "kind": "aeonquill-local-video-execution-evidence",
+  "conclusion": "Execution verified; perceptual quality and identity calibration remain incomplete.",
+  "environment": {
+    "comfyui": "0.31.0",
+    "pytorch": "2.12.1+cu130",
+    "device": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "memoryBytes": 33844576256
+  },
+  "models": {
+    "unet": {
+      "filename": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "bytes": 20970379616,
+      "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    "clip": {
+      "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "bytes": 15687142551,
+      "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    "videoVae": {
+      "filename": "minimax_h3_video_vae_fp16.safetensors",
+      "bytes": 5207808496,
+      "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+    },
+    "audioVae": {
+      "filename": "minimax_h3_audio_vae_fp32.safetensors",
+      "bytes": 605254808,
+      "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    },
+    "turboLora": {
+      "filename": "minimax_h3_turbo_v4_step600_ema.safetensors",
+      "bytes": 779849816,
+      "sha256": "5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3"
+    }
+  },
+  "cases": [
+    {
+      "id": "t2v-close-up-adult",
+      "jobId": "video-4ce3b6d3-1f7b-4f39-bb51-ef22a343ecc3",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "text-to-video",
+        "prompt": "A close-up portrait of one adult person by a window, gently turning their head and breathing naturally, soft morning light, static camera.",
+        "scenario": "portrait",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "fast",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "natural",
+          "continuity": true
+        }
+      },
+      "requestHash": "dcf23b29dbde8c25c8da8aaf96281fbf61a69735e1e60ef24661399b9a5cd4bf",
+      "promptHash": "7779796580d8f82a95faa595420509a44c0c17571bce92c6b8d780101475fb6e",
+      "outputSha256": "7fa0d701d6320f5f69d5c4151c199e9044609c5a2226912ceae35807ce0d7e1d",
+      "outputBytes": 202908,
+      "elapsedMs": 123652,
+      "peakVramMiB": 7745,
+      "media": {
+        "width": 608,
+        "height": 352,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 314159,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "metrics": {
+        "ffmpegBlurMean": 7.9644503,
+        "interFrameLumaDifference": {
+          "samples": 123,
+          "mean": 0.44131710569105675,
+          "p50": 0.388924,
+          "p95": 0.7441492
+        },
+        "warning": "These are descriptive regression signals, not perceptual quality scores; motion changes YDIF and lower/higher blur values are not universal pass criteria."
+      },
+      "assistantStillFrameReview": "contact-sheet reviewed; this does not assess full motion or replace a human blind review",
+      "humanBlindReview": "pending"
+    },
+    {
+      "id": "t2v-full-body-slow-motion",
+      "jobId": "video-5e7f6dc2-5d1e-423c-a9b1-5c3af163d01b",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "text-to-video",
+        "prompt": "A full-body shot of one adult person walking slowly across a quiet studio, natural weight and smooth arm motion, static camera.",
+        "scenario": "cinematic",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "fast",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "natural",
+          "continuity": true
+        }
+      },
+      "requestHash": "16c2e37662ce4d1f48a7f28be70cbe17b48e5fc2d183e333821c6345be92a708",
+      "promptHash": "314e3490772c979f62c68f798681b6cac1c3ebc477abb96b35b5dfbe06d2d152",
+      "outputSha256": "21e6cafbee28c354371274937886bf4dc54c53737ba4b76480d0b3f6680f4ea2",
+      "outputBytes": 217113,
+      "elapsedMs": 113539,
+      "peakVramMiB": 7874,
+      "media": {
+        "width": 608,
+        "height": 352,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 336153,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "metrics": {
+        "ffmpegBlurMean": 5.9874323,
+        "interFrameLumaDifference": {
+          "samples": 123,
+          "mean": 1.2158432764227647,
+          "p50": 1.23777,
+          "p95": 1.586631
+        },
+        "warning": "These are descriptive regression signals, not perceptual quality scores; motion changes YDIF and lower/higher blur values are not universal pass criteria."
+      },
+      "assistantStillFrameReview": "failed-framing: the head is outside the frame in all three contact-sheet frames; retry required",
+      "humanBlindReview": "pending"
+    },
+    {
+      "id": "t2v-two-adults-exchange-book",
+      "jobId": "video-92ffff53-3f70-4b84-8adf-55475bc6d152",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "text-to-video",
+        "prompt": "Two adults calmly exchange a book across a wooden table, clear handoff, stable medium shot, warm library light.",
+        "scenario": "cinematic",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "fast",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "natural",
+          "continuity": true
+        }
+      },
+      "requestHash": "8cb6b03f4f96e6cc9bf24bd33477759261b2146c877c485098d6a8922c400b0c",
+      "promptHash": "801ebc620559a6bab74f94c47c45e4117b50c3281abe7240ea5046a9f9435a02",
+      "outputSha256": "df852e308930aa3bed2ef1597dd1cc76e75a4c9ef97bf83c3af73a37fdb3dce1",
+      "outputBytes": 242506,
+      "elapsedMs": 139621,
+      "peakVramMiB": 7839,
+      "media": {
+        "width": 608,
+        "height": 352,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 375468,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "metrics": {
+        "ffmpegBlurMean": 4.9259466,
+        "interFrameLumaDifference": {
+          "samples": 123,
+          "mean": 0.45463162113821143,
+          "p50": 0.451971,
+          "p95": 0.878651
+        },
+        "warning": "These are descriptive regression signals, not perceptual quality scores; motion changes YDIF and lower/higher blur values are not universal pass criteria."
+      },
+      "assistantStillFrameReview": "contact-sheet reviewed; this does not assess full motion or replace a human blind review",
+      "humanBlindReview": "pending"
+    },
+    {
+      "id": "i2v-close-up-cinemaBase",
+      "jobId": "video-f992ee8a-77fd-4192-a4bf-75bd6778452c",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "image-to-video",
+        "prompt": "The same adult person from the opening frame slowly turns their head and breathes naturally by the window, preserving identity, wardrobe, lighting and background, static camera.",
+        "scenario": "portrait",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "cinemaBase",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "subtle",
+          "continuity": true
+        }
+      },
+      "requestHash": "78329551532c1ed3e201bdaadff6119a74cf75995f3439e3fa9f0b4f88a6ab6a",
+      "promptHash": "b1987264b65a953fa476bb397c3d236cf175519c8610b686e7ac26f10b405f61",
+      "outputSha256": "54bcaa4ee23081477b2f1f4c873db9d05c68b2af85565a6bb637ea7039a6b62c",
+      "outputBytes": 3533563,
+      "elapsedMs": 1179986,
+      "peakVramMiB": 7708,
+      "media": {
+        "width": 1024,
+        "height": 576,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 5470970,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "metrics": {
+        "ffmpegBlurMean": 7.75827,
+        "interFrameLumaDifference": {
+          "samples": 123,
+          "mean": 0.4890442617886177,
+          "p50": 0.37992,
+          "p95": 1.2016719999999994
+        },
+        "warning": "These are descriptive regression signals, not perceptual quality scores; motion changes YDIF and lower/higher blur values are not universal pass criteria."
+      },
+      "assistantStillFrameReview": "contact-sheet reviewed; this does not assess full motion or replace a human blind review",
+      "humanBlindReview": "pending"
+    },
+    {
+      "id": "retry-wide-long-two-steps-a",
+      "jobId": "video-f2ee6cc0-4958-4965-baa4-5a905ae19214",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "text-to-video",
+        "prompt": "Locked wide long shot of one adult person shown head-to-toe in a quiet studio. Keep the entire head and both feet visible in every frame; the person occupies no more than 60% of frame height. The fixed camera stays wide and distant while the person walks slowly for exactly two steps only. No close-up, no medium shot, no zoom, no camera movement, no crop, no cut.",
+        "scenario": "cinematic",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "fast",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "natural",
+          "continuity": true
+        }
+      },
+      "requestHash": "2de6d935a51973dff8ba5e79421b51885ba5e72768238bd068c57a46537fd8cb",
+      "promptHash": "f85e2b7b7959ca716db0730bbd86c1db7d75026a18ea0a9ee40488b713ca2ebd",
+      "outputSha256": "625328661b9dcb7ef03a39949a5474772c1a428c52b828790239025ea75faf02",
+      "outputBytes": 182967,
+      "elapsedMs": 154410,
+      "peakVramMiB": 7577,
+      "media": {
+        "width": 608,
+        "height": 352,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 283285,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "assistantStillFrameReview": {
+        "reviewer": "assistant",
+        "humanBlindReview": "pending",
+        "headAndFeetVisibility": "pass-in-three-contact-sheet-frames",
+        "maximumSixtyPercentHeight": "not-met-by-visual-inspection",
+        "note": "Both retries keep the complete figure visible. Approximate figure height is about 70% in A and 85% in B, so the requested <=60% scale constraint is not satisfied. Still frames do not establish temporal or perceptual quality."
+      },
+      "humanBlindReview": "pending"
+    },
+    {
+      "id": "retry-wide-long-two-steps-b",
+      "jobId": "video-0548c622-dadf-42a3-ac14-2f08299e352d",
+      "executionStatus": "completed",
+      "request": {
+        "mode": "text-to-video",
+        "prompt": "Fixed wide full-length framing of a single adult person, head-to-toe, with the whole head and both feet always inside the image and at least 20% margin above the head and below the feet. Subject height stays at or below 60% of the frame. The person takes exactly two slow walking steps in a quiet studio. Long shot only; never close in, never zoom, never pan, never crop, never cut.",
+        "scenario": "cinematic",
+        "aspectRatio": "16:9",
+        "duration": 5,
+        "preset": "fast",
+        "modelProfile": "int8ConvrotCu130",
+        "seed": 20260923,
+        "audio": true,
+        "director": {
+          "camera": "locked",
+          "motion": "natural",
+          "continuity": true
+        }
+      },
+      "requestHash": "fe7db5c43545c36c558ff3af4743b80fb2b23f0d7e62d73ac116ff5f29b3e383",
+      "promptHash": "258e72277f9575fc7783777b8c885e72602feaff0a54c8128c49c065a3fa18a7",
+      "outputSha256": "49b25ba362182dbf098d6660e98b19a9b7122c365aaa83eaca7dbd260c80170b",
+      "outputBytes": 174442,
+      "elapsedMs": 137810,
+      "peakVramMiB": 7657,
+      "media": {
+        "width": 608,
+        "height": 352,
+        "codec": "h264",
+        "pixelFormat": "yuv420p",
+        "frameRate": "24/1",
+        "frames": 124,
+        "durationSeconds": 5.167,
+        "bitRate": 270086,
+        "audio": {
+          "codec": "aac",
+          "sampleRate": 32000,
+          "channels": 2
+        },
+        "seekable": true
+      },
+      "assistantStillFrameReview": {
+        "reviewer": "assistant",
+        "humanBlindReview": "pending",
+        "headAndFeetVisibility": "pass-in-three-contact-sheet-frames",
+        "maximumSixtyPercentHeight": "not-met-by-visual-inspection",
+        "note": "Both retries keep the complete figure visible. Approximate figure height is about 70% in A and 85% in B, so the requested <=60% scale constraint is not satisfied. Still frames do not establish temporal or perceptual quality."
+      },
+      "humanBlindReview": "pending"
+    }
+  ],
+  "artifactRoot": ".runtime/benchmarks/video-quality/20260923",
+  "seedVr2Executed": false
+}

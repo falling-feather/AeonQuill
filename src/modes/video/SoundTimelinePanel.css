@@ -1,0 +1,210 @@
+.aq-sound-alignment-card,
+.aq-sound-local-remix-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #d9d3f0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fff, #f8f6ff);
+}
+
+.aq-sound-alignment-card > header,
+.aq-sound-local-remix-card > header,
+.aq-sound-alignment-preview > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aq-sound-alignment-card > header > div,
+.aq-sound-local-remix-card > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.aq-sound-alignment-card > header strong,
+.aq-sound-local-remix-card > header strong,
+.aq-sound-alignment-preview strong {
+  color: #443b5a;
+  font-size: 9px;
+}
+
+.aq-sound-alignment-card > header small,
+.aq-sound-local-remix-card > header small,
+.aq-sound-alignment-preview span,
+.aq-sound-alignment-note,
+.aq-sound-alignment-message,
+.aq-sound-alignment-error,
+.aq-sound-local-remix-preview,
+.aq-sound-local-remix-empty,
+.aq-sound-alignment-empty {
+  margin: 0;
+  color: #7c748a;
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.aq-sound-alignment-card > header > span,
+.aq-sound-local-remix-card > header > span {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #5c4db2;
+  background: #ebe7ff;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.aq-sound-alignment-controls,
+.aq-sound-alignment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px;
+}
+
+.aq-sound-alignment-controls label,
+.aq-sound-alignment-import {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #837b8e;
+  font-size: 7px;
+}
+
+.aq-sound-alignment-controls input,
+.aq-sound-alignment-import input {
+  min-width: 0;
+  height: 27px;
+  padding: 0 7px;
+  border: 1px solid #dcd8e8;
+  border-radius: 6px;
+  color: #494452;
+  background: #fff;
+  font: inherit;
+  font-size: 8px;
+}
+
+.aq-sound-alignment-actions button,
+.aq-sound-alignment-import {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #d7d3e5;
+  border-radius: 6px;
+  color: #625b72;
+  background: #fff;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-sound-alignment-actions button.is-primary {
+  color: #fff;
+  border-color: #6553f5;
+  background: #6553f5;
+}
+
+.aq-sound-alignment-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.aq-sound-alignment-import {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.aq-sound-alignment-import span {
+  pointer-events: none;
+}
+
+.aq-sound-alignment-import input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.aq-sound-alignment-error {
+  color: #a34f4f;
+}
+
+.aq-sound-alignment-preview {
+  display: grid;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid #d7eadf;
+  border-radius: 7px;
+  background: #f2faf6;
+}
+
+.aq-sound-alignment-words {
+  display: grid;
+  gap: 4px;
+}
+
+.aq-sound-alignment-words > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px 70px 28px;
+  gap: 4px;
+  align-items: center;
+}
+
+.aq-sound-alignment-words input {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  padding: 0 5px;
+  border: 1px solid #d8e3dd;
+  border-radius: 5px;
+  color: #4b5d52;
+  background: #fff;
+  font: inherit;
+  font-size: 7px;
+}
+
+.aq-sound-alignment-words small {
+  color: #638372;
+  font-size: 7px;
+  text-align: right;
+}
+
+.aq-sound-local-remix-card {
+  border-color: #e8d8bf;
+  background: linear-gradient(135deg, #fff, #fffaf2);
+}
+
+.aq-sound-local-remix-card > header > span {
+  color: #8a6b18;
+  background: #fff2cd;
+}
+
+.aq-sound-local-remix-card footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.aq-sound-local-remix-card button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #6553f5;
+  border-radius: 6px;
+  color: #fff;
+  background: #6553f5;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.aq-sound-local-remix-card button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.aq-sound-alignment-empty {
+  padding: 7px;
+  border: 1px dashed #dcd7e9;
+  border-radius: 7px;
+  background: #fff;
+}

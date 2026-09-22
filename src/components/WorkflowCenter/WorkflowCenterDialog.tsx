@@ -38,6 +38,11 @@ import {
   installWorkflowPack,
   removeCustomWorkflow,
   setCustomWorkflowEnabled,
+  fetchWorkflowRecipes,
+  saveWorkflowRecipe,
+  resolveWorkflowRecipe,
+  removeWorkflowRecipe,
+  fetchCustomWorkflowHistory,
   type CustomWorkflowInspection,
   type CustomWorkflowMappingRole,
   type CustomWorkflowMappings,
@@ -46,6 +51,9 @@ import {
 } from '../../lib/workflowCenterApi'
 import { listLibraryAssets, type LibraryAsset } from '../../lib/libraryApi'
 import type { ProcessingJob } from '../../types'
+import { validateWorkflowRecipeInput, type WorkflowRecipeSummary, type WorkflowParameterKey } from '../../lib/workflowRecipes.mjs'
+import { WORKFLOW_CONTROL_FIELDS } from '../../lib/workflowControls.mjs'
+import { WorkflowCandidateTray } from './WorkflowCandidateTray'
 import './workflow-center.css'
 
 interface WorkflowCenterDialogProps {
@@ -56,16 +64,15 @@ interface WorkflowCenterDialogProps {
   activeProjectId?: string
 }
 
-type WorkflowTab = 'builtin' | 'custom'
+type WorkflowTab = 'tasks' | 'recipes' | 'builtin' | 'custom'
 type WorkflowCategory = 'all' | 'video' | 'image'
 
-const CUSTOM_NUMERIC_FIELDS = {
-  seed: { label: '随机种子', min: 0, max: Number.MAX_SAFE_INTEGER },
-  width: { label: '宽度', min: 64, max: 8_192 },
-  height: { label: '高度', min: 64, max: 8_192 },
-  frames: { label: '帧数', min: 1, max: 4_096 },
-  steps: { label: '采样步数', min: 1, max: 200 },
-} as const
+const CUSTOM_NUMERIC_FIELDS = WORKFLOW_CONTROL_FIELDS
+const PARAMETER_LABELS = Object.fromEntries(Object.entries(WORKFLOW_CONTROL_FIELDS).map(([key, value]) => [key, value.label]))
+
+function numericParameters(values: Record<string, string>) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim() !== '').map(([key, value]) => [key, Number(value)]))
+}
 
 const STATUS_LABELS: Record<WorkflowPack['status'], string> = {
   uninstalled: '未安装',
@@ -82,11 +89,7 @@ const CUSTOM_MAPPING_ROLES: Array<{ id: CustomWorkflowMappingRole; label: string
   { id: 'negativePrompt', label: '负向提示词' },
   { id: 'sourceImage', label: '首帧 / 输入图' },
   { id: 'lastFrame', label: '末帧' },
-  { id: 'seed', label: '随机种子' },
-  { id: 'width', label: '宽度' },
-  { id: 'height', label: '高度' },
-  { id: 'frames', label: '帧数' },
-  { id: 'steps', label: '采样步数' },
+  ...Object.entries(WORKFLOW_CONTROL_FIELDS).map(([id, value]) => ({ id: id as WorkflowParameterKey, label: value.label })),
 ]
 
 function readableBytes(value: number | null | undefined) {
@@ -129,7 +132,7 @@ function externalLink(url: string, label: string) {
 export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, projects = [], activeProjectId }: WorkflowCenterDialogProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
-  const [tab, setTab] = useState<WorkflowTab>('builtin')
+  const [tab, setTab] = useState<WorkflowTab>('tasks')
   const [category, setCategory] = useState<WorkflowCategory>('all')
   const [query, setQuery] = useState('')
   const [catalog, setCatalog] = useState<WorkflowCenterCatalog | null>(null)
@@ -157,13 +160,17 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
   const [customRunAssets, setCustomRunAssets] = useState<LibraryAsset[]>([])
   const [customRunJob, setCustomRunJob] = useState<ProcessingJob | null>(null)
   const [customRunAssetsLoading, setCustomRunAssetsLoading] = useState(false)
+  const [recipes, setRecipes] = useState<WorkflowRecipeSummary[]>([])
+  const [recipeName, setRecipeName] = useState('')
+  const [customHistory, setCustomHistory] = useState<ProcessingJob[]>([])
 
   const refresh = useCallback(async (force = false) => {
     setLoading(true)
     setError(null)
     try {
-      const next = await fetchWorkflowCenterCatalog(force)
+      const [next, savedRecipes] = await Promise.all([fetchWorkflowCenterCatalog(force), fetchWorkflowRecipes()])
       setCatalog(next)
+      setRecipes(savedRecipes.recipes)
       setSelectedPackId((current) => next.packs.some(({ id }) => id === current) ? current : next.packs[0]?.id ?? null)
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '工作流目录读取失败')
@@ -269,6 +276,16 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
       window.clearInterval(timer)
     }
   }, [customRunJob?.id, customRunJob?.status, open])
+
+  useEffect(() => {
+    setCustomHistory([])
+    if (!open || !selectedCustomId || !customRunProjectId) return
+    let disposed = false
+    void fetchCustomWorkflowHistory(selectedCustomId, customRunProjectId)
+      .then((jobs) => { if (!disposed) setCustomHistory(jobs) })
+      .catch((reason) => { if (!disposed) setError(reason instanceof Error ? reason.message : '候选记录读取失败') })
+    return () => { disposed = true }
+  }, [open, selectedCustomId, customRunProjectId, customRunJob?.status])
 
   useEffect(() => {
     setLicenseAccepted(false)
@@ -402,9 +419,37 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
     setCustomRunSourceId('')
     setCustomRunLastFrameId('')
     setCustomRunNumbers({})
+    setRecipeName(`${workflow.title} 配方`.slice(0, 80))
     setCustomRunJob(null)
     setError(null)
     setMessage(null)
+  }
+
+  const saveCurrentRecipe = async () => {
+    if (!selectedCustom) return
+    await run('save-recipe', async () => {
+      const input = validateWorkflowRecipeInput({
+        name: recipeName, workflowId: selectedCustom.id, workflowHash: selectedCustom.hash,
+        mappingHash: selectedCustom.mappingHash, parameters: numericParameters(customRunNumbers),
+      }, selectedCustom)
+      await saveWorkflowRecipe(input)
+    }, '配方已保存。下次可复用参数，并选择新的项目素材。')
+  }
+
+  const applyRecipe = async (id: string) => {
+    setBusy('apply-recipe')
+    setError(null)
+    try {
+      const recipe = await resolveWorkflowRecipe(id)
+      const workflow = catalog?.customWorkflows.find((entry) => entry.id === recipe.workflowId)
+      if (!workflow) throw new Error('工作流列表已变化，请刷新后应用配方')
+      openCustomRunner(workflow)
+      setCustomRunNumbers(Object.fromEntries(Object.entries(recipe.parameters).map(([key, value]) => [key, String(value)])))
+      setRecipeName(recipe.name)
+      setMessage('配方已应用，请填写本次内容并选择输入素材。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '配方应用失败')
+    } finally { setBusy(null) }
   }
 
   const submitCustomRun = async () => {
@@ -413,11 +458,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
     setError(null)
     setMessage(null)
     try {
-      const numericValues = Object.fromEntries(
-        Object.entries(customRunNumbers)
-          .filter(([, value]) => value.trim() !== '')
-          .map(([role, value]) => [role, Number(value)]),
-      )
+      const numericValues = numericParameters(customRunNumbers)
       const job = await createCustomWorkflowJob({
         customWorkflowId: selectedCustom.id,
         projectId: customRunProjectId,
@@ -490,6 +531,8 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
         ) : null}
 
         <div className="aq-workflow-center__tabs" role="tablist" aria-label="工作流类型">
+          <button type="button" role="tab" aria-selected={tab === 'tasks'} className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}><Sparkles size={15} />创作任务</button>
+          <button type="button" role="tab" aria-selected={tab === 'recipes'} className={tab === 'recipes' ? 'is-active' : ''} onClick={() => setTab('recipes')}><Workflow size={15} />我的配方{recipes.length ? ` · ${recipes.length}` : ''}</button>
           <button type="button" role="tab" aria-selected={tab === 'builtin'} className={tab === 'builtin' ? 'is-active' : ''} onClick={() => setTab('builtin')}><Box size={15} />内置能力包</button>
           <button type="button" role="tab" aria-selected={tab === 'custom'} className={tab === 'custom' ? 'is-active' : ''} onClick={() => setTab('custom')}><FileJson2 size={15} />自定义 ComfyUI JSON</button>
         </div>
@@ -599,6 +642,19 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
           </div>
         ) : (
           <div className="aq-custom-workflow">
+            {tab === 'tasks' ? <section className="aq-workflow-tasks" aria-label="创作任务">
+              <header><h3>选择一个任务，开始创作</h3><p>已启用的工作流可以直接运行，参数和结果都保存在当前电脑。</p></header>
+              <div className="aq-workflow-task-grid">{catalog?.customWorkflows.filter(({ enabled }) => enabled).map((workflow) => <button key={workflow.id} type="button" className="aq-workflow-task-card" onClick={() => openCustomRunner(workflow)} disabled={Boolean(busy)}>
+                {workflow.mappings.frames ? <Video size={23} /> : <ImageIcon size={23} />}<strong>{workflow.title}</strong><span>{workflow.mappings.sourceImage ? '从项目图片开始' : '从文字描述开始'}{workflow.mappings.lastFrame ? ' · 支持首尾帧' : ''}</span><small>调整参数 → 生成候选 → 比较结果</small>
+              </button>)}</div>
+              {!catalog?.customWorkflows.some(({ enabled }) => enabled) ? <div className="aq-workflow-tasks__empty"><p>先启用或导入一个工作流，它就会出现在这里。</p><button type="button" onClick={() => setTab('custom')}>导入或启用工作流</button></div> : null}
+              <footer><button type="button" onClick={() => { setCategory('image'); setTab('builtin') }}>查看图像能力</button><button type="button" onClick={() => { setCategory('video'); setTab('builtin') }}>查看视频能力</button></footer>
+            </section> : null}
+            {tab === 'recipes' ? <section className="aq-workflow-recipes" aria-label="已保存配方"><header><h3>我的配方</h3><p>保存工作流与参数，下次套用到新的素材。</p></header>
+              <div className="aq-workflow-task-grid">{recipes.map((recipe) => <article key={recipe.id} className="aq-workflow-recipe-card"><h4>{recipe.name}</h4><p>{catalog?.customWorkflows.find(({ id }) => id === recipe.workflowId)?.title ?? '工作流已移除'}</p><small>{Object.entries(recipe.parameters).map(([key, value]) => `${PARAMETER_LABELS[key as WorkflowParameterKey]} ${value}`).join(' · ') || '使用工作流默认参数'}</small>{recipe.reason ? <p role="status">{recipe.reason}</p> : null}<footer><button type="button" className="is-primary" onClick={() => void applyRecipe(recipe.id)} disabled={Boolean(busy) || recipe.availability !== 'ready'}>应用配方</button><button type="button" aria-label={`删除配方 ${recipe.name}`} onClick={() => void run(`remove-recipe:${recipe.id}`, () => removeWorkflowRecipe(recipe.id), '配方已删除。')} disabled={Boolean(busy)}><Trash2 size={14} /></button></footer></article>)}</div>
+              {!recipes.length ? <p className="aq-workflow-center__empty">运行面板中的“保存配方”可以保存当前参数。</p> : null}
+            </section> : null}
+            {tab === 'custom' ? <>
             <section className="aq-custom-workflow__import">
               <header><div><h3>导入受控 API 工作流</h3><p>只接受 ComfyUI“保存（API 格式）”；界面 JSON、未知节点与任意路径会被拒绝。</p></div><ShieldCheck size={19} /></header>
               <label className="aq-custom-workflow__file">
@@ -663,6 +719,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
               </div>
             </section>
 
+            </> : null}
             {selectedCustom ? (
               <section className="aq-custom-workflow__runner" aria-label="自定义工作流运行面板">
                 <header>
@@ -677,9 +734,10 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
                   {selectedCustom.mappings.sourceImage ? <label><span>首帧 / 输入图 *</span><select value={customRunSourceId} onChange={(event) => setCustomRunSourceId(event.target.value)} disabled={customRunAssetsLoading}><option value="">{customRunAssetsLoading ? '正在读取项目图片…' : '请选择项目资源'}</option>{customRunAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title} · v{asset.version.version}</option>)}</select></label> : null}
                   {selectedCustom.mappings.lastFrame ? <label><span>末帧 *</span><select value={customRunLastFrameId} onChange={(event) => setCustomRunLastFrameId(event.target.value)} disabled={customRunAssetsLoading}><option value="">{customRunAssetsLoading ? '正在读取项目图片…' : '请选择项目资源'}</option>{customRunAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title} · v{asset.version.version}</option>)}</select></label> : null}
                   {(Object.keys(CUSTOM_NUMERIC_FIELDS) as Array<keyof typeof CUSTOM_NUMERIC_FIELDS>).filter((role) => selectedCustom.mappings[role]).map((role) => (
-                    <label key={role}><span>{CUSTOM_NUMERIC_FIELDS[role].label}</span><input type="number" step="1" min={CUSTOM_NUMERIC_FIELDS[role].min} max={CUSTOM_NUMERIC_FIELDS[role].max} value={customRunNumbers[role] ?? ''} onChange={(event) => setCustomRunNumbers((current) => ({ ...current, [role]: event.target.value }))} placeholder="沿用 JSON 原值" /></label>
+                    <label key={role}><span>{CUSTOM_NUMERIC_FIELDS[role].label}</span><input type="number" step={CUSTOM_NUMERIC_FIELDS[role].step} min={CUSTOM_NUMERIC_FIELDS[role].min} max={CUSTOM_NUMERIC_FIELDS[role].max} value={customRunNumbers[role] ?? ''} onChange={(event) => setCustomRunNumbers((current) => ({ ...current, [role]: event.target.value }))} placeholder="沿用 JSON 原值" /></label>
                   ))}
                 </div>
+                <div className="aq-workflow-recipe-save"><label>配方名称<input aria-label="配方名称" value={recipeName} maxLength={80} onChange={(event) => setRecipeName(event.target.value)} /></label><button type="button" onClick={() => void saveCurrentRecipe()} disabled={Boolean(busy) || !recipeName.trim()}>保存配方</button><small>保存工作流与数值参数，素材和描述由每次任务提供。</small></div>
                 {customRunJob ? (
                   <div className={`aq-custom-runner__job is-${customRunJob.status}`}>
                     <div><strong>{customRunJob.detail}</strong><span>{customRunJob.progress}%</span></div>
@@ -689,6 +747,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
                     {customRunJob.outputUrl ? <a href={customRunJob.outputUrl} target="_blank" rel="noreferrer">打开不可变输出</a> : null}
                   </div>
                 ) : null}
+                <WorkflowCandidateTray jobs={customHistory} />
                 <footer>
                   {customRunJob && ['queued', 'running'].includes(customRunJob.status)
                     ? <button type="button" onClick={() => void cancelCustomRun()} disabled={Boolean(busy)}><CircleSlash2 size={14} />取消任务</button>

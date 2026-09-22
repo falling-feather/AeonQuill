@@ -81,6 +81,7 @@ export async function loadLocalRuntimeConfig() {
     }
   }
   const imageTools = config.imageTools && typeof config.imageTools === 'object' ? config.imageTools : {}
+  const audioTools = config.audioTools && typeof config.audioTools === 'object' && !Array.isArray(config.audioTools) ? config.audioTools : {}
   const configuredOutputDirectory = process.env.AEONQUILL_OUTPUT_DIR || config.outputDirectory
   const outputDirectory = typeof configuredOutputDirectory === 'string' && configuredOutputDirectory
     ? configuredOutputDirectory
@@ -88,6 +89,10 @@ export async function loadLocalRuntimeConfig() {
   if (!configuredOutputDirectory) await mkdir(outputDirectory, { recursive: true })
   return {
     comfyUrl,
+    audioTools: {
+      pythonPath: process.env.AEONQUILL_ALIGNMENT_PYTHON || audioTools.pythonPath || join(runtimeDirectory, 'tools', 'speech-alignment', 'venv', 'Scripts', 'python.exe'),
+      modelDirectory: process.env.AEONQUILL_ALIGNMENT_MODEL || audioTools.modelDirectory || join(runtimeDirectory, 'models', 'speech-alignment', 'zh'),
+    },
     comfyRoot: typeof (process.env.AEONQUILL_COMFY_ROOT || process.env.COMFY_ROOT || config.comfyRoot || offlineRuntime?.comfyRoot) === 'string'
       ? process.env.AEONQUILL_COMFY_ROOT || process.env.COMFY_ROOT || config.comfyRoot || offlineRuntime?.comfyRoot
       : undefined,

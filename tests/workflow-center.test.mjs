@@ -315,6 +315,146 @@ test('custom execution requires approved nodes, registered models, stable mappin
   }
 })
 
+test('custom workflow accepts approved float controls and injects them into their declared inputs', async () => {
+  const workspace = await temporaryWorkspace()
+  const service = new WorkflowCenterService({ rootDirectory: workspace.stateRoot, getComfyRoot: () => workspace.comfyRoot, packs: [] })
+  const objectInfo = {
+    CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+    KSampler: {
+      input: {
+        required: {
+          cfg: ['FLOAT', {}],
+          denoise: ['FLOAT', {}],
+        },
+      },
+    },
+    SaveImage: { input: { required: {} } },
+  }
+  const workflow = {
+    1: { class_type: 'CLIPTextEncode', inputs: { text: 'original' } },
+    2: { class_type: 'KSampler', inputs: { cfg: 4, denoise: 1, model: ['3', 0] } },
+    3: { class_type: 'SaveImage', inputs: { images: ['2', 0], filename_prefix: 'AEONQUILL' } },
+  }
+  const mappings = {
+    prompt: { nodeId: '1', inputName: 'text' },
+    cfg: { nodeId: '2', inputName: 'cfg' },
+    denoise: { nodeId: '2', inputName: 'denoise' },
+    output: { nodeId: '3' },
+  }
+  try {
+    await service.open()
+    const imported = await service.importCustom({ title: '浮点控制工作流', workflow, mappings, registeredNodeTypes: objectInfo })
+    await service.setCustomEnabled(imported.id, true, objectInfo)
+    const prepared = service.prepareCustomExecution(imported.id, {
+      values: { prompt: 'controlled', cfg: 7.35, denoise: 0.65 },
+      registeredNodeTypes: objectInfo,
+      executionId: 'float-control-run',
+    })
+    assert.equal(prepared.workflow['1'].inputs.text, 'controlled')
+    assert.equal(prepared.workflow['2'].inputs.cfg, 7.35)
+    assert.equal(prepared.workflow['2'].inputs.denoise, 0.65)
+    assert.deepEqual(prepared.metadata.parameterRoles, ['cfg', 'denoise', 'prompt'])
+  } finally {
+    await service.close()
+    await rm(workspace.root, { recursive: true, force: true })
+  }
+})
+
+test('custom workflow rejects arbitrary LoRA fields, unknown control nodes, and duplicate control targets', () => {
+  const registered = {
+    CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+    LoraLoader: {
+      input: {
+        required: {
+          strength_model: ['FLOAT', {}],
+          strength_clip: ['FLOAT', {}],
+        },
+      },
+    },
+    SaveImage: { input: { required: {} } },
+  }
+  const workflow = {
+    1: { class_type: 'CLIPTextEncode', inputs: { text: 'original' } },
+    2: { class_type: 'LoraLoader', inputs: { strength_model: 1, strength_clip: 1, model: ['4', 0], clip: ['1', 0], lora_name: 'fixed.safetensors' } },
+    3: { class_type: 'SaveImage', inputs: { images: ['2', 0], filename_prefix: 'AEONQUILL' } },
+  }
+  const duplicate = inspectCustomWorkflow({
+    workflow,
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      loraStrength: { nodeId: '2', inputName: 'strength_model' },
+      loraClipStrength: { nodeId: '2', inputName: 'strength_model' },
+      output: { nodeId: '3' },
+    },
+    registeredNodeTypes: registered,
+  })
+  assert.ok(duplicate.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_CONFLICT'))
+
+  const arbitraryField = inspectCustomWorkflow({
+    workflow,
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      loraStrength: { nodeId: '2', inputName: 'strength_clip' },
+      output: { nodeId: '3' },
+    },
+    registeredNodeTypes: registered,
+  })
+  assert.ok(arbitraryField.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_ROLE_TARGET'))
+
+  const unknownNode = inspectCustomWorkflow({
+    workflow: {
+      ...workflow,
+      4: { class_type: 'UninstalledControlNode', inputs: { strength: 1 } },
+    },
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      controlStrength: { nodeId: '4', inputName: 'strength' },
+      output: { nodeId: '3' },
+    },
+    registeredNodeTypes: { ...registered },
+  })
+  assert.ok(unknownNode.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_UNKNOWN_NODE'))
+})
+
+test('custom workflow runtime recheck requires FLOAT for float controls while keeping INT controls compatible', () => {
+  const workflow = {
+    1: { class_type: 'CLIPTextEncode', inputs: { text: 'original' } },
+    2: { class_type: 'KSampler', inputs: { cfg: 4, denoise: 1, seed: 1 } },
+    3: { class_type: 'SaveImage', inputs: { images: ['2', 0], filename_prefix: 'AEONQUILL' } },
+  }
+  const wrongType = inspectCustomWorkflow({
+    workflow,
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      cfg: { nodeId: '2', inputName: 'cfg' },
+      seed: { nodeId: '2', inputName: 'seed' },
+      output: { nodeId: '3' },
+    },
+    registeredNodeTypes: {
+      CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+      KSampler: { input: { required: { cfg: ['INT', {}], denoise: ['FLOAT', {}], seed: ['INT', {}] } } },
+      SaveImage: { input: { required: {} } },
+    },
+  })
+  assert.ok(wrongType.findings.some(({ code }) => code === 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE'))
+
+  const compatible = inspectCustomWorkflow({
+    workflow,
+    mappings: {
+      prompt: { nodeId: '1', inputName: 'text' },
+      cfg: { nodeId: '2', inputName: 'cfg' },
+      seed: { nodeId: '2', inputName: 'seed' },
+      output: { nodeId: '3' },
+    },
+    registeredNodeTypes: {
+      CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
+      KSampler: { input: { required: { cfg: ['FLOAT', {}], denoise: ['FLOAT', {}], seed: ['INT', {}] } } },
+      SaveImage: { input: { required: {} } },
+    },
+  })
+  assert.equal(compatible.canImport, true)
+})
+
 test('custom scanner rejects registered but unapproved nodes, missing models and unmanaged image loaders', () => {
   const registeredButUnapproved = inspectCustomWorkflow({
     workflow: {

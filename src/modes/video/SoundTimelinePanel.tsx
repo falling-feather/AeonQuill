@@ -15,7 +15,8 @@ import {
   Volume2,
   WandSparkles,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import './SoundTimelinePanel.css'
 import type { ProcessingJob } from '../../types'
 import type {
   SoundAudioCue,
@@ -24,9 +25,32 @@ import type {
   SoundVoiceProfile,
 } from '../../lib/story/soundTimeline.mjs'
 import { soundTimelineSummary } from '../../lib/story/soundTimeline.mjs'
+import {
+  assertSoundAlignmentCandidate,
+  previewSoundAlignment,
+} from '../../lib/story/soundAlignment.mjs'
+import type {
+  SoundAlignmentCandidate,
+  SoundAlignmentPreview,
+} from '../../lib/story/soundAlignment.mjs'
 import type { VideoProductionCommandType, VideoProductionProject } from '../../lib/story/productionPipeline.mjs'
+import type { SpeechAlignmentResult } from '../../lib/speechAlignmentApi'
 
-type SoundTimelinePanelProps = {
+export type SpeechAlignmentRequest = {
+  cueId: string
+  cueFingerprint: string
+  audioContentHash: string
+  text: string
+  language: string
+  durationMs: number
+}
+
+export type LocalSoundRemixRequest = {
+  cueIds: [string, string]
+  overlapMs: number
+}
+
+export type SoundTimelinePanelProps = {
   project: VideoProductionProject
   assetTargetId: string | null
   onChooseAsset: (cueId: string) => void
@@ -38,6 +62,9 @@ type SoundTimelinePanelProps = {
   onRenderMix: () => void
   onCancelJob: (jobId: string) => void
   onRetryJob: (jobId: string) => void
+  onRunSpeechAlignment?: (request: SpeechAlignmentRequest) => Promise<SpeechAlignmentResult>
+  onApplyLocalRemix?: (request: LocalSoundRemixRequest) => void | Promise<void>
+  alignmentBusy?: boolean
 }
 
 type SoundTab = 'voices' | 'audio' | 'subtitles' | 'mix'
@@ -95,11 +122,13 @@ function VoiceEditor({ profile, onCommand }: {
   )
 }
 
-function CueEditor({ cue, selected, onChooseAsset, onCommand }: {
+function CueEditor({ cue, selected, onChooseAsset, onCommand, alignmentSelected = false, onSelectAlignment }: {
   cue: SoundAudioCue
   selected: boolean
   onChooseAsset: (cueId: string) => void
   onCommand: SoundTimelinePanelProps['onCommand']
+  alignmentSelected?: boolean
+  onSelectAlignment?: () => void
 }) {
   const [text, setText] = useState(cue.text)
   const [start, setStart] = useState(seconds(cue.startMs))
@@ -146,9 +175,154 @@ function CueEditor({ cue, selected, onChooseAsset, onCommand }: {
       </details>
       <footer>
         <button type="button" className={selected ? 'is-selected' : ''} onClick={() => onChooseAsset(cue.id)}><FileAudio2 size={13} /> {cue.asset ? '替换资源' : '选择音频'}</button>
+        {['dialogue', 'narration'].includes(cue.kind) && cue.asset && onSelectAlignment ? <button type="button" className={alignmentSelected ? 'is-selected' : ''} onClick={onSelectAlignment}>对齐片段</button> : null}
         {cue.status === 'ready' ? <button type="button" className="is-approve" onClick={() => onCommand('sound.asset.approve', { cueId: cue.id }, `已批准${CUE_LABELS[cue.kind]}音频。`)}><Check size={13} /> 批准</button> : null}
         {cue.asset ? <button type="button" onClick={() => onCommand('sound.asset.unbind', { cueId: cue.id }, `已移除${CUE_LABELS[cue.kind]}音频。`)}>移除</button> : null}
       </footer>
+    </article>
+  )
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '对齐候选无效'
+}
+
+function AlignmentTimeInput({ value, label, onCommit }: { value: number; label: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(seconds(value))
+  useEffect(() => setDraft(seconds(value)), [value])
+  return <input inputMode="decimal" value={draft} aria-label={label} onChange={(event) => setDraft(event.target.value)} onBlur={() => onCommit(draft)} />
+}
+
+function AlignmentEditor({
+  timeline,
+  cue,
+  onCommand,
+  onRunSpeechAlignment,
+  alignmentBusy = false,
+}: {
+  timeline: SoundTimeline
+  cue: SoundAudioCue
+  onCommand: SoundTimelinePanelProps['onCommand']
+  onRunSpeechAlignment?: SoundTimelinePanelProps['onRunSpeechAlignment']
+  alignmentBusy?: boolean
+}) {
+  const voice = timeline.voiceProfiles.find(({ id }) => id === cue.voiceProfileId)
+  const [duration, setDuration] = useState(seconds(cue.endMs - cue.startMs))
+  const [candidate, setCandidate] = useState<SoundAlignmentCandidate | null>(null)
+  const [message, setMessage] = useState('')
+  const [running, setRunning] = useState(false)
+  const durationMs = milliseconds(duration)
+  const previewState = useMemo(() => {
+    if (!candidate) return { preview: null as SoundAlignmentPreview | null, error: '' }
+    if (!Number.isSafeInteger(durationMs) || durationMs < 1) return { preview: null, error: '请输入有效的实际音频时长。' }
+    try {
+      return { preview: previewSoundAlignment(timeline, candidate, { durationMs }), error: '' }
+    } catch (error) {
+      return { preview: null, error: errorMessage(error) }
+    }
+  }, [candidate, durationMs, timeline])
+
+  useEffect(() => {
+    setDuration(seconds(cue.endMs - cue.startMs))
+    setCandidate(null)
+    setMessage('')
+  }, [cue.id])
+
+  const updateWord = (index: number, field: 'text' | 'startMs' | 'endMs', value: string) => {
+    setCandidate((current) => {
+      if (!current) return current
+      const words = current.words.map((word, wordIndex) => {
+        if (wordIndex !== index) return word
+        if (field === 'text') return { ...word, text: value }
+        return { ...word, [field]: milliseconds(value) }
+      })
+      return { ...current, words }
+    })
+    setMessage('')
+  }
+
+  const importCandidate = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const parsed = JSON.parse(await file.text()) as SoundAlignmentCandidate
+      const next = assertSoundAlignmentCandidate(parsed, { durationMs })
+      if (next.cueId !== cue.id) throw new Error('候选不属于当前选定语音片段。')
+      setCandidate(next)
+      setMessage('已载入暂态候选；确认预览后才会修改字幕时间。')
+    } catch (error) {
+      setCandidate(null)
+      setMessage(errorMessage(error))
+    }
+  }
+
+  const runAlignment = async () => {
+    if (!onRunSpeechAlignment || !cue.asset || !Number.isSafeInteger(durationMs) || durationMs < 1) return
+    setRunning(true)
+    setMessage('正在请求本地对齐；不会自动批准音频或字幕。')
+    try {
+      const result = await onRunSpeechAlignment({
+        cueId: cue.id,
+        cueFingerprint: cue.fingerprint,
+        audioContentHash: cue.asset.contentHash,
+        text: cue.text,
+        language: voice?.language ?? 'zh-CN',
+        durationMs,
+      })
+      if (result) {
+        const next = assertSoundAlignmentCandidate(result.candidate, { durationMs: result.durationMs })
+        setDuration(seconds(result.durationMs))
+        setCandidate(next)
+        setMessage('本地对齐候选已返回；请逐词检查并明确应用。')
+      }
+    } catch (error) {
+      setMessage(errorMessage(error))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <article className="aq-sound-alignment-card" data-alignment-cue={cue.id}>
+      <header>
+        <div><strong>语音强制对齐</strong><small>{cue.speakerLabel ?? '语音'} · 候选只绑定当前 cue 与音频哈希</small></div>
+        <span>{candidate?.source === 'whisperx' ? '本地 WhisperX' : candidate ? '手动候选' : '未载入'}</span>
+      </header>
+      <div className="aq-sound-alignment-controls">
+        <label><span>实际音频时长（秒）</span><input inputMode="decimal" value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
+      </div>
+      <p className="aq-sound-alignment-note">相对音频起点的词时间会换算为绝对字幕时间；候选不会写入正文，应用前可逐词修正。</p>
+      <div className="aq-sound-alignment-actions">
+        <button type="button" disabled={!onRunSpeechAlignment || !cue.asset || !Number.isSafeInteger(durationMs) || durationMs < 1 || running || alignmentBusy} onClick={() => { void runAlignment() }}>
+          {running || alignmentBusy ? '对齐中…' : '调用本地对齐'}
+        </button>
+        <label className="aq-sound-alignment-import"><span>导入 JSON</span><input type="file" accept="application/json,.json" onChange={(event) => { void importCandidate(event) }} /></label>
+        <button type="button" className="is-primary" disabled={!previewState.preview} onClick={() => {
+          if (!previewState.preview) return
+          onCommand('sound.subtitle.patch', {
+            subtitleId: previewState.preview.subtitleId,
+            patch: previewState.preview.patch,
+          }, '对齐时间已应用到关联字幕；字幕仍需人工批准。')
+        }}>明确应用时间</button>
+      </div>
+      {message ? <p className="aq-sound-alignment-message">{message}</p> : null}
+      {previewState.error ? <p className="aq-sound-alignment-error">{previewState.error}</p> : null}
+      {previewState.preview ? (
+        <div className="aq-sound-alignment-preview">
+          <header><strong>时间预览</strong><span>{seconds(previewState.preview.patch.startMs)}–{seconds(previewState.preview.patch.endMs)} 秒 · 不会自动批准</span></header>
+          <div className="aq-sound-alignment-words">
+            {candidate?.words.map((word, index) => (
+              <div key={index}>
+                <input value={word.text} aria-label={`第 ${index + 1} 个词`} onChange={(event) => updateWord(index, 'text', event.target.value)} />
+                <AlignmentTimeInput value={word.startMs} label={`第 ${index + 1} 个词入点`} onCommit={(value) => updateWord(index, 'startMs', value)} />
+                <AlignmentTimeInput value={word.endMs} label={`第 ${index + 1} 个词出点`} onCommit={(value) => updateWord(index, 'endMs', value)} />
+                <small>{word.confidence === undefined ? '—' : `${Math.round(word.confidence * 100)}%`}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </article>
   )
 }
@@ -178,7 +352,83 @@ function SubtitleEditor({ cue, onCommand }: { cue: SoundSubtitleCue; onCommand: 
   )
 }
 
-function MixEditor({ timeline, onCommand }: { timeline: SoundTimeline; onCommand: SoundTimelinePanelProps['onCommand'] }) {
+function LocalRemixEditor({ timeline, onApplyLocalRemix }: {
+  timeline: SoundTimeline
+  onCommand: SoundTimelinePanelProps['onCommand']
+  onApplyLocalRemix?: SoundTimelinePanelProps['onApplyLocalRemix']
+}) {
+  const pairs = useMemo(() => {
+    const result: Array<{ left: SoundAudioCue; right: SoundAudioCue }> = []
+    const grouped = new Map<SoundAudioCue['kind'], SoundAudioCue[]>()
+    for (const cue of timeline.audioCues) {
+      const group = grouped.get(cue.kind) ?? []
+      group.push(cue)
+      grouped.set(cue.kind, group)
+    }
+    for (const group of grouped.values()) {
+      group.sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs || left.id.localeCompare(right.id))
+      for (let index = 0; index + 1 < group.length; index += 1) {
+        const left = group[index]
+        const right = group[index + 1]
+        if (right.startMs <= left.endMs && left.status === 'approved' && right.status === 'approved' && left.asset && right.asset) result.push({ left, right })
+      }
+    }
+    return result
+  }, [timeline.audioCues])
+  const [pairKey, setPairKey] = useState('')
+  const [overlap, setOverlap] = useState('120')
+  const [applying, setApplying] = useState(false)
+  const [message, setMessage] = useState('')
+  const pair = pairs.find(({ left, right }) => `${left.id}:${right.id}` === pairKey) ?? pairs[0] ?? null
+  const overlapMs = Number(overlap)
+  const maxOverlapMs = pair ? Math.min(pair.left.endMs - pair.left.startMs, pair.right.endMs - pair.right.startMs) : 0
+  const valid = Boolean(pair)
+    && Number.isSafeInteger(overlapMs)
+    && overlapMs >= 1
+    && overlapMs <= maxOverlapMs
+    && overlapMs <= 10_000
+    && Boolean(onApplyLocalRemix)
+
+  useEffect(() => {
+    if (!pairKey && pairs[0]) setPairKey(`${pairs[0].left.id}:${pairs[0].right.id}`)
+    if (pairKey && !pairs.some(({ left, right }) => `${left.id}:${right.id}` === pairKey)) setPairKey('')
+  }, [pairKey, pairs])
+
+  const apply = async () => {
+    if (!pair || !valid) return
+    setApplying(true)
+    try {
+      const request: LocalSoundRemixRequest = { cueIds: [pair.left.id, pair.right.id], overlapMs }
+      if (onApplyLocalRemix) {
+        await onApplyLocalRemix(request)
+        setMessage('局部试听已排队，完成后可在声音任务中播放。')
+      }
+    } catch (error) {
+      setMessage(errorMessage(error))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <article className="aq-sound-local-remix-card">
+      <header><div><strong>局部交叉淡化试听</strong><small>选择两条相邻、同类且已批准的音频</small></div><span>{pairs.length ? `${pairs.length} 组可用` : '暂无可用组'}</span></header>
+      {pair ? (
+        <>
+          <div className="aq-sound-form-grid">
+            <label className="is-wide"><span>相邻 cue</span><select value={`${pair.left.id}:${pair.right.id}`} onChange={(event) => setPairKey(event.target.value)}>{pairs.map(({ left, right }) => <option key={`${left.id}:${right.id}`} value={`${left.id}:${right.id}`}>{CUE_LABELS[left.kind]} · {seconds(left.startMs)}–{seconds(left.endMs)} → {seconds(right.startMs)}–{seconds(right.endMs)}</option>)}</select></label>
+            <label><span>交叉淡化时长（毫秒）</span><input type="number" min={1} max={maxOverlapMs} step={1} value={overlap} onChange={(event) => setOverlap(event.target.value)} /></label>
+          </div>
+          <p className="aq-sound-local-remix-preview">预览：{pair.left.text} → {pair.right.text} · 仅重混 {seconds(pair.left.startMs)}–{seconds(pair.right.endMs)} 秒 · 其余 {timeline.audioCues.length - 2} 条 cue 保留。</p>
+          <footer><button type="button" className="is-primary" disabled={!valid || applying} onClick={() => { void apply() }}>{applying ? '提交中…' : '渲染局部试听'}</button></footer>
+        </>
+      ) : <p className="aq-sound-local-remix-empty">先绑定并批准两条相邻的同类音频，即可试听过渡效果。</p>}
+      {message ? <p role="status">{message}</p> : null}
+    </article>
+  )
+}
+
+function MixEditor({ timeline, onCommand, onApplyLocalRemix }: { timeline: SoundTimeline; onCommand: SoundTimelinePanelProps['onCommand']; onApplyLocalRemix?: SoundTimelinePanelProps['onApplyLocalRemix'] }) {
   const style = timeline.subtitleStyle
   const mix = timeline.mix
   const [position, setPosition] = useState(style.position)
@@ -193,6 +443,7 @@ function MixEditor({ timeline, onCommand }: { timeline: SoundTimeline; onCommand
   const mixChanged = Number(targetLufs) !== mix.targetLufs || Number(truePeak) !== mix.truePeakDbtp || Number(ducking) !== mix.dialogueDuckingDb
   return (
     <div className="aq-sound-mix-grid">
+      <LocalRemixEditor timeline={timeline} onCommand={onCommand} onApplyLocalRemix={onApplyLocalRemix} />
       <article>
         <header><div><strong>字幕安全区与样式</strong><small>不会把字幕交给 H3 生成</small></div><span>{style.status === 'approved' ? '已批准' : '待批准'}</span></header>
         <div className="aq-sound-form-grid">
@@ -235,6 +486,9 @@ export function SoundTimelinePanel({
   onRenderMix,
   onCancelJob,
   onRetryJob,
+  onRunSpeechAlignment,
+  onApplyLocalRemix,
+  alignmentBusy = false,
 }: SoundTimelinePanelProps) {
   const timeline = project.soundTimeline
   const summary = useMemo(() => soundTimelineSummary(timeline), [timeline])
@@ -247,6 +501,7 @@ export function SoundTimelinePanel({
   const [filter, setFilter] = useState<CueFilter>('all')
   const [page, setPage] = useState(0)
   const [subtitlePage, setSubtitlePage] = useState(0)
+  const [alignmentCueId, setAlignmentCueId] = useState<string | null>(null)
   const filteredCues = useMemo(() => timeline.audioCues.filter((cue) => (
     filter === 'all' || (filter === 'speech' ? cue.kind === 'dialogue' || cue.kind === 'narration' : cue.kind === filter)
   )), [filter, timeline.audioCues])
@@ -254,9 +509,14 @@ export function SoundTimelinePanel({
   const pagedCues = filteredCues.slice(page * 8, page * 8 + 8)
   const subtitlePageCount = Math.max(1, Math.ceil(timeline.subtitleCues.length / 8))
   const pagedSubtitles = timeline.subtitleCues.slice(subtitlePage * 8, subtitlePage * 8 + 8)
+  const alignmentCue = timeline.audioCues.find((cue) => cue.id === alignmentCueId && ['dialogue', 'narration'].includes(cue.kind) && cue.asset)
   const recentJobs = jobs.slice().sort((left, right) => right.createdAt - left.createdAt).slice(0, 4)
   const activeJob = recentJobs.find(({ status }) => status === 'queued' || status === 'running')
   const numericSpeechBudget = Number(speechBudget)
+
+  useEffect(() => {
+    if (alignmentCueId && !alignmentCue) setAlignmentCueId(null)
+  }, [alignmentCue, alignmentCueId])
 
   useEffect(() => {
     if (page >= pageCount) setPage(Math.max(0, pageCount - 1))
@@ -313,11 +573,12 @@ export function SoundTimelinePanel({
               const preparesSpeech = metadata?.action === 'prepare-speech'
               return (
                 <article key={job.id} className={`is-${job.status}`}>
-                  <header><strong>{preparesSpeech ? '批量配音' : '混音与字幕'}</strong><span>{job.progress}%</span></header>
+                  <header><strong>{preparesSpeech ? '批量配音' : metadata?.action === 'render-local' ? '局部交叉淡化' : '混音与字幕'}</strong><span>{job.progress}%</span></header>
                   <code>{job.id}</code>
                   <p>{job.detail}</p>
                   <div className="aq-sound-job-progress"><i style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
                   {preparesSpeech && metadata ? <small>已回填 {metadata.generatedBindings.length}/{metadata.requestedCueCount ?? 0} 条 · 预计 ${Number(metadata.estimatedCostUsd ?? 0).toFixed(4)}</small> : null}
+                  {metadata?.action === 'render-local' && job.outputUrl ? <audio controls preload="none" src={job.outputUrl} aria-label="局部交叉淡化试听" /> : null}
                   {!preparesSpeech && metadata?.subtitles ? (
                     <div className="aq-sound-job-links">
                       {job.outputUrl ? <a href={job.outputUrl} target="_blank" rel="noreferrer"><Volume2 size={13} />试听 WAV</a> : null}
@@ -354,8 +615,9 @@ export function SoundTimelinePanel({
       {tab === 'audio' ? (
         <>
           <label className="aq-sound-filter"><span>音轨</span><select value={filter} onChange={(event) => { setFilter(event.target.value as CueFilter); setPage(0) }}><option value="all">全部</option><option value="speech">对白/旁白</option><option value="music">音乐</option><option value="ambience">环境声</option><option value="sfx">音效</option></select></label>
+          {alignmentCue ? <AlignmentEditor timeline={timeline} cue={alignmentCue} onCommand={onCommand} onRunSpeechAlignment={onRunSpeechAlignment} alignmentBusy={alignmentBusy} /> : <p className="aq-sound-alignment-empty">先在已绑定音频的对白/旁白 cue 上选择“对齐片段”，再导入候选或调用本地对齐。</p>}
           <div className="aq-sound-list">
-            {pagedCues.map((cue) => <CueEditor key={`${cue.id}:${cue.revision}`} cue={cue} selected={assetTargetId === cue.id} onChooseAsset={onChooseAsset} onCommand={onCommand} />)}
+            {pagedCues.map((cue) => <CueEditor key={`${cue.id}:${cue.revision}`} cue={cue} selected={assetTargetId === cue.id} onChooseAsset={onChooseAsset} onCommand={onCommand} alignmentSelected={alignmentCueId === cue.id} onSelectAlignment={['dialogue', 'narration'].includes(cue.kind) && cue.asset ? () => setAlignmentCueId(cue.id) : undefined} />)}
           </div>
           {pageCount > 1 ? <footer className="aq-sound-pagination"><button type="button" disabled={page === 0} onClick={() => setPage((value) => value - 1)}><ChevronLeft size={13} />上一页</button><span>{page + 1} / {pageCount}</span><button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage((value) => value + 1)}>下一页<ChevronRight size={13} /></button></footer> : null}
         </>
@@ -371,7 +633,7 @@ export function SoundTimelinePanel({
         </>
       ) : null}
 
-      {tab === 'mix' ? <MixEditor key={`${timeline.subtitleStyle.revision}:${timeline.mix.revision}`} timeline={timeline} onCommand={onCommand} /> : null}
+      {tab === 'mix' ? <MixEditor key={`${timeline.subtitleStyle.revision}:${timeline.mix.revision}`} timeline={timeline} onCommand={onCommand} onApplyLocalRemix={onApplyLocalRemix} /> : null}
       <p className="aq-sound-truth">TTS 成品会以不可变项目资源回填，但必须人工试听批准；混音只消费已批准版本，输出 48kHz 双声道 WAV、SRT、VTT 与供成片器烧录的 ASS。任何时间线变更都会使旧提交因修订号不一致而失败关闭。</p>
     </section>
   )

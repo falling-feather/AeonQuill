@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
+import { migrateVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
 import {
   assertLocalVideoCandidateJobBinding,
   assertLocalVideoCandidateTarget,
@@ -23,7 +23,7 @@ function candidateWorkspaceDocument(binding, workspaceStore) {
   } catch {
     fail('LOCAL_CANDIDATE_WORKSPACE_INVALID', '智能视频项目正文无法解析')
   }
-  return { stored, production: assertVideoProductionProject(payload?.production) }
+  return { stored, production: migrateVideoProductionProject(payload?.production) }
 }
 
 export function authoritativeLocalVideoCandidate(bindingInput, services, options = {}) {

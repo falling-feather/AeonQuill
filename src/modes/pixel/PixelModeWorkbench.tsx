@@ -72,7 +72,6 @@ import {
   createPixelGameExportBundle,
   createPixelSelectionClipboard,
   createPixelSelectionPastePatch,
-  createPixelTerrainPreviewExportBundle,
   createPixelTerrainMapExportBundle,
   createPixelCommand,
   createPixelDocument,
@@ -81,6 +80,7 @@ import {
   createSmartPixelCleanupPatch,
   expandPixelBrush,
   floodFillPixels,
+  inspectPixelTerrainCoverage,
   migratePixelDocument,
   normalizePixelRect,
   rasterPixelLine,
@@ -110,6 +110,8 @@ import {
   type PixelSelectionPasteMode,
   type PixelTerrainPreviewLayout,
   type PixelTerrainMapLayout,
+  type PixelTerrainObject,
+  type PixelTerrainObjectLayer,
   type RgbaImage,
   type SpriteSheetMetadata,
 } from '../../lib/pixel/index'
@@ -142,6 +144,8 @@ import {
   downloadPixelText,
   readPixelProjectFile,
 } from './pixelBrowser'
+import { PixelComputationClient } from '../../lib/pixel/pixelComputationClient.mjs'
+import type { PixelComputationFramesResult, PixelComputationOperation, PixelComputationRequest } from '../../lib/pixel/pixelComputation.mjs'
 import './pixel-mode.css'
 
 type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
@@ -187,6 +191,7 @@ const PIXEL_TILE_GRID = [
 ] as const
 
 const PIXEL_TERRAIN_CELL_LABELS = ['西北', '北', '东北', '西', '本格', '东', '西南', '南', '东南'] as const
+const PIXEL_TERRAIN_LAYER_SELECTION = '__terrain-layer__'
 
 type HistoryState = {
   document: PixelDocument
@@ -219,6 +224,11 @@ type TerrainMapRender = {
   width: number
   height: number
   layout: PixelTerrainMapLayout
+}
+
+type PixelTerrainCoverageRender = {
+  missingCount: number
+  missing: Array<{ terrainId: string; bitmask: number; count: number; cells: Array<{ index: number; row: number; column: number }> }>
 }
 
 type TerrainMapStrokeContext = {
@@ -422,6 +432,8 @@ export function PixelModeWorkbench({
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
+  const [pixelComputationState, setPixelComputationState] = useState<'idle' | 'running' | 'error'>('idle')
+  const [pixelComputationError, setPixelComputationError] = useState<string | null>(null)
   const [agentPlanReview, setAgentPlanReview] = useState<{
     plan: CreativePlan
     preview: CreativePlanPreview
@@ -458,6 +470,10 @@ export function PixelModeWorkbench({
   const [activeTerrainMapId, setActiveTerrainMapId] = useState<string | null>(
     () => history.document.terrainMaps[0]?.id ?? null,
   )
+  const [activeTerrainObjectLayerId, setActiveTerrainObjectLayerId] = useState<string>(() => (
+    history.document.terrainMaps[0]?.objectLayers[0]?.id ?? PIXEL_TERRAIN_LAYER_SELECTION
+  ))
+  const [selectedTerrainObjectId, setSelectedTerrainObjectId] = useState<string | null>(null)
   const [terrainMapBrushMode, setTerrainMapBrushMode] = useState<'paint' | 'erase'>('paint')
   const [terrainMapPaintTerrainId, setTerrainMapPaintTerrainId] = useState<string>(
     () => history.document.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId ?? '',
@@ -466,9 +482,19 @@ export function PixelModeWorkbench({
   const [terrainMapWidthInput, setTerrainMapWidthInput] = useState('8')
   const [terrainMapHeightInput, setTerrainMapHeightInput] = useState('8')
   const [strokePreviewRevision, setStrokePreviewRevision] = useState(0)
+  const [largeVisibleFrames, setLargeVisibleFrames] = useState<{ documentId: string; revision: number; value: PixelComputationFramesResult } | null>(null)
+  const pendingComputationsRef = useRef(new Set<string>())
+  const computationFailuresRef = useRef(new Map<string, string>())
+  const [workerTerrainPreview, setWorkerTerrainPreview] = useState<TerrainPreviewRender | null>(null)
+  const [workerTerrainMap, setWorkerTerrainMap] = useState<TerrainMapRender | null>(null)
+  const [workerTerrainCoverage, setWorkerTerrainCoverage] = useState<PixelTerrainCoverageRender | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const terrainPreviewCanvasRef = useRef<HTMLCanvasElement>(null)
   const terrainMapCanvasRef = useRef<HTMLCanvasElement>(null)
+  const terrainPreviewSurfaceRef = useRef<HTMLElement>(null)
+  const terrainMapSurfaceRef = useRef<HTMLDivElement>(null)
+  const [terrainPreviewVisible, setTerrainPreviewVisible] = useState(false)
+  const [terrainMapVisible, setTerrainMapVisible] = useState(false)
   const terrainMapStrokeRef = useRef<TerrainMapStrokeContext | null>(null)
   const importedSourceRef = useRef<ImportedSource | null>(null)
   const paintingRef = useRef(false)
@@ -478,9 +504,34 @@ export function PixelModeWorkbench({
   const dragContextRef = useRef<PixelDragContext | null>(null)
   const commandSequenceRef = useRef(1)
   const consumedLibraryAssetRef = useRef<number | null>(null)
+  const computationClientsRef = useRef<{
+    render: PixelComputationClient
+    terrainPreview: PixelComputationClient
+    terrainMap: PixelComputationClient
+    coverage: PixelComputationClient
+    export: PixelComputationClient
+  } | null>(null)
+  const spriteCycleSchedulerRef = useRef<{ revision: number | null; pending: number | null; running: boolean; lastRequestedElapsedMs: number }>({
+    revision: null,
+    pending: null,
+    running: false,
+    lastRequestedElapsedMs: -1,
+  })
+  if (!computationClientsRef.current) {
+    computationClientsRef.current = {
+      render: new PixelComputationClient(),
+      terrainPreview: new PixelComputationClient(),
+      terrainMap: new PixelComputationClient(),
+      coverage: new PixelComputationClient(),
+      export: new PixelComputationClient(),
+    }
+  }
   const document = history.document
   const historyRef = useRef(history)
   historyRef.current = history
+  const pixelComputationCellEstimate = document.width * document.height * document.frames.length * document.layers.length
+  const pixelComputationOutputEstimate = document.width * document.height * document.frames.length * 4
+  const usePixelComputationWorker = pixelComputationCellEstimate >= 262_144 || pixelComputationOutputEstimate >= 4 * 1024 * 1024
 
   const replaceHistory = useCallback((next: HistoryState) => {
     historyRef.current = next
@@ -491,6 +542,69 @@ export function PixelModeWorkbench({
     setIsPlaying(false)
     setPreviewFrameCursor(null)
     setPaletteCycleElapsedMs(0)
+  }, [])
+
+  const requestPixelComputation = useCallback((
+    clientKey: 'render' | 'terrainPreview' | 'terrainMap' | 'coverage' | 'export',
+    operation: PixelComputationOperation,
+    options: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => {
+    const current = historyRef.current.document
+    const request: PixelComputationRequest = {
+      requestId: `pixel-computation-${current.revision}-${commandSequenceRef.current++}`,
+      documentId: current.id,
+      revision: current.revision,
+      operation,
+      document: current,
+      options,
+    }
+    const client = computationClientsRef.current?.[clientKey]
+    if (!client) return Promise.reject(new Error('像素计算客户端不可用'))
+    pendingComputationsRef.current.add(request.requestId)
+    computationFailuresRef.current.delete(clientKey)
+    setPixelComputationState('running')
+    setPixelComputationError([...computationFailuresRef.current.values()].at(-1) ?? null)
+    return client.run(request, { signal }).then((result) => {
+      const latest = historyRef.current.document
+      if (latest.id !== request.documentId || latest.revision !== request.revision) {
+        const stale = new Error('像素计算结果已过期')
+        stale.name = 'AbortError'
+        throw stale
+      }
+      return result
+    }).catch((error) => {
+      if (error?.name !== 'AbortError') {
+        const message = error instanceof Error ? error.message : '像素计算失败'
+        computationFailuresRef.current.set(clientKey, message)
+        setPixelComputationError(message)
+      }
+      throw error
+    }).finally(() => {
+      pendingComputationsRef.current.delete(request.requestId)
+      setPixelComputationState(pendingComputationsRef.current.size ? 'running' : computationFailuresRef.current.size ? 'error' : 'idle')
+    })
+  }, [])
+
+  const cancelPixelComputation = useCallback(() => {
+    computationClientsRef.current?.render.cancel()
+    computationClientsRef.current?.terrainPreview.cancel()
+    computationClientsRef.current?.terrainMap.cancel()
+    computationClientsRef.current?.coverage.cancel()
+    computationClientsRef.current?.export.cancel()
+    pendingComputationsRef.current.clear()
+    computationFailuresRef.current.clear()
+    setPixelComputationError(null)
+    setPixelComputationState('idle')
+    setStatus('像素计算已取消')
+  }, [])
+
+  useEffect(() => () => {
+    computationClientsRef.current?.render.dispose()
+    computationClientsRef.current?.terrainPreview.dispose()
+    computationClientsRef.current?.terrainMap.dispose()
+    computationClientsRef.current?.coverage.dispose()
+    computationClientsRef.current?.export.dispose()
   }, [])
 
   const apply = useCallback((type: PixelCommandType, payload: Record<string, unknown>) => {
@@ -572,6 +686,8 @@ export function PixelModeWorkbench({
     setDragDraft(null)
     dragContextRef.current = null
     setActiveTerrainMapId(nextDocument.terrainMaps[0]?.id ?? null)
+    setActiveTerrainObjectLayerId(nextDocument.terrainMaps[0]?.objectLayers[0]?.id ?? PIXEL_TERRAIN_LAYER_SELECTION)
+    setSelectedTerrainObjectId(null)
     setTerrainMapPaintTerrainId(
       nextDocument.frames.find((frame) => frame.gameplay.tileRule)?.gameplay.tileRule?.terrainId ?? '',
     )
@@ -777,51 +893,101 @@ export function PixelModeWorkbench({
     ? playbackFrameIds[previewFrameCursor]
     : document.activeFrameId
 
+  const cachedFrameIds = useMemo(() => {
+    if (isPlaying) return [...new Set(playbackFrameIds)]
+    const index = document.frames.findIndex(({ id }) => id === document.activeFrameId)
+    const start = Math.max(0, index - (document.onionSkin.enabled ? document.onionSkin.previousFrames : 0))
+    const end = Math.min(document.frames.length, index + 1 + (document.onionSkin.enabled ? document.onionSkin.nextFrames : 0))
+    return document.frames.slice(start, end).map(({ id }) => id)
+  }, [document, isPlaying, playbackFrameIds])
+  const cyclesPlaying = isPlaying && document.paletteCycles.some((cycle) => cycle.enabled)
+
+  useEffect(() => {
+    setLargeVisibleFrames(null)
+    const canvas = canvasRef.current
+    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+  }, [document.id])
+
+  useEffect(() => {
+    if (!usePixelComputationWorker) {
+      setLargeVisibleFrames(null)
+      return undefined
+    }
+    if (cyclesPlaying) return undefined
+    const controller = new AbortController()
+    void requestPixelComputation('render', 'frames', { frameIds: cachedFrameIds }, controller.signal)
+      .then((value) => setLargeVisibleFrames({ documentId: document.id, revision: document.revision, value: value as PixelComputationFramesResult }))
+      .catch((error) => { if (error?.name !== 'AbortError') stopPlayback() })
+    return () => controller.abort()
+  }, [cachedFrameIds, cyclesPlaying, document.revision, requestPixelComputation, stopPlayback, usePixelComputationWorker])
+
+  useEffect(() => {
+    const scheduler = spriteCycleSchedulerRef.current
+    if (scheduler.revision !== document.revision) scheduler.lastRequestedElapsedMs = -1
+    scheduler.revision = document.revision
+    if (!usePixelComputationWorker || !isPlaying || !document.paletteCycles.some((cycle) => cycle.enabled)) {
+      scheduler.pending = null
+      return
+    }
+    scheduler.pending = paletteCycleElapsedMs
+    if (scheduler.running) return
+    const pump = () => {
+      if (scheduler.pending === null || scheduler.revision !== historyRef.current.document.revision) return
+      const cycleElapsedMs = scheduler.pending
+      if (scheduler.lastRequestedElapsedMs >= 0 && cycleElapsedMs - scheduler.lastRequestedElapsedMs < 96) return
+      scheduler.pending = null
+      scheduler.running = true
+      scheduler.lastRequestedElapsedMs = cycleElapsedMs
+      void requestPixelComputation(
+        'render',
+        'frames',
+        { frameIds: cachedFrameIds, paletteCycleElapsedMs: cycleElapsedMs },
+      ).then((result) => {
+        if (historyRef.current.document.revision === document.revision) {
+          setLargeVisibleFrames({ documentId: document.id, revision: document.revision, value: result as PixelComputationFramesResult })
+        }
+      }).catch((error) => { if (error?.name !== 'AbortError') stopPlayback() }).finally(() => {
+        scheduler.running = false
+        if (scheduler.pending !== null) pump()
+      })
+    }
+    pump()
+  }, [cachedFrameIds, document.paletteCycles, document.revision, historyRef, isPlaying, paletteCycleElapsedMs, requestPixelComputation, stopPlayback, usePixelComputationWorker])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    canvas.width = document.width
-    canvas.height = document.height
+    if (canvas.width !== document.width) canvas.width = document.width
+    if (canvas.height !== document.height) canvas.height = document.height
     const context = canvas.getContext('2d')
     if (!context) return
-    context.clearRect(0, 0, document.width, document.height)
     context.imageSmoothingEnabled = false
 
     const activeIndex = document.frames.findIndex((frame) => frame.id === displayedFrameId)
+    const visibleFrames = largeVisibleFrames?.documentId === document.id && largeVisibleFrames.revision === document.revision ? largeVisibleFrames.value.frames : null
+    if (usePixelComputationWorker && !visibleFrames?.some(({ frameId }) => frameId === displayedFrameId)) return
+    context.clearRect(0, 0, document.width, document.height)
+    const pixelsForFrame = (frameId: string) => usePixelComputationWorker
+      ? visibleFrames?.find((frame) => frame.frameId === frameId)?.pixels ?? null
+      : renderPixelFrameRgba(document, frameId, { paletteCycleElapsedMs: isPlaying ? paletteCycleElapsedMs : 0 })
     if (!isPlaying && document.onionSkin.enabled) {
       for (let distance = document.onionSkin.previousFrames; distance >= 1; distance -= 1) {
         const frame = document.frames[activeIndex - distance]
         if (!frame) continue
-        putRgbaOnCanvas(
-          context,
-          renderPixelFrameRgba(document, frame.id),
-          document.width,
-          document.height,
-          document.onionSkin.opacity / distance,
-          [226, 105, 120],
-        )
+        const pixels = pixelsForFrame(frame.id)
+        if (!pixels) continue
+        putRgbaOnCanvas(context, pixels, document.width, document.height, document.onionSkin.opacity / distance, [226, 105, 120])
       }
       for (let distance = document.onionSkin.nextFrames; distance >= 1; distance -= 1) {
         const frame = document.frames[activeIndex + distance]
         if (!frame) continue
-        putRgbaOnCanvas(
-          context,
-          renderPixelFrameRgba(document, frame.id),
-          document.width,
-          document.height,
-          document.onionSkin.opacity / distance,
-          [80, 178, 213],
-        )
+        const pixels = pixelsForFrame(frame.id)
+        if (!pixels) continue
+        putRgbaOnCanvas(context, pixels, document.width, document.height, document.onionSkin.opacity / distance, [80, 178, 213])
       }
     }
-    putRgbaOnCanvas(
-      context,
-      renderPixelFrameRgba(document, displayedFrameId, {
-        paletteCycleElapsedMs: isPlaying ? paletteCycleElapsedMs : 0,
-      }),
-      document.width,
-      document.height,
-    )
+    const displayedPixels = pixelsForFrame(displayedFrameId)
+    if (displayedPixels) putRgbaOnCanvas(context, displayedPixels, document.width, document.height)
     if (gameOverlayVisible) {
       const frame = document.frames.find((item) => item.id === displayedFrameId)
       if (frame) {
@@ -851,7 +1017,7 @@ export function PixelModeWorkbench({
         context.restore()
       }
     }
-  }, [displayedFrameId, document, gameOverlayVisible, isPlaying, paletteCycleElapsedMs, strokePreviewRevision])
+  }, [displayedFrameId, document, gameOverlayVisible, isPlaying, largeVisibleFrames, paletteCycleElapsedMs, strokePreviewRevision, usePixelComputationWorker])
 
   const pixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget
@@ -1255,6 +1421,18 @@ export function PixelModeWorkbench({
   const activeTerrainMap = document.terrainMaps.find((terrainMap) => terrainMap.id === activeTerrainMapId)
     ?? document.terrainMaps[0]
     ?? null
+  const useTerrainComputationWorker = usePixelComputationWorker || Boolean(
+    activeTerrainMap
+      && activeTerrainMap.width * activeTerrainMap.height * document.width * document.height * 4 >= 4 * 1024 * 1024,
+  )
+  const activeTerrainObjectLayer = activeTerrainObjectLayerId === PIXEL_TERRAIN_LAYER_SELECTION
+    ? null
+    : activeTerrainMap?.objectLayers.find((layer) => layer.id === activeTerrainObjectLayerId) ?? null
+  const selectedTerrainObject = activeTerrainObjectLayer?.objects.find((object) => object.id === selectedTerrainObjectId)
+    ?? null
+  const selectedTerrainObjectFrame = selectedTerrainObject?.frameId === null
+    ? null
+    : document.frames.find((frame) => frame.id === selectedTerrainObject?.frameId) ?? null
   const terrainIds = useMemo(() => [...new Set(document.frames.flatMap((frame) => (
     frame.gameplay.tileRule ? [frame.gameplay.tileRule.terrainId] : []
   )))], [document.frames])
@@ -1269,21 +1447,43 @@ export function PixelModeWorkbench({
     setTerrainMapWidthInput(String(activeTerrainMap?.width ?? 8))
     setTerrainMapHeightInput(String(activeTerrainMap?.height ?? 8))
   }, [activeTerrainMap?.height, activeTerrainMap?.id, activeTerrainMap?.width, activeTerrainMapId])
+  useEffect(() => {
+    if (activeTerrainMap && activeTerrainObjectLayerId !== PIXEL_TERRAIN_LAYER_SELECTION
+      && !activeTerrainMap.objectLayers.some((layer) => layer.id === activeTerrainObjectLayerId)) {
+      setActiveTerrainObjectLayerId(activeTerrainMap.objectLayers[0]?.id ?? PIXEL_TERRAIN_LAYER_SELECTION)
+      return
+    }
+    const nextObjectId = activeTerrainObjectLayer?.objects.some((object) => object.id === selectedTerrainObjectId)
+      ? selectedTerrainObjectId
+      : null
+    if (selectedTerrainObjectId !== nextObjectId) setSelectedTerrainObjectId(nextObjectId)
+  }, [activeTerrainMap, activeTerrainObjectLayer?.objects, activeTerrainObjectLayerId, selectedTerrainObjectId])
   const selectedColor = document.palette.find((color) => color.id === activeColorId) ?? document.palette[0]
   const selectionPreview = useMemo(() => {
     if (!dragDraft) return selection
     return normalizePixelRect(dragDraft.start, dragDraft.current, document.width, document.height)
   }, [document.height, document.width, dragDraft, selection])
-  const spriteMetadata = useMemo(
-    () => createSpriteSheetMetadata(document, { columns: Math.min(4, document.frames.length), padding: 1, spacing: 1 }),
-    [document],
-  )
+  const spriteSummaryResult = useMemo(() => {
+    try {
+      return { summary: createSpriteSheetMetadata(document, {
+        columns: Math.min(4, document.frames.length), padding: 1, spacing: 1,
+      }), error: null }
+    } catch (error) {
+      return { summary: null, error: readablePixelError(error, '图集尺寸无法预览，请缩短导出片段') }
+    }
+  }, [document])
+  const spriteSummary = spriteSummaryResult.summary
   const terrainPreviewResult = useMemo<{
     preview: TerrainPreviewRender | null
     error: string | null
   }>(() => {
     const terrainId = activeFrame.gameplay.tileRule?.terrainId
     if (!terrainId) return { preview: null, error: null }
+    if (useTerrainComputationWorker) {
+      return workerTerrainPreview
+        ? { preview: workerTerrainPreview, error: null }
+        : { preview: null, error: pixelComputationError ?? 'Worker 正在计算 Terrain 预览…' }
+    }
     try {
       return {
         preview: renderPixelTerrainPreviewRgba(document, { terrainId, occupancy: terrainOccupancy }),
@@ -1292,7 +1492,7 @@ export function PixelModeWorkbench({
     } catch (error) {
       return { preview: null, error: readablePixelError(error, '九宫格 Terrain 预览不可用') }
     }
-  }, [activeFrame.gameplay.tileRule?.terrainId, document, terrainOccupancy])
+  }, [activeFrame.gameplay.tileRule?.terrainId, document, pixelComputationError, terrainOccupancy, useTerrainComputationWorker, workerTerrainPreview])
   const terrainMapPreviewResult = useMemo<{
     preview: TerrainMapRender | null
     error: string | null
@@ -1301,6 +1501,14 @@ export function PixelModeWorkbench({
     const draft = terrainMapDraftCells?.length === activeTerrainMap.cells.length
       ? terrainMapDraftCells
       : undefined
+    if (useTerrainComputationWorker && draft) {
+      return { preview: null, error: '正在预览笔触…' }
+    }
+    if (useTerrainComputationWorker && !draft) {
+      return workerTerrainMap
+        ? { preview: workerTerrainMap, error: null }
+        : { preview: null, error: pixelComputationError ?? 'Worker 正在计算 Terrain Map…' }
+    }
     try {
       return {
         preview: renderPixelTerrainMapRgba(document, {
@@ -1312,7 +1520,78 @@ export function PixelModeWorkbench({
     } catch (error) {
       return { preview: null, error: readablePixelError(error, 'Terrain Map 预览不可用') }
     }
-  }, [activeTerrainMap, document, terrainMapDraftCells])
+  }, [activeTerrainMap, document, pixelComputationError, terrainMapDraftCells, useTerrainComputationWorker, workerTerrainMap])
+  const terrainCoverageResult = useMemo(() => {
+    if (!activeTerrainMap) return null
+    if (useTerrainComputationWorker) return workerTerrainCoverage
+    try {
+      return inspectPixelTerrainCoverage(document, activeTerrainMap.id)
+    } catch {
+      return null
+    }
+  }, [activeTerrainMap, document, useTerrainComputationWorker, workerTerrainCoverage])
+
+  useEffect(() => {
+    if (!useTerrainComputationWorker) return undefined
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === terrainPreviewSurfaceRef.current) setTerrainPreviewVisible(entry.isIntersecting)
+        if (entry.target === terrainMapSurfaceRef.current) setTerrainMapVisible(entry.isIntersecting)
+      }
+    }, { rootMargin: '100px' })
+    if (terrainPreviewSurfaceRef.current) observer.observe(terrainPreviewSurfaceRef.current)
+    if (terrainMapSurfaceRef.current) observer.observe(terrainMapSurfaceRef.current)
+    return () => observer.disconnect()
+  }, [activeFrame.gameplay.tileRule?.terrainId, activeTerrainMap?.id, useTerrainComputationWorker])
+
+  useEffect(() => {
+    const terrainId = activeFrame.gameplay.tileRule?.terrainId
+    if (!useTerrainComputationWorker || !terrainId || !terrainPreviewVisible) {
+      setWorkerTerrainPreview(null)
+      return undefined
+    }
+    setWorkerTerrainPreview(null)
+    const controller = new AbortController()
+    void requestPixelComputation(
+      'terrainPreview',
+      'terrain-preview',
+      { terrainId, occupancy: terrainOccupancy },
+      controller.signal,
+    ).then((result) => setWorkerTerrainPreview(result as TerrainPreviewRender)).catch(() => {})
+    return () => controller.abort()
+  }, [activeFrame.gameplay.tileRule?.terrainId, document.id, document.revision, requestPixelComputation, terrainOccupancy, terrainPreviewVisible, useTerrainComputationWorker])
+
+  useEffect(() => {
+    if (!useTerrainComputationWorker || !activeTerrainMap || terrainMapDraftCells || !terrainMapVisible) {
+      if (!activeTerrainMap) setWorkerTerrainMap(null)
+      return undefined
+    }
+    setWorkerTerrainMap(null)
+    const controller = new AbortController()
+    void requestPixelComputation(
+      'terrainMap',
+      'terrain-map',
+      { terrainMapId: activeTerrainMap.id },
+      controller.signal,
+    ).then((result) => setWorkerTerrainMap(result as TerrainMapRender)).catch(() => {})
+    return () => controller.abort()
+  }, [activeTerrainMap?.id, document.id, document.revision, requestPixelComputation, terrainMapDraftCells, terrainMapVisible, useTerrainComputationWorker])
+
+  useEffect(() => {
+    if (!useTerrainComputationWorker || !activeTerrainMap || !terrainMapVisible) {
+      setWorkerTerrainCoverage(null)
+      return undefined
+    }
+    setWorkerTerrainCoverage(null)
+    const controller = new AbortController()
+    void requestPixelComputation(
+      'coverage',
+      'coverage',
+      { mapId: activeTerrainMap.id },
+      controller.signal,
+    ).then((result) => setWorkerTerrainCoverage(result as PixelTerrainCoverageRender)).catch(() => {})
+    return () => controller.abort()
+  }, [activeTerrainMap?.id, document.id, document.revision, requestPixelComputation, terrainMapVisible, useTerrainComputationWorker])
 
   useEffect(() => {
     const canvas = terrainPreviewCanvasRef.current
@@ -1341,11 +1620,11 @@ export function PixelModeWorkbench({
     if (!context) return
     context.imageSmoothingEnabled = false
     context.clearRect(0, 0, canvas.width, canvas.height)
-    if (preview) {
+    if (preview && activeTerrainMap.terrainLayer.visible) {
       const image = context.createImageData(preview.width, preview.height)
       image.data.set(preview.pixels)
       context.putImageData(image, 0, 0)
-    } else {
+    } else if (activeTerrainMap.terrainLayer.visible) {
       fallbackCells.forEach((terrainId, index) => {
         if (terrainId === null) return
         context.fillStyle = terrainPreviewColor(terrainId)
@@ -1366,7 +1645,31 @@ export function PixelModeWorkbench({
       context.lineTo(canvas.width, row * cellHeight)
     }
     context.stroke()
-  }, [activeTerrainMap, terrainMapDraftCells, terrainMapPreviewResult.preview])
+    if (terrainCoverageResult && activeTerrainMap.terrainLayer.visible) {
+      context.save()
+      context.setLineDash([Math.max(1, Math.min(cellWidth, cellHeight) * 0.18), Math.max(1, Math.min(cellWidth, cellHeight) * 0.12)])
+      context.strokeStyle = 'rgba(211, 95, 53, 0.9)'
+      context.lineWidth = Math.max(0.35, Math.min(cellWidth, cellHeight) * 0.08)
+      for (const missing of terrainCoverageResult.missing) {
+        for (const cell of missing.cells) {
+          context.strokeRect(cell.column * cellWidth + 0.5, cell.row * cellHeight + 0.5, cellWidth - 1, cellHeight - 1)
+        }
+      }
+      context.restore()
+    }
+    for (const layer of activeTerrainMap.objectLayers) {
+      if (!layer.visible) continue
+      context.save()
+      context.strokeStyle = layer.id === activeTerrainObjectLayer?.id ? '#5B4BE8' : '#2B9D8F'
+      context.lineWidth = Math.max(0.5, Math.min(cellWidth, cellHeight) * 0.045)
+      if (layer.id === activeTerrainObjectLayer?.id && selectedTerrainObject) context.setLineDash([2, 1])
+      for (const object of layer.objects) {
+        context.strokeStyle = object.id === selectedTerrainObject?.id ? '#D35F35' : (layer.id === activeTerrainObjectLayer?.id ? '#5B4BE8' : '#2B9D8F')
+        context.strokeRect(object.x + 0.5, object.y + 0.5, Math.max(1, object.width - 1), Math.max(1, object.height - 1))
+      }
+      context.restore()
+    }
+  }, [activeTerrainMap, activeTerrainObjectLayer?.id, selectedTerrainObject?.id, terrainCoverageResult, terrainMapDraftCells, terrainMapPreviewResult.preview])
 
   const exportPixelProject = useCallback(async () => {
     setIsExporting(true)
@@ -1386,11 +1689,14 @@ export function PixelModeWorkbench({
     setIsExporting(true)
     try {
       const current = historyRef.current.document
-      const bundle = createPixelExportBundle(current, {
+      const options = {
         columns: Math.min(4, current.frames.length),
         padding: 1,
         spacing: 1,
-      })
+      }
+      const bundle = usePixelComputationWorker
+        ? await requestPixelComputation('export', 'pixel-export', options) as Awaited<ReturnType<typeof createPixelExportBundle>>
+        : createPixelExportBundle(current, options)
       await downloadPixelExportBundle(bundle, {
         includeSprite: !onSpriteSheetReady,
         includeMetadata: !onSpriteSheetReady,
@@ -1402,7 +1708,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [onSpriteSheetReady])
+  }, [onSpriteSheetReady, requestPixelComputation, usePixelComputationWorker])
 
   const openAgentPlan = useCallback((plan: CreativePlan) => {
     try {
@@ -1748,7 +2054,18 @@ export function PixelModeWorkbench({
     }
     setIsExporting(true)
     try {
-      const bundle = createPixelTerrainPreviewExportBundle(current, { terrainId, occupancy: terrainOccupancy })
+      const rendered = useTerrainComputationWorker
+        ? await requestPixelComputation('terrainPreview', 'terrain-preview', { terrainId, occupancy: terrainOccupancy }) as TerrainPreviewRender
+        : renderPixelTerrainPreviewRgba(current, { terrainId, occupancy: terrainOccupancy })
+      const baseName = safePixelFilename(current.name)
+      const terrainName = safePixelFilename(rendered.layout.terrainId, 'terrain')
+      const previewName = `${baseName}-${terrainName}-terrain-preview`
+      const image = `${previewName}.png`
+      const metadata = { ...rendered.layout, image }
+      const bundle = {
+        sprite: { filename: image, mime: 'image/png' as const, width: rendered.width, height: rendered.height, pixels: rendered.pixels },
+        manifest: { filename: `${previewName}.json`, mime: 'application/json' as const, text: JSON.stringify(metadata, null, 2), value: metadata },
+      }
       await downloadPixelTerrainPreviewExportBundle(bundle)
       setStatus(`九宫格预览包完成：${bundle.manifest.value.exactCount} 格精确、${bundle.manifest.value.fallbackCount} 格降级`)
     } catch (error) {
@@ -1756,7 +2073,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [terrainOccupancy])
+  }, [requestPixelComputation, terrainOccupancy, useTerrainComputationWorker])
 
   const createTerrainMap = useCallback(() => {
     const current = historyRef.current.document
@@ -1776,6 +2093,8 @@ export function PixelModeWorkbench({
           width,
           height,
           cells: Array(width * height).fill(null),
+          terrainLayer: { visible: true, locked: false },
+          objectLayers: [],
         },
       })) {
         setActiveTerrainMapId(id)
@@ -1785,6 +2104,82 @@ export function PixelModeWorkbench({
       setStatus(`已创建 8×8 Terrain Map「${id}」· 项目内持久化 · 可撤销`)
     }
   }, [apply])
+
+  const createTerrainObjectLayer = useCallback(() => {
+    if (!activeTerrainMap || activeTerrainMap.objectLayers.length >= PIXEL_LIMITS.maxTerrainObjectLayers) return
+    const current = historyRef.current.document
+    const map = current.terrainMaps.find((terrainMap) => terrainMap.id === activeTerrainMap.id)
+    if (!map) return
+    const id = uniqueId('objects', map.objectLayers.map((layer) => layer.id), current.revision)
+    const layer: PixelTerrainObjectLayer = { id, name: `Objects ${map.objectLayers.length + 1}`, visible: true, locked: false, objects: [] }
+    if (apply('terrain-object-layers.add', { mapId: map.id, layer })) {
+      setActiveTerrainObjectLayerId(id)
+      setSelectedTerrainObjectId(null)
+      setStatus(`已创建对象层「${layer.name}」· 可撤销`)
+    }
+  }, [activeTerrainMap, apply])
+
+  const patchActiveTerrainObjectLayer = useCallback((patch: Partial<Pick<PixelTerrainObjectLayer, 'name' | 'visible' | 'locked'>>) => {
+    if (!activeTerrainMap || !activeTerrainObjectLayer) return
+    apply('terrain-object-layers.patch', {
+      mapId: activeTerrainMap.id,
+      layerId: activeTerrainObjectLayer.id,
+      patch,
+    })
+  }, [activeTerrainMap, activeTerrainObjectLayer, apply])
+
+  const patchTerrainLayer = useCallback((patch: { visible?: boolean; locked?: boolean }) => {
+    if (!activeTerrainMap) return
+    apply('terrain-maps.patch', { terrainMapId: activeTerrainMap.id, patch: { terrainLayer: { ...activeTerrainMap.terrainLayer, ...patch } } })
+  }, [activeTerrainMap, apply])
+
+  const addTerrainObject = useCallback(() => {
+    if (!activeTerrainMap || !activeTerrainObjectLayer) {
+      setStatus('请先创建并选择对象层')
+      return
+    }
+    const current = historyRef.current.document
+    const frame = current.frames.find((candidate) => candidate.id === current.activeFrameId) ?? current.frames[0]
+    const objectIds = activeTerrainMap.objectLayers.flatMap((layer) => layer.objects.map((object) => object.id))
+    const id = uniqueId('object', objectIds, current.revision)
+    const object: PixelTerrainObject = {
+      id,
+      name: `Object ${activeTerrainObjectLayer.objects.length + 1}`,
+      x: 0,
+      y: 0,
+      width: Math.min(current.width, activeTerrainMap.width * current.width),
+      height: Math.min(current.height, activeTerrainMap.height * current.height),
+      frameId: frame?.id ?? null,
+      collisionId: frame?.gameplay.collisions[0]?.id ?? null,
+      properties: {},
+    }
+    if (apply('terrain-objects.add', { mapId: activeTerrainMap.id, layerId: activeTerrainObjectLayer.id, object })) {
+      setSelectedTerrainObjectId(id)
+      setStatus(`已新增对象「${object.name}」· 可撤销`)
+    }
+  }, [activeTerrainMap, activeTerrainObjectLayer, apply])
+
+  const removeSelectedTerrainObject = useCallback(() => {
+    if (!activeTerrainMap || !activeTerrainObjectLayer || !selectedTerrainObject) return
+    if (apply('terrain-objects.remove', {
+      mapId: activeTerrainMap.id,
+      layerId: activeTerrainObjectLayer.id,
+      objectId: selectedTerrainObject.id,
+    })) {
+      setSelectedTerrainObjectId(null)
+      setStatus(`对象「${selectedTerrainObject.name}」已删除 · 可撤销`)
+    }
+  }, [activeTerrainMap, activeTerrainObjectLayer, apply, selectedTerrainObject])
+
+  const patchSelectedTerrainObject = useCallback((patch: Partial<PixelTerrainObject>) => {
+    if (!activeTerrainMap || !activeTerrainObjectLayer || !selectedTerrainObject) return
+    apply('terrain-objects.patch', {
+      mapId: activeTerrainMap.id,
+      layerId: activeTerrainObjectLayer.id,
+      objectId: selectedTerrainObject.id,
+      patch,
+    })
+  }, [activeTerrainMap, activeTerrainObjectLayer, apply, selectedTerrainObject])
 
   const removeActiveTerrainMap = useCallback(() => {
     if (!activeTerrainMap) return
@@ -1856,6 +2251,25 @@ export function PixelModeWorkbench({
     }
   }, [])
 
+  const terrainObjectAtPointer = useCallback((
+    event: ReactPointerEvent<HTMLCanvasElement>,
+    terrainMap: NonNullable<typeof activeTerrainMap>,
+  ) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return null
+    const x = ((event.clientX - bounds.left) / bounds.width) * (terrainMap.width * document.width)
+    const y = ((event.clientY - bounds.top) / bounds.height) * (terrainMap.height * document.height)
+    for (const layer of [...terrainMap.objectLayers].reverse()) {
+      if (!layer.visible) continue
+      for (const object of [...layer.objects].reverse()) {
+        if (x >= object.x && y >= object.y && x < object.x + object.width && y < object.y + object.height) {
+          return { layerId: layer.id, objectId: object.id }
+        }
+      }
+    }
+    return null
+  }, [document.height, document.width])
+
   const paintTerrainMapStroke = useCallback((context: TerrainMapStrokeContext, target: PixelPoint) => {
     for (const point of rasterPixelLine(context.last, target, context.width, context.height)) {
       context.draft[point.y * context.width + point.x] = context.terrainId
@@ -1866,6 +2280,10 @@ export function PixelModeWorkbench({
 
   const beginTerrainMapStroke = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!activeTerrainMap || event.button !== 0) return
+    if (activeTerrainMap.terrainLayer.locked) {
+      setStatus('Terrain 层已锁定，请先解锁后再绘制')
+      return
+    }
     const targetTerrainId = terrainMapBrushMode === 'paint' ? terrainMapPaintTerrainId : null
     if (terrainMapBrushMode === 'paint' && (targetTerrainId === null || !terrainIds.includes(targetTerrainId))) {
       setStatus('当前没有可用于 Terrain 画笔的帧规则')
@@ -1938,7 +2356,10 @@ export function PixelModeWorkbench({
     setIsExporting(true)
     try {
       const current = historyRef.current.document
-      const bundle = createPixelTerrainMapExportBundle(current, { terrainMapId: activeTerrainMap.id })
+      const options = { terrainMapId: activeTerrainMap.id }
+      const bundle = useTerrainComputationWorker
+        ? await requestPixelComputation('export', 'terrain-map-export', options) as Awaited<ReturnType<typeof createPixelTerrainMapExportBundle>>
+        : createPixelTerrainMapExportBundle(current, options)
       await downloadPixelTerrainMapExportBundle(bundle)
       setStatus(`Terrain Map 已导出：PNG、来源 Atlas、严格 JSON 与内嵌 Tileset 的 Tiled TMJ`)
     } catch (error) {
@@ -1946,7 +2367,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [activeTerrainMap])
+  }, [activeTerrainMap, requestPixelComputation, useTerrainComputationWorker])
 
   const exportPixelGameBundle = useCallback(async () => {
     setIsExporting(true)
@@ -1954,7 +2375,7 @@ export function PixelModeWorkbench({
       const current = historyRef.current.document
       const mapWidth = Math.max(1, Math.ceil(Math.sqrt(current.frames.length)))
       const mapHeight = Math.max(1, Math.ceil(current.frames.length / mapWidth))
-      const bundle = createPixelGameExportBundle(current, {
+      const options = {
         columns: Math.min(4, current.frames.length),
         padding: 1,
         spacing: 1,
@@ -1963,7 +2384,10 @@ export function PixelModeWorkbench({
         animationTagId: current.animationTags.some((tag) => tag.id === activeAnimationTagId)
           ? activeAnimationTagId ?? undefined
           : current.animationTags[0]?.id,
-      })
+      }
+      const bundle = usePixelComputationWorker
+        ? await requestPixelComputation('export', 'game-export', options) as Awaited<ReturnType<typeof createPixelGameExportBundle>>
+        : createPixelGameExportBundle(current, options)
       await downloadPixelGameExportBundle(bundle)
       setStatus('游戏资产包完成：项目、Sprite、八方向/锚点 manifest、Tiled Tileset/Tilemap 与离线预览页')
     } catch (error) {
@@ -1971,7 +2395,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [activeAnimationTagId])
+  }, [activeAnimationTagId, requestPixelComputation, usePixelComputationWorker])
 
   const exportPixelEngineBridge = useCallback(async () => {
     setIsExporting(true)
@@ -1979,7 +2403,7 @@ export function PixelModeWorkbench({
       const current = historyRef.current.document
       const mapWidth = Math.max(1, Math.ceil(Math.sqrt(current.frames.length)))
       const mapHeight = Math.max(1, Math.ceil(current.frames.length / mapWidth))
-      const bundle = createPixelEngineBridgeExportBundle(current, {
+      const options = {
         columns: Math.min(4, current.frames.length),
         padding: 1,
         spacing: 1,
@@ -1989,7 +2413,10 @@ export function PixelModeWorkbench({
         animationTagId: current.animationTags.some((tag) => tag.id === activeAnimationTagId)
           ? activeAnimationTagId ?? undefined
           : current.animationTags[0]?.id,
-      })
+      }
+      const bundle = usePixelComputationWorker
+        ? await requestPixelComputation('export', 'engine-export', options) as Awaited<ReturnType<typeof createPixelEngineBridgeExportBundle>>
+        : createPixelEngineBridgeExportBundle(current, options)
       await downloadPixelEngineBridgeExportBundle(bundle)
       setStatus('引擎桥接包完成：Sprite、来源清单、Godot/Unity 导入脚本、RPG Maker MZ 3×4 角色图与说明')
     } catch (error) {
@@ -1997,7 +2424,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [activeAnimationTagId])
+  }, [activeAnimationTagId, requestPixelComputation, usePixelComputationWorker])
 
   const exportActiveAnimationClip = useCallback(async () => {
     const current = historyRef.current.document
@@ -2010,11 +2437,14 @@ export function PixelModeWorkbench({
     try {
       const fromIndex = current.frames.findIndex((frame) => frame.id === tag.fromFrameId)
       const toIndex = current.frames.findIndex((frame) => frame.id === tag.toFrameId)
-      const bundle = createPixelAnimationClipExportBundle(current, tag.id, {
+      const options = {
         columns: Math.min(4, toIndex - fromIndex + 1),
         padding: 1,
         spacing: 1,
-      })
+      }
+      const bundle = usePixelComputationWorker
+        ? await requestPixelComputation('export', 'clip-export', { tagId: tag.id, ...options }) as Awaited<ReturnType<typeof createPixelAnimationClipExportBundle>>
+        : createPixelAnimationClipExportBundle(current, tag.id, options)
       await downloadPixelAnimationClipExportBundle(bundle)
       setStatus(`活动片段包完成：「${tag.name}」专属 Atlas、精确播放序列、事件与调色板循环 metadata`)
     } catch (error) {
@@ -2022,7 +2452,7 @@ export function PixelModeWorkbench({
     } finally {
       setIsExporting(false)
     }
-  }, [activeAnimationTagId])
+  }, [activeAnimationTagId, requestPixelComputation, usePixelComputationWorker])
 
   return (
     <section
@@ -2515,6 +2945,17 @@ export function PixelModeWorkbench({
                 <ZoomIn size={15} />
               </button>
             </div>
+            {pixelComputationState === 'running' ? (
+              <div className="aq-pixel-computation-status" role="status">
+                <span>大文档计算中，绘制与选择仍可继续。</span>
+                <button type="button" onClick={cancelPixelComputation}>取消计算</button>
+              </div>
+            ) : pixelComputationError ? (
+              <div className="aq-pixel-computation-status is-error" role="alert">
+                <span>{pixelComputationError}</span>
+                <button type="button" onClick={() => setPixelComputationError(null)}>关闭</button>
+              </div>
+            ) : null}
             <div
               className="aq-pixel-stage"
               style={{
@@ -3256,7 +3697,7 @@ export function PixelModeWorkbench({
                     })}
                   </div>
                   <output>Mask {activeFrame.gameplay.tileRule.bitmask}</output>
-                  <section className="aq-pixel-terrain-composer" aria-label="Terrain 九宫格自动推断">
+                  <section ref={terrainPreviewSurfaceRef} className="aq-pixel-terrain-composer" aria-label="Terrain 九宫格自动推断">
                     <div className="aq-pixel-terrain-heading">
                       <span><Grid3X3 size={13} /> 九宫格自动推断</span>
                       {terrainPreviewResult.preview ? (
@@ -3330,7 +3771,7 @@ export function PixelModeWorkbench({
                 </div>
               ) : <p className="aq-pixel-gameplay-empty">按帧启用后，可生成 Tiled WangSet 与确定性 8 邻域规则。</p>}
             </div>
-            <div className="aq-pixel-terrain-map-editor" aria-label="持久化 Terrain Map 编辑器">
+            <div ref={terrainMapSurfaceRef} className="aq-pixel-terrain-map-editor" aria-label="持久化 Terrain Map 编辑器">
               <div className="aq-pixel-gameplay-subheading">
                 <span><Grid3X3 size={13} /> Terrain Map <small>{document.terrainMaps.length}/{PIXEL_LIMITS.maxTerrainMaps}</small></span>
                 <button
@@ -3390,6 +3831,69 @@ export function PixelModeWorkbench({
                       </select>
                     </label>
                   </div>
+                  <div className="aq-pixel-terrain-layer-editor" aria-label="Terrain 与对象层">
+                    <div className="aq-pixel-terrain-layer-tabs">
+                      <button
+                        type="button"
+                        className={!activeTerrainObjectLayer ? 'is-active' : ''}
+                        aria-pressed={!activeTerrainObjectLayer}
+                        onClick={() => {
+                          setActiveTerrainObjectLayerId(PIXEL_TERRAIN_LAYER_SELECTION)
+                          setSelectedTerrainObjectId(null)
+                        }}
+                      >Terrain 层</button>
+                      {activeTerrainMap.objectLayers.map((layer) => (
+                        <button
+                          type="button"
+                          key={layer.id}
+                          className={layer.id === activeTerrainObjectLayer?.id ? 'is-active' : ''}
+                          aria-pressed={layer.id === activeTerrainObjectLayer?.id}
+                          onClick={() => {
+                            setActiveTerrainObjectLayerId(layer.id)
+                            setSelectedTerrainObjectId(layer.objects[0]?.id ?? null)
+                          }}
+                        >{layer.name}</button>
+                      ))}
+                      <button
+                        type="button"
+                        aria-label="新增对象层"
+                        disabled={activeTerrainMap.objectLayers.length >= PIXEL_LIMITS.maxTerrainObjectLayers}
+                        onClick={createTerrainObjectLayer}
+                      ><Plus size={11} /> 对象层</button>
+                    </div>
+                    <div className="aq-pixel-terrain-layer-toggles">
+                      <label><input type="checkbox" checked={activeTerrainObjectLayer ? activeTerrainObjectLayer.visible : activeTerrainMap.terrainLayer.visible} onChange={(event) => activeTerrainObjectLayer ? patchActiveTerrainObjectLayer({ visible: event.currentTarget.checked }) : patchTerrainLayer({ visible: event.currentTarget.checked })} /> 显示</label>
+                      <label><input type="checkbox" checked={activeTerrainObjectLayer ? activeTerrainObjectLayer.locked : activeTerrainMap.terrainLayer.locked} onChange={(event) => activeTerrainObjectLayer ? patchActiveTerrainObjectLayer({ locked: event.currentTarget.checked }) : patchTerrainLayer({ locked: event.currentTarget.checked })} /> 锁定</label>
+                      {activeTerrainObjectLayer ? <button type="button" disabled={activeTerrainObjectLayer.locked} onClick={addTerrainObject}><Plus size={11} /> 新增对象</button> : null}
+                    </div>
+                    {activeTerrainObjectLayer ? (
+                      <div className="aq-pixel-terrain-object-editor">
+                        <div className="aq-pixel-terrain-object-list" aria-label="对象列表">
+                          {activeTerrainObjectLayer.objects.length > 0 ? activeTerrainObjectLayer.objects.map((object) => (
+                            <button
+                              type="button"
+                              key={object.id}
+                              className={object.id === selectedTerrainObject?.id ? 'is-active' : ''}
+                              aria-pressed={object.id === selectedTerrainObject?.id}
+                              onClick={() => setSelectedTerrainObjectId(object.id)}
+                            >{object.name}</button>
+                          )) : <small>暂无对象</small>}
+                        </div>
+                        {selectedTerrainObject ? (
+                          <div className="aq-pixel-terrain-object-fields">
+                            <label><span>名称</span><input disabled={activeTerrainObjectLayer.locked} key={`${selectedTerrainObject.id}-${selectedTerrainObject.name}`} defaultValue={selectedTerrainObject.name} onBlur={(event) => { const name = event.currentTarget.value.trim(); if (name && name !== selectedTerrainObject.name) patchSelectedTerrainObject({ name }) }} /></label>
+                            {(['x', 'y', 'width', 'height'] as const).map((field) => (
+                              <label key={field}><span>{field}</span><input disabled={activeTerrainObjectLayer.locked} type="number" min={field === 'width' || field === 'height' ? 1 : 0} defaultValue={selectedTerrainObject[field]} onBlur={(event) => { const value = event.currentTarget.valueAsNumber; if (Number.isSafeInteger(value) && value !== selectedTerrainObject[field]) patchSelectedTerrainObject({ [field]: value }) }} /></label>
+                            ))}
+                            <label><span>帧引用</span><select disabled={activeTerrainObjectLayer.locked} value={selectedTerrainObject.frameId ?? ''} onChange={(event) => { const frameId = event.currentTarget.value || null; const frame = document.frames.find((candidate) => candidate.id === frameId); patchSelectedTerrainObject({ frameId, collisionId: frame?.gameplay.collisions.some((collision) => collision.id === selectedTerrainObject.collisionId) ? selectedTerrainObject.collisionId : null }) }}><option value="">无</option>{document.frames.map((frame) => <option key={frame.id} value={frame.id}>{frame.name}</option>)}</select></label>
+                            <label><span>碰撞引用</span><select disabled={activeTerrainObjectLayer.locked || !selectedTerrainObjectFrame} value={selectedTerrainObject.collisionId ?? ''} onChange={(event) => patchSelectedTerrainObject({ collisionId: event.currentTarget.value || null })}><option value="">无</option>{selectedTerrainObjectFrame?.gameplay.collisions.map((collision) => <option key={collision.id} value={collision.id}>{collision.name}</option>)}</select></label>
+                            <label className="aq-pixel-terrain-object-properties"><span>属性 JSON</span><textarea disabled={activeTerrainObjectLayer.locked} key={`${selectedTerrainObject.id}-${JSON.stringify(selectedTerrainObject.properties)}`} defaultValue={JSON.stringify(selectedTerrainObject.properties)} onBlur={(event) => { try { const properties = JSON.parse(event.currentTarget.value); if (properties && typeof properties === 'object' && !Array.isArray(properties)) patchSelectedTerrainObject({ properties }) } catch { setStatus('对象属性必须是 JSON 对象') } }} /></label>
+                            <button type="button" className="is-danger" disabled={activeTerrainObjectLayer.locked} onClick={removeSelectedTerrainObject}><Trash2 size={11} /> 删除对象</button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="aq-pixel-terrain-map-size" aria-label="Terrain Map 尺寸">
                     <label>
                       <span>宽</span>
@@ -3413,31 +3917,43 @@ export function PixelModeWorkbench({
                         onChange={(event) => setTerrainMapHeightInput(event.currentTarget.value)}
                       />
                     </label>
-                    <button type="button" aria-label="应用 Terrain Map 尺寸" onClick={resizeActiveTerrainMap}>应用尺寸</button>
+                    <button type="button" aria-label="应用 Terrain Map 尺寸" disabled={activeTerrainMap.terrainLayer.locked} onClick={resizeActiveTerrainMap}>应用尺寸</button>
                   </div>
                   <div className="aq-pixel-terrain-map-tools" aria-label="Terrain Map 画笔工具">
                     <button
                       type="button"
                       className={terrainMapBrushMode === 'paint' ? 'is-active' : ''}
                       aria-pressed={terrainMapBrushMode === 'paint'}
-                      disabled={terrainIds.length === 0}
+                      disabled={terrainIds.length === 0 || activeTerrainMap.terrainLayer.locked}
                       onClick={() => setTerrainMapBrushMode('paint')}
                     ><Pencil size={12} /> 画笔</button>
                     <button
                       type="button"
                       className={terrainMapBrushMode === 'erase' ? 'is-active' : ''}
                       aria-pressed={terrainMapBrushMode === 'erase'}
+                      disabled={activeTerrainMap.terrainLayer.locked}
                       onClick={() => setTerrainMapBrushMode('erase')}
                     ><Eraser size={12} /> 橡皮</button>
-                    <button type="button" disabled={!terrainMapPaintTerrainId} onClick={() => patchAllTerrainMapCells(terrainMapPaintTerrainId)}><PaintBucket size={12} /> 当前 Terrain 填满</button>
-                    <button type="button" onClick={() => patchAllTerrainMapCells(null)}>清空</button>
+                    <button type="button" disabled={!terrainMapPaintTerrainId || activeTerrainMap.terrainLayer.locked} onClick={() => patchAllTerrainMapCells(terrainMapPaintTerrainId)}><PaintBucket size={12} /> 当前 Terrain 填满</button>
+                    <button type="button" disabled={activeTerrainMap.terrainLayer.locked} onClick={() => patchAllTerrainMapCells(null)}>清空</button>
                   </div>
                   <figure className="aq-pixel-terrain-map-preview">
                     <canvas
                       ref={terrainMapCanvasRef}
                       aria-label="Terrain Map 画布"
                       style={{ aspectRatio: `${activeTerrainMap.width} / ${activeTerrainMap.height}` }}
-                      onPointerDown={beginTerrainMapStroke}
+                      onPointerDown={(event) => {
+                        if (activeTerrainMap) {
+                          const hit = terrainObjectAtPointer(event, activeTerrainMap)
+                          if (hit) {
+                            setActiveTerrainObjectLayerId(hit.layerId)
+                            setSelectedTerrainObjectId(hit.objectId)
+                            event.preventDefault()
+                            return
+                          }
+                        }
+                        beginTerrainMapStroke(event)
+                      }}
                       onPointerMove={continueTerrainMapStroke}
                       onPointerUp={finishTerrainMapStroke}
                       onPointerCancel={cancelTerrainMapStroke}
@@ -3458,6 +3974,11 @@ export function PixelModeWorkbench({
                       {terrainMapPreviewResult.error ?? '空地图可继续编辑；从画笔 Terrain 选择帧规则后即可混合绘制。'}
                     </p>
                   )}
+                  {terrainCoverageResult?.missingCount ? (
+                    <p className="aq-pixel-terrain-warning" role="status">
+                      缺少 {terrainCoverageResult.missingCount} 个精确 Mask：{terrainCoverageResult.missing.map((entry) => `${entry.terrainId}/${entry.bitmask}（${entry.count}格）`).join('、')}；画布虚线框标出建议补齐位置。
+                    </p>
+                  ) : null}
                   <div className="aq-pixel-terrain-map-actions">
                     <button type="button" className="is-danger" onClick={removeActiveTerrainMap}><Trash2 size={12} /> 删除地图</button>
                     <button
@@ -3476,8 +3997,8 @@ export function PixelModeWorkbench({
           </section>
           <div className="aq-pixel-sprite-summary">
             <span>Sprite Sheet</span>
-            <strong>{spriteMetadata.width} × {spriteMetadata.height}</strong>
-            <p>{spriteMetadata.columns} 列 · {spriteMetadata.rows} 行 · {spriteMetadata.frames.length} 帧</p>
+             <strong>{spriteSummary ? `${spriteSummary.width} × ${spriteSummary.height}` : '图集摘要不可用'}</strong>
+             <p>{spriteSummary ? `${spriteSummary.columns} 列 · ${spriteSummary.rows} 行 · ${spriteSummary.frames.length} 帧` : spriteSummaryResult.error}</p>
             <div className="aq-pixel-game-actions" aria-label="像素游戏资产工具">
               <button type="button" onClick={cleanupActivePixelLayer}>
                 <Sparkles size={14} /> 本地智能清理

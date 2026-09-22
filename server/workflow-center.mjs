@@ -20,6 +20,10 @@ import {
   discoverRuntimeRegistry,
   registeredArtifactCandidates,
 } from './runtime-registry.mjs'
+import {
+  WORKFLOW_CONTROL_FIELDS,
+  validateWorkflowControlValue,
+} from '../src/lib/workflowControls.mjs'
 
 export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v2'
 export const WORKFLOW_CENTER_STATE_VERSION = 1
@@ -42,15 +46,17 @@ const DYNAMIC_INPUT_DENYLIST = /(?:^|_)(?:api|authorization|device|directory|fil
 const CUSTOM_OUTPUT_NODE = /^(?:SaveImage|SaveVideo|PreviewImage)$/u
 const CUSTOM_IMAGE_INPUT_NODE = 'LoadImage'
 const CUSTOM_MAPPING_ROLES = Object.freeze([
-  'prompt', 'negativePrompt', 'sourceImage', 'lastFrame', 'seed', 'width', 'height', 'frames', 'steps', 'output',
+  'prompt', 'negativePrompt', 'sourceImage', 'lastFrame', ...Object.keys(WORKFLOW_CONTROL_FIELDS), 'output',
 ])
-const CUSTOM_NUMERIC_LIMITS = Object.freeze({
-  seed: [0, Number.MAX_SAFE_INTEGER],
-  width: [64, 8_192],
-  height: [64, 8_192],
-  frames: [1, 4_096],
-  steps: [1, 200],
+const WORKFLOW_CONTROL_ROLES = new Set(Object.keys(WORKFLOW_CONTROL_FIELDS))
+const CONTROL_MAPPING_TARGETS = Object.freeze({
+  cfg: Object.freeze({ nodeTypes: Object.freeze(['KSampler', 'KSamplerAdvanced']), inputName: 'cfg' }),
+  denoise: Object.freeze({ nodeTypes: Object.freeze(['KSampler']), inputName: 'denoise' }),
+  loraStrength: Object.freeze({ nodeTypes: Object.freeze(['LoraLoader', 'LoraLoaderModelOnly']), inputName: 'strength_model' }),
+  loraClipStrength: Object.freeze({ nodeTypes: Object.freeze(['LoraLoader']), inputName: 'strength_clip' }),
+  controlStrength: Object.freeze({ nodeTypes: Object.freeze(['ControlNetApply', 'ControlNetApplyAdvanced']), inputName: 'strength' }),
 })
+const STRICT_CONTROL_MAPPING_ROLES = new Set(Object.keys(CONTROL_MAPPING_TARGETS))
 
 const H3_LICENSE = Object.freeze({
   id: 'minimax-h3-community-license-2026-08',
@@ -385,8 +391,9 @@ const PACKS = Object.freeze([
 
 export const DEFAULT_SAFE_COMFY_NODE_TYPES = Object.freeze(new Set([
   ...H3_NODES,
-  'MiniMaxH3TurboLoRA', 'MiniMaxH3TurboSampler', 'KSamplerSelect', 'KSampler',
-  'CLIPTextEncode', 'EmptyLatentImage', 'CheckpointLoaderSimple', 'LoraLoader',
+  'MiniMaxH3TurboLoRA', 'MiniMaxH3TurboSampler', 'KSamplerSelect', 'KSampler', 'KSamplerAdvanced',
+  'CLIPTextEncode', 'EmptyLatentImage', 'CheckpointLoaderSimple', 'LoraLoader', 'LoraLoaderModelOnly',
+  'ControlNetApply', 'ControlNetApplyAdvanced',
   'LoadImage', 'SaveImage', 'PreviewImage', 'ImageScale', 'ImageScaleBy',
   'VAEEncode', 'VAEEncodeTiled', 'VAEDecodeTiled', 'RepeatLatentBatch',
   'ModelSamplingAuraFlow', 'CFGNorm', 'TextEncodeQwenImageEditPlus',
@@ -689,6 +696,11 @@ function mappingCandidates(workflow) {
   return { inputs, outputs }
 }
 
+function isApprovedControlMapping(role, nodeType, inputName) {
+  const target = CONTROL_MAPPING_TARGETS[role]
+  return Boolean(target && target.nodeTypes.includes(nodeType) && target.inputName === inputName)
+}
+
 function validateMappings(workflow, mappings, findings) {
   const allowedRoles = new Set(CUSTOM_MAPPING_ROLES)
   if (!mappings || typeof mappings !== 'object' || Array.isArray(mappings)) {
@@ -732,13 +744,18 @@ function validateMappings(workflow, mappings, findings) {
       if (['prompt', 'negativePrompt'].includes(role) && typeof currentValue !== 'string') {
         findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_TYPE', message: `${role} 必须映射到文本输入` })
       }
-      if (['seed', 'width', 'height', 'frames', 'steps'].includes(role) && typeof currentValue !== 'number') {
+      if (WORKFLOW_CONTROL_ROLES.has(role) && typeof currentValue !== 'number') {
         findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_TYPE', message: `${role} 必须映射到数值输入` })
+      }
+      if (STRICT_CONTROL_MAPPING_ROLES.has(role) && !isApprovedControlMapping(role, node.class_type, mapping.inputName)) {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_ROLE_TARGET', message: `${role} 只能映射到批准的节点输入` })
       }
       if (['sourceImage', 'lastFrame'].includes(role) && (node.class_type !== CUSTOM_IMAGE_INPUT_NODE || mapping.inputName !== 'image')) {
         findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_FILE_MAPPING', message: `${role} 只能映射到 LoadImage.image，由光阴砚上传受管资源` })
       }
-      if (!['sourceImage', 'lastFrame'].includes(role) && DYNAMIC_INPUT_DENYLIST.test(mapping.inputName)) {
+      if (!['sourceImage', 'lastFrame'].includes(role)
+        && !STRICT_CONTROL_MAPPING_ROLES.has(role)
+        && DYNAMIC_INPUT_DENYLIST.test(mapping.inputName)) {
         findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_SENSITIVE_INPUT', message: `${role} 不得映射到模型、文件、设备、格式或凭据输入` })
       }
     }
@@ -770,8 +787,11 @@ function validateRegisteredMappingTypes(workflow, mappings, catalog, findings) {
     if (['prompt', 'negativePrompt'].includes(role) && inputType !== 'STRING') {
       findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE', message: `${role} 必须映射到运行时 STRING 输入` })
     }
-    if (['seed', 'width', 'height', 'frames', 'steps'].includes(role) && inputType !== 'INT') {
-      findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE', message: `${role} 必须映射到运行时 INT 输入` })
+    if (WORKFLOW_CONTROL_ROLES.has(role)) {
+      const expectedType = WORKFLOW_CONTROL_FIELDS[role].integer ? 'INT' : 'FLOAT'
+      if (inputType !== expectedType) {
+        findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_MAPPING_RUNTIME_TYPE', message: `${role} 必须映射到运行时 ${expectedType} 输入` })
+      }
     }
   }
 }
@@ -890,13 +910,16 @@ function normalizeExecutionValues(values, mappings) {
     if (!mappings[role]) continue
     normalized[role] = assertManagedComfyFilename(values[role], role)
   }
-  for (const [role, [minimum, maximum]] of Object.entries(CUSTOM_NUMERIC_LIMITS)) {
+  for (const role of WORKFLOW_CONTROL_ROLES) {
     if (!mappings[role] || values[role] === undefined) continue
-    const value = Number(values[role])
-    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
-      throw workflowError(`${role} 超出受控整数范围 ${minimum}–${maximum}`, 'CUSTOM_WORKFLOW_PARAMETER_RANGE')
+    try {
+      normalized[role] = validateWorkflowControlValue(role, values[role])
+    } catch (error) {
+      const code = error?.code === 'WORKFLOW_CONTROL_VALUE_RANGE'
+        ? 'CUSTOM_WORKFLOW_PARAMETER_RANGE'
+        : 'CUSTOM_WORKFLOW_PARAMETER_INVALID'
+      throw workflowError(error?.message || `${role} 参数无效`, code)
     }
-    normalized[role] = value
   }
   return normalized
 }
@@ -1127,7 +1150,7 @@ export class WorkflowCenterService {
       },
       registry: publicRegistry(registry),
       packs,
-      customWorkflows: this.state.customWorkflows.map(({ workflow: _workflow, ...entry }) => clone(entry)),
+      customWorkflows: this.state.customWorkflows.map((entry) => this.customExecutionSummary(entry.id)),
       jobs: this.state.jobs.slice(-20).reverse(),
     }
   }
@@ -1439,8 +1462,12 @@ export class WorkflowCenterService {
   }
 
   customExecutionSummary(customId) {
-    const { workflow: _workflow, ...summary } = this.#custom(customId)
-    return clone(summary)
+    const { workflow, ...summary } = this.#custom(customId)
+    const outputType = workflow[summary.mappings.output.nodeId]?.class_type || ''
+    const outputMediaKind = /Video/u.test(outputType) ? 'video'
+      : /Audio/u.test(outputType) ? 'audio'
+        : /^(?:SaveImage|SaveAnimated)/u.test(outputType) ? 'image' : 'unknown'
+    return clone({ ...summary, outputMediaKind })
   }
 
   prepareCustomExecution(customId, { values, registeredNodeTypes, executionId } = {}) {

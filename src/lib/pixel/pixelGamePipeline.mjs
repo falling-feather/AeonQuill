@@ -6,6 +6,7 @@ import {
   createSpriteSheetLayout,
   renderPixelAnimationClipRgba,
   renderPixelFrameRgba,
+  renderSpriteSheetRgba,
   resolvePixelAnimationSequences,
 } from './pixelCore.mjs'
 import { createPixelExportBundle, safePixelFilename } from './pixelConversion.mjs'
@@ -362,6 +363,61 @@ export function createPixelTerrainMapLayout(documentInput, optionsInput = {}) {
   }
 }
 
+export function inspectPixelTerrainCoverage(documentInput, mapId) {
+  const document = assertPixelDocument(documentInput)
+  if (typeof mapId !== 'string' || !TERRAIN_ID_PATTERN.test(mapId)) {
+    fail('INVALID_TERRAIN_MAP', 'mapId must be a stable terrain map id', { mapId })
+  }
+  const terrainMap = document.terrainMaps.find((candidate) => candidate.id === mapId)
+  if (!terrainMap) fail('UNKNOWN_TERRAIN_MAP', `Unknown terrain map ${mapId}`, { mapId })
+  const exactRules = new Set(document.frames
+    .map((frame) => frame.gameplay.tileRule)
+    .filter(Boolean)
+    .map((rule) => `${rule.terrainId}:${rule.bitmask}`))
+  const grouped = new Map()
+  const cells = []
+  for (let index = 0; index < terrainMap.cells.length; index += 1) {
+    const terrainId = terrainMap.cells[index]
+    if (terrainId === null) continue
+    const row = Math.floor(index / terrainMap.width)
+    const column = index % terrainMap.width
+    const bitmask = inferTerrainCellBitmaskById(
+      terrainMap.cells,
+      terrainId,
+      row,
+      column,
+      terrainMap.width,
+      terrainMap.height,
+    )
+    const covered = exactRules.has(`${terrainId}:${bitmask}`)
+    const cell = { index, row, column, terrainId, bitmask, covered }
+    cells.push(cell)
+    if (!covered) {
+      const key = `${terrainId}:${bitmask}`
+      const entry = grouped.get(key) ?? { terrainId, bitmask, cells: [], count: 0 }
+      entry.cells.push({ index, row, column })
+      entry.count += 1
+      grouped.set(key, entry)
+    }
+  }
+  const missing = [...grouped.values()]
+  return {
+    schemaVersion: 1,
+    kind: 'aeonquill.pixel-terrain-coverage',
+    sourceDocumentId: document.id,
+    sourceRevision: document.revision,
+    terrainMapId: terrainMap.id,
+    terrainMapName: terrainMap.name,
+    checkedCellCount: terrainMap.cells.length,
+    occupiedCellCount: cells.length,
+    missingCount: missing.reduce((sum, entry) => sum + entry.count, 0),
+    missingTerrainIds: [...new Set(missing.map((entry) => entry.terrainId))],
+    missingBitmasks: missing.map(({ terrainId, bitmask, count }) => ({ terrainId, bitmask, count })),
+    missing,
+    cells,
+  }
+}
+
 function renderTerrainLayout(document, layout) {
   const width = document.width * layout.grid.width
   const height = document.height * layout.grid.height
@@ -539,7 +595,7 @@ export function createPixelGameManifest(documentInput, optionsInput = {}) {
     layers: document.layers.map((layer) => ({ ...layer })),
     palette: document.palette.map((color) => ({ ...color })),
     paletteCycles: document.paletteCycles.map((cycle) => ({ ...cycle, colorIds: [...cycle.colorIds] })),
-    terrainMaps: document.terrainMaps.map((terrainMap) => ({ ...terrainMap, cells: [...terrainMap.cells] })),
+    terrainMaps: structuredClone(document.terrainMaps),
   }
 }
 
@@ -806,13 +862,73 @@ export function createPixelTerrainMapExportBundle(documentInput, optionsInput = 
   const terrainMapName = safePixelFilename(rendered.layout.terrainMapName, rendered.layout.terrainMapId)
   const exportStem = `${baseName}-${terrainMapName}-terrain-map`
   const atlasStem = `${exportStem}-source`
-  const atlasBundle = createPixelExportBundle(document, { baseName: atlasStem })
-  const gameManifest = createPixelGameManifest(document, { baseName: atlasStem })
+  const atlasOptions = {
+    baseName: atlasStem,
+    columns: Math.min(4, document.frames.length),
+    padding: 1,
+    spacing: 1,
+  }
+  const atlasRender = renderSpriteSheetRgba(document, {
+    columns: atlasOptions.columns,
+    padding: atlasOptions.padding,
+    spacing: atlasOptions.spacing,
+  })
+  const atlasBundle = {
+    sprite: {
+      filename: `${atlasStem}-sprite-sheet.png`,
+      mime: 'image/png',
+      width: atlasRender.layout.width,
+      height: atlasRender.layout.height,
+      pixels: atlasRender.pixels,
+    },
+  }
+  const gameManifest = createPixelGameManifest(document, atlasOptions)
   const tiledTileset = createTiledTileset(gameManifest, atlasStem)
   const tileIdByFrame = new Map(gameManifest.frames.map((frame, index) => [frame.id, index + 1]))
   const image = `${exportStem}.png`
   const atlas = atlasBundle.sprite.filename
-  const metadata = { ...rendered.layout, image, atlas }
+  const sourceTerrainMap = document.terrainMaps.find((terrainMap) => terrainMap.id === rendered.layout.terrainMapId)
+  const metadata = {
+    ...rendered.layout,
+    image,
+    atlas,
+    terrainLayer: { ...sourceTerrainMap.terrainLayer },
+    objectLayers: structuredClone(sourceTerrainMap.objectLayers),
+  }
+  let nextObjectId = 1
+  const objectLayers = sourceTerrainMap.objectLayers.map((objectLayer, layerIndex) => ({
+    draworder: 'topdown',
+    id: layerIndex + 2,
+    name: objectLayer.name,
+    objects: objectLayer.objects.map((object) => ({
+      class: '',
+      height: object.height,
+      id: nextObjectId++,
+      name: object.name,
+      rotation: 0,
+      type: '',
+      visible: true,
+      width: object.width,
+      x: object.x,
+      y: object.y,
+      properties: [
+        { name: 'aeonquillId', type: 'string', value: object.id },
+        ...(object.frameId === null ? [] : [{ name: 'frameId', type: 'string', value: object.frameId }]),
+        ...(object.collisionId === null ? [] : [{ name: 'collisionId', type: 'string', value: object.collisionId }]),
+        ...Object.entries(object.properties).map(([name, value]) => ({
+          name,
+          type: typeof value === 'boolean' ? 'bool' : typeof value === 'number' ? (Number.isInteger(value) ? 'int' : 'float') : 'string',
+          value,
+        })),
+      ],
+    })),
+    opacity: 1,
+    properties: [{ name: 'aeonquillLocked', type: 'bool', value: objectLayer.locked }],
+    type: 'objectgroup',
+    visible: objectLayer.visible,
+    x: 0,
+    y: 0,
+  }))
   const tiledMap = {
     compressionlevel: -1,
     height: rendered.layout.grid.height,
@@ -826,13 +942,13 @@ export function createPixelTerrainMapExportBundle(documentInput, optionsInput = 
       name: rendered.layout.terrainMapName,
       opacity: 1,
       type: 'tilelayer',
-      visible: true,
+      visible: sourceTerrainMap.terrainLayer.visible,
       width: rendered.layout.grid.width,
       x: 0,
       y: 0,
-    }],
-    nextlayerid: 2,
-    nextobjectid: 1,
+    }, ...objectLayers],
+    nextlayerid: objectLayers.length + 2,
+    nextobjectid: nextObjectId,
     orientation: 'orthogonal',
     properties: [
       { name: 'aeonquillTerrainMapId', type: 'string', value: rendered.layout.terrainMapId },
@@ -840,6 +956,7 @@ export function createPixelTerrainMapExportBundle(documentInput, optionsInput = 
       { name: 'aeonquillTerrainGrid', type: 'string', value: JSON.stringify(rendered.layout.terrainGrid) },
       { name: 'aeonquillSourceDocumentId', type: 'string', value: document.id },
       { name: 'aeonquillSourceRevision', type: 'int', value: document.revision },
+      { name: 'aeonquillTerrainLayerLocked', type: 'bool', value: sourceTerrainMap.terrainLayer.locked },
     ],
     renderorder: 'right-down',
     tiledversion: '1.10.2',

@@ -116,7 +116,7 @@ test('compiles story characters, professional views, locations, frames and shot 
     characterMode: 'professional',
     now: 1_100,
   })
-  assert.equal(production.schemaVersion, 5)
+  assert.equal(production.schemaVersion, 6)
   assert.equal(production.continuityGraph.schemaVersion, 2)
   assert.equal(production.continuityGraph.storyProjectId, 'continuity-story')
   assert.equal(production.continuityGraph.characters.length, 2)
@@ -312,7 +312,7 @@ test('preserves pre-story character assets when the approved storyboard is bridg
   assert.equal(bridgedView.asset.contentHash, binding(77).contentHash)
 })
 
-test('migrates v2 production projects through v5 without losing node state', () => {
+test('migrates v2 production projects through v6 without losing node state', () => {
   const current = createVideoProductionProjectForStory(story(), { now: 1_700 })
   const legacy = structuredClone(current)
   legacy.schemaVersion = 2
@@ -321,7 +321,7 @@ test('migrates v2 production projects through v5 without losing node state', () 
   legacy.characterProfiles.forEach((profile) => { delete profile.storyCharacterId })
   legacy.nodes[1].status = 'approved'
   const migrated = migrateVideoProductionProject(legacy, { story: story(), now: 1_800 })
-  assert.equal(migrated.schemaVersion, 5)
+  assert.equal(migrated.schemaVersion, 6)
   assert.equal(migrated.nodes[1].status, 'approved')
   assert.equal(migrated.continuityGraph.storyProjectId, 'continuity-story')
   assert(migrated.characterProfiles.every(({ storyCharacterId }) => storyCharacterId !== null))

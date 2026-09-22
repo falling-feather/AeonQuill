@@ -1,5 +1,7 @@
 import { ensureLocalSession } from './videoApi'
 import type { CustomWorkflowJobRequest, ProcessingJob } from '../types'
+import type { WorkflowRecipe, WorkflowRecipeCatalog, WorkflowRecipeInput } from './workflowRecipes.mjs'
+import type { WorkflowControlRole } from './workflowControls.mjs'
 
 export type WorkflowArtifactStatus = {
   id: string
@@ -90,7 +92,7 @@ export type WorkflowPack = {
   activeJob: WorkflowInstallJob | null
 }
 
-export type CustomWorkflowMappingRole = 'prompt' | 'negativePrompt' | 'sourceImage' | 'lastFrame' | 'seed' | 'width' | 'height' | 'frames' | 'steps' | 'output'
+export type CustomWorkflowMappingRole = 'prompt' | 'negativePrompt' | 'sourceImage' | 'lastFrame' | 'output' | WorkflowControlRole
 export type CustomWorkflowMappings = Partial<Record<CustomWorkflowMappingRole, { nodeId: string; inputName?: string }>>
 
 export type CustomWorkflowInspection = {
@@ -121,6 +123,7 @@ export type CustomWorkflowSummary = {
   mappingHash: string
   enabled: boolean
   source: 'user-api-json'
+  outputMediaKind?: 'image' | 'video' | 'audio' | 'unknown'
   createdAt: number
   updatedAt: number
 }
@@ -255,7 +258,7 @@ export async function removeCustomWorkflow(customId: string) {
 
 export async function createCustomWorkflowJob(
   request: CustomWorkflowJobRequest,
-  options: { idempotencyKey?: string; priority?: number } = {},
+  options: { idempotencyKey?: string; priority?: number; mediaBinding?: import('./story/mediaJobBinding.mjs').MediaJobBinding } = {},
 ) {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -264,7 +267,7 @@ export async function createCustomWorkflowJob(
   if (options.priority !== undefined) headers['x-miaohui-priority'] = String(options.priority)
   const payload = await api<{ job: ProcessingJob; reused?: boolean }>(
     '/api/jobs/custom-workflow',
-    { method: 'POST', headers, body: JSON.stringify(request) },
+    { method: 'POST', headers, body: JSON.stringify({ ...request, ...(options.mediaBinding ? { mediaBinding: options.mediaBinding } : {}) }) },
   )
   return payload.job
 }
@@ -277,4 +280,24 @@ export async function fetchCustomWorkflowJob(jobId: string) {
 export async function cancelCustomWorkflowJob(jobId: string) {
   const payload = await api<{ job: ProcessingJob }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' })
   return payload.job
+}
+
+export function fetchWorkflowRecipes() {
+  return api<WorkflowRecipeCatalog>('/api/workflow-center/recipes')
+}
+
+export async function saveWorkflowRecipe(input: WorkflowRecipeInput) {
+  return (await api<{ recipe: WorkflowRecipe }>('/api/workflow-center/recipes', jsonRequest(input))).recipe
+}
+
+export async function resolveWorkflowRecipe(id: string) {
+  return (await api<{ recipe: WorkflowRecipe }>(`/api/workflow-center/recipes/${encodeURIComponent(id)}/resolve`, jsonRequest({}))).recipe
+}
+
+export async function removeWorkflowRecipe(id: string) {
+  return api<{ result: { id: string; removed: true } }>(`/api/workflow-center/recipes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function fetchCustomWorkflowHistory(workflowId: string, projectId: string) {
+  return (await api<{ jobs: ProcessingJob[] }>(`/api/workflow-center/custom/${encodeURIComponent(workflowId)}/runs?projectId=${encodeURIComponent(projectId)}`)).jobs
 }

@@ -4,6 +4,10 @@ import { extname, resolve, sep } from 'node:path'
 import { MAX_ASSET_BYTES } from './project-store.mjs'
 import { redactSensitiveText, sanitizePublicPayload } from './security.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION } from './workflow-center.mjs'
+import {
+  WORKFLOW_CONTROL_FIELDS,
+  validateWorkflowControlValue,
+} from '../src/lib/workflowControls.mjs'
 
 export const CUSTOM_WORKFLOW_JOB_KIND = 'custom-workflow'
 
@@ -19,14 +23,6 @@ const OUTPUT_MIME_TYPES = new Map([
   ['.mp3', 'audio/mpeg'],
   ['.wav', 'audio/wav'],
 ])
-const JOB_NUMERIC_LIMITS = Object.freeze({
-  seed: [0, Number.MAX_SAFE_INTEGER],
-  width: [64, 8_192],
-  height: [64, 8_192],
-  frames: [1, 4_096],
-  steps: [1, 200],
-})
-
 function customError(code, message, status = 400, details) {
   return Object.assign(new Error(message), { code, status, ...(details ? { details } : {}) })
 }
@@ -36,6 +32,12 @@ function assertLibraryItemId(value, role) {
     throw customError('CUSTOM_WORKFLOW_INPUT_ASSET_INVALID', `${role} 必须选择项目可见的资源库图片`)
   }
   return value
+}
+
+function assertExpectedHash(expected, actual) {
+  if (expected !== undefined && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/u.test(expected) || expected !== actual)) {
+    throw customError('CUSTOM_WORKFLOW_INPUT_CHANGED', '工作流或参考图版本已变化，请重新检查后执行', 409)
+  }
 }
 
 function assertProject(projectId, workspaceStore) {
@@ -52,7 +54,7 @@ function assertProject(projectId, workspaceStore) {
 export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflowCenter, projectStore } = {}) {
   const allowed = new Set([
     'customWorkflowId', 'projectId', 'title', 'prompt', 'negativePrompt', 'sourceLibraryItemId',
-    'lastFrameLibraryItemId', 'seed', 'width', 'height', 'frames', 'steps',
+    'lastFrameLibraryItemId', 'workflowHash', 'mappingHash', 'sourceContentHash', 'lastFrameContentHash', ...Object.keys(WORKFLOW_CONTROL_FIELDS),
   ])
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw customError('CUSTOM_WORKFLOW_JOB_INVALID', '自定义工作流任务必须是对象')
@@ -61,6 +63,8 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
   if (unknown.length) throw customError('CUSTOM_WORKFLOW_JOB_UNKNOWN_FIELD', '自定义工作流任务含未知字段', 400, { unknown })
   const project = assertProject(body.projectId, workspaceStore)
   const summary = workflowCenter.customExecutionSummary(body.customWorkflowId)
+  assertExpectedHash(body.workflowHash, summary.hash)
+  assertExpectedHash(body.mappingHash, summary.mappingHash)
   if (!summary.enabled) throw customError('CUSTOM_WORKFLOW_NOT_ENABLED', '自定义工作流尚未启用', 409)
   const title = typeof body.title === 'string' ? body.title.trim() : ''
   if (!title || title.length > 120) throw customError('CUSTOM_WORKFLOW_TITLE_INVALID', '输出名称需要 1–120 个字符')
@@ -71,6 +75,8 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
     projectId: project.id,
     title,
     prompt,
+    workflowHash: summary.hash,
+    mappingHash: summary.mappingHash,
   }
   const roleFields = {
     negativePrompt: 'negativePrompt',
@@ -81,6 +87,11 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
     height: 'height',
     frames: 'frames',
     steps: 'steps',
+    cfg: 'cfg',
+    denoise: 'denoise',
+    loraStrength: 'loraStrength',
+    loraClipStrength: 'loraClipStrength',
+    controlStrength: 'controlStrength',
   }
   for (const [role, field] of Object.entries(roleFields)) {
     const mapped = Boolean(summary.mappings?.[role])
@@ -95,12 +106,16 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
     }
     request.negativePrompt = body.negativePrompt
   }
-  for (const [role, [minimum, maximum]] of Object.entries(JOB_NUMERIC_LIMITS)) {
+  for (const role of Object.keys(WORKFLOW_CONTROL_FIELDS)) {
     if (!summary.mappings[role] || body[role] === undefined) continue
-    if (!Number.isSafeInteger(body[role]) || body[role] < minimum || body[role] > maximum) {
-      throw customError('CUSTOM_WORKFLOW_PARAMETER_RANGE', `${role} 超出受控整数范围 ${minimum}–${maximum}`)
+    try {
+      request[role] = validateWorkflowControlValue(role, body[role])
+    } catch (error) {
+      const code = error?.code === 'WORKFLOW_CONTROL_VALUE_RANGE'
+        ? 'CUSTOM_WORKFLOW_PARAMETER_RANGE'
+        : 'CUSTOM_WORKFLOW_PARAMETER_INVALID'
+      throw customError(code, error?.message || `${role} 参数无效`)
     }
-    request[role] = body[role]
   }
   if (summary.mappings.sourceImage) {
     request.sourceLibraryItemId = assertLibraryItemId(body.sourceLibraryItemId, 'sourceImage')
@@ -108,11 +123,17 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
   if (summary.mappings.lastFrame) {
     request.lastFrameLibraryItemId = assertLibraryItemId(body.lastFrameLibraryItemId, 'lastFrame')
   }
-  for (const itemId of [request.sourceLibraryItemId, request.lastFrameLibraryItemId].filter(Boolean)) {
+  for (const [itemId, hashField] of [[request.sourceLibraryItemId, 'sourceContentHash'], [request.lastFrameLibraryItemId, 'lastFrameContentHash']]) {
+    if (!itemId) {
+      if (body[hashField] !== undefined) throw customError('CUSTOM_WORKFLOW_INPUT_ASSET_INVALID', '参考图指纹需要对应的图片输入', 409)
+      continue
+    }
     const asset = projectStore.getLibraryAsset(itemId, { projectId: project.id, requireProjectReference: true })
     if (!asset || asset.mediaKind !== 'image') {
       throw customError('CUSTOM_WORKFLOW_INPUT_ASSET_INVALID', '映射输入必须是该项目可见的 PNG、JPEG 或 WebP 图片', 409)
     }
+    assertExpectedHash(body[hashField], asset.version.assetId)
+    request[hashField] = asset.version.assetId
   }
   return { request, workflow: summary }
 }
@@ -256,6 +277,7 @@ export class CustomWorkflowExecutor {
     if (!asset || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType)) {
       throw customError('CUSTOM_WORKFLOW_INPUT_ASSET_INVALID', `${role} 的不可变内容已经缺失`, 409)
     }
+    assertExpectedHash(role === 'source' ? job.request.sourceContentHash : job.request.lastFrameContentHash, asset.sha256)
     const filename = `aeonquill-${job.id}-${role}.${asset.extension}`
     const uploaded = await this.comfy.uploadAsset(this.projectStore.assetPath(asset), filename, asset.mimeType, signal)
     uploadedPaths.add(safeManagedInputPath(this.managedComfyInputRoot, uploaded))
@@ -287,6 +309,9 @@ export class CustomWorkflowExecutor {
     const uploadedPaths = new Set()
     try {
       await this.store.update(jobId, { phase: 'preparing', progress: 3, detail: '检查自定义工作流与本机运行时' })
+      const summary = this.workflowCenter.customExecutionSummary(job.request.customWorkflowId)
+      assertExpectedHash(job.request.workflowHash, summary.hash)
+      assertExpectedHash(job.request.mappingHash, summary.mappingHash)
       await this.runtimeManager.ensureReady({ reason: `custom-workflow:${jobId}` })
       const runtime = await this.inspectRuntime(true)
       if (!runtime.connected) throw customError('CUSTOM_WORKFLOW_RUNTIME_UNAVAILABLE', runtime.message || 'ComfyUI 无法连接', 409)
@@ -294,7 +319,7 @@ export class CustomWorkflowExecutor {
       const values = {
         prompt: job.request.prompt,
         ...(job.request.negativePrompt !== undefined ? { negativePrompt: job.request.negativePrompt } : {}),
-        ...(['seed', 'width', 'height', 'frames', 'steps'].reduce((result, role) => (
+        ...(Object.keys(WORKFLOW_CONTROL_FIELDS).reduce((result, role) => (
           job.request[role] === undefined ? result : { ...result, [role]: job.request[role] }
         ), {})),
       }

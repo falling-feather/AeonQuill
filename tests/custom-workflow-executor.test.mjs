@@ -74,6 +74,16 @@ function executionJob(id, customWorkflowId) {
   }
 }
 
+test('reviewed workflow identities cannot silently change before queueing', async (t) => {
+  const target = await fixture(t)
+  const request = executionJob('identity-job', target.imported.id).request
+  assert.throws(() => validateCustomWorkflowJobRequest({ ...request, workflowHash: '0'.repeat(64) }, target), { code: 'CUSTOM_WORKFLOW_INPUT_CHANGED' })
+  const validated = validateCustomWorkflowJobRequest({ ...request, workflowHash: target.imported.hash, mappingHash: target.imported.mappingHash }, target)
+  assert.match(validated.request.workflowHash, /^[a-f0-9]{64}$/u)
+  assert.equal(validated.request.workflowHash, target.imported.hash)
+  assert.equal(validated.request.mappingHash, target.imported.mappingHash)
+})
+
 function fakeComfy(history) {
   const capture = { queuedWorkflow: null, trackerClosed: false, uploads: [] }
   return {
@@ -247,6 +257,8 @@ test('custom image input only accepts project-visible assets and injects a manag
     width: 720,
   }, target)
   assert.equal(validated.request.sourceLibraryItemId, projectAsset.id)
+  assert.equal(validated.request.sourceContentHash, projectAsset.version.assetId)
+  assert.throws(() => validateCustomWorkflowJobRequest({ ...validated.request, sourceContentHash: '0'.repeat(64) }, target), { code: 'CUSTOM_WORKFLOW_INPUT_CHANGED' })
   assert.equal(validated.request.width, 720)
   assert.throws(
     () => validateCustomWorkflowJobRequest({ ...validated.request, width: 32 }, target),

@@ -1,8 +1,9 @@
 import type { FrameStrategy, StoryAspectRatio, StorySourceKind } from './storyProject.mjs'
 import type { VideoContinuityGraph } from './continuityGraph.mjs'
 import type { SoundTimeline } from './soundTimeline.mjs'
+import type { MediaRun } from './mediaSupervisor.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION: 5
+export const VIDEO_PRODUCTION_SCHEMA_VERSION: 6
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION: 1
 export const VIDEO_PRODUCTION_LIMITS: Readonly<{
   maxBriefCharacters: number
@@ -11,6 +12,7 @@ export const VIDEO_PRODUCTION_LIMITS: Readonly<{
   maxDurationMinutes: number
   maxEvents: number
   maxChangeCards: number
+  maxMediaRuns: number
   maxCharacters: number
 }>
 
@@ -38,7 +40,7 @@ export type VideoProductionNode = {
 
 export type VideoProductionProject = {
   kind: 'aeonquill.video-production'
-  schemaVersion: 5
+  schemaVersion: 6
   id: string
   title: string
   brief: string
@@ -90,6 +92,7 @@ export type VideoProductionProject = {
     createdAt: number
     resolvedAt: number | null
   }>
+  mediaRuns: MediaRun[]
   globalPaused: boolean
   autoAdvance: boolean
   revision: number
@@ -110,6 +113,7 @@ export type VideoProductionCommandType =
   | 'sound.subtitle.patch' | 'sound.subtitle.approve' | 'sound.subtitles.approve-all'
   | 'sound.subtitle-style.patch' | 'sound.subtitle-style.approve'
   | 'sound.mix.patch' | 'sound.mix.approve'
+  | 'media-runs.propose' | 'media-runs.attach-job' | 'media-runs.reject' | 'media-runs.reconcile'
 
 export type VideoProductionCommand = {
   schemaVersion: 1

@@ -1,0 +1,11 @@
+.aq-image-comparison { margin: 0; min-width: 0; width: 100%; }
+.aq-image-comparison__stage { position: relative; height: min(48vh, 420px); min-height: 180px; overflow: hidden; background: repeating-conic-gradient(#e7e8ed 0% 25%, #f7f7fa 0% 50%) 50% / 16px 16px; border: 1px solid #e0e2ea; border-radius: 12px; }
+.aq-image-comparison__stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.aq-image-comparison.is-pixelated img { image-rendering: pixelated; }
+.aq-image-comparison__line { position: absolute; top: 0; bottom: 0; width: 2px; background: white; box-shadow: 0 0 4px #282b42; pointer-events: none; }
+.aq-image-comparison__label { position: absolute; top: 10px; max-width: 40%; padding: 4px 8px; background: #1e2336c9; color: white; border-radius: 6px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aq-image-comparison__label.is-before { left: 10px; }
+.aq-image-comparison__label.is-after { right: 10px; }
+.aq-image-comparison figcaption { display: flex; align-items: center; gap: 12px; padding: 10px 0; font-size: 12px; }
+.aq-image-comparison input { flex: 1; min-width: 0; accent-color: #7050f5; }
+.aq-image-comparison output { min-width: 34px; text-align: right; }

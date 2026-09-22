@@ -2308,6 +2308,11 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.image-lab-comparison-tools { grid-column: 1 / -1; display: flex; justify-content: center; gap: 8px; align-self: start; padding-bottom: 12px; }
+.image-lab-comparison-tools button { border: 1px solid #dfe1e9; border-radius: 7px; background: white; padding: 6px 12px; color: #666779; font-size: 12px; }
+.image-lab-comparison-tools button[aria-pressed="true"] { background: #eeeafe; border-color: #c5b7fa; color: #5e40d1; }
+.image-compare-area > .aq-image-comparison { grid-column: 1 / -1; align-self: start; }
+
 .image-preview-frame figcaption {
   color: #686c75;
   font-size: 9px;

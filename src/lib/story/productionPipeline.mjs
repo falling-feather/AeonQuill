@@ -33,8 +33,11 @@ import {
   soundTimelineReady,
   unbindSoundAsset,
 } from './soundTimeline.mjs'
+import {
+  assertMediaRun,
+} from './mediaSupervisor.mjs'
 
-export const VIDEO_PRODUCTION_SCHEMA_VERSION = 5
+export const VIDEO_PRODUCTION_SCHEMA_VERSION = 6
 export const VIDEO_PRODUCTION_COMMAND_SCHEMA_VERSION = 1
 
 export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
@@ -44,6 +47,7 @@ export const VIDEO_PRODUCTION_LIMITS = Object.freeze({
   maxDurationMinutes: 30,
   maxEvents: 200,
   maxChangeCards: 80,
+  maxMediaRuns: 200,
   maxCharacters: 16,
 })
 
@@ -89,6 +93,10 @@ const COMMAND_TYPES = new Set([
   'sound.subtitle-style.approve',
   'sound.mix.patch',
   'sound.mix.approve',
+  'media-runs.propose',
+  'media-runs.attach-job',
+  'media-runs.reject',
+  'media-runs.reconcile',
 ])
 
 const NODE_BLUEPRINTS = Object.freeze([
@@ -503,11 +511,13 @@ function descendantIds(project, nodeId) {
 
 function invalidateDownstream(project, nodeId, at) {
   const descendants = descendantIds(project, nodeId)
+  invalidateMediaRunsForNode(project, nodeId, at)
   for (const node of project.nodes) {
     if (!descendants.has(node.id)) continue
     node.status = 'waiting'
     node.stale = Boolean(node.outputSummary)
     node.updatedAt = at
+    invalidateMediaRunsForNode(project, node.id, at)
   }
 }
 
@@ -517,6 +527,17 @@ function supersedeNodeProposals(project, nodeId, at, exceptId = null) {
       card.status = 'superseded'
       card.resolvedAt = at
     }
+  }
+}
+
+function invalidateMediaRunsForNode(project, nodeId, at) {
+  for (const run of project.mediaRuns ?? []) {
+    if (run.nodeId !== nodeId) continue
+    if (run.status === 'proposed') run.status = 'rejected'
+    else if (['queued', 'running'].includes(run.status)) run.status = 'cancelled'
+    else continue
+    run.errorCode = 'MEDIA_INPUT_STALE'
+    run.updatedAt = at
   }
 }
 
@@ -543,7 +564,7 @@ function assertNode(input, path, knownIds) {
 
 export function assertVideoProductionProject(input) {
   const project = record(input, 'project')
-  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'continuityGraph', 'soundTimeline', 'changeCards', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
+  knownFields(project, new Set(['kind', 'schemaVersion', 'id', 'title', 'brief', 'settings', 'estimates', 'nodes', 'characterProfiles', 'continuityGraph', 'soundTimeline', 'changeCards', 'mediaRuns', 'globalPaused', 'autoAdvance', 'revision', 'createdAt', 'updatedAt', 'events']), 'project')
   if (project.kind !== PROJECT_KIND || project.schemaVersion !== VIDEO_PRODUCTION_SCHEMA_VERSION) fail('UNSUPPORTED_SCHEMA', 'Unsupported video production schema')
   id(project.id, 'project.id')
   string(project.title, 'project.title', 1, 120)
@@ -620,6 +641,9 @@ export function assertVideoProductionProject(input) {
   if (!Array.isArray(project.changeCards) || project.changeCards.length > VIDEO_PRODUCTION_LIMITS.maxChangeCards) fail('INVALID_CHANGE_CARDS', 'project.changeCards is invalid')
   project.changeCards.forEach((card, index) => assertChangeCard(card, `project.changeCards[${index}]`, knownIds))
   if (new Set(project.changeCards.map(({ id: cardId }) => cardId)).size !== project.changeCards.length) fail('DUPLICATE_ID', 'project.changeCards contains duplicate ids')
+  if (!Array.isArray(project.mediaRuns) || project.mediaRuns.length > VIDEO_PRODUCTION_LIMITS.maxMediaRuns) fail('INVALID_MEDIA_RUNS', 'project.mediaRuns is invalid')
+  project.mediaRuns.forEach((run, index) => assertMediaRun(run, { nodeIds: knownIds }))
+  if (new Set(project.mediaRuns.map(({ id: runId }) => runId)).size !== project.mediaRuns.length) fail('DUPLICATE_ID', 'project.mediaRuns contains duplicate ids')
   boolean(project.globalPaused, 'project.globalPaused')
   boolean(project.autoAdvance, 'project.autoAdvance')
   integer(project.revision, 'project.revision', 0, Number.MAX_SAFE_INTEGER)
@@ -698,6 +722,7 @@ export function createVideoProductionProject(input = {}) {
       now,
     }),
     changeCards: [],
+    mediaRuns: [],
     globalPaused: false,
     autoAdvance: false,
     revision: 0,
@@ -806,10 +831,21 @@ function migrateVideoProductionProjectV4(value, options = {}) {
   }
   return {
     ...value,
-    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    schemaVersion: 5,
     updatedAt: Math.max(value.updatedAt ?? now, now),
     nodes,
     continuityGraph,
+  }
+}
+
+function migrateVideoProductionProjectV5(value, options = {}) {
+  if (!isRecord(value) || value.schemaVersion !== 5 || value.kind !== PROJECT_KIND) return value
+  const now = options.now ?? value.updatedAt ?? Date.now()
+  return {
+    ...value,
+    schemaVersion: VIDEO_PRODUCTION_SCHEMA_VERSION,
+    mediaRuns: Array.isArray(value.mediaRuns) ? value.mediaRuns : [],
+    updatedAt: Math.max(value.updatedAt ?? now, now),
   }
 }
 
@@ -818,7 +854,8 @@ export function migrateVideoProductionProject(input, options = {}) {
   const migratedV3 = migrateVideoProductionProjectV2(migratedV2, options)
   const migratedV4 = migrateVideoProductionProjectV3(migratedV3, options)
   const migratedV5 = migrateVideoProductionProjectV4(migratedV4, options)
-  const result = clone(assertVideoProductionProject(migratedV5))
+  const migratedV6 = migrateVideoProductionProjectV5(migratedV5, options)
+  const result = clone(assertVideoProductionProject(migratedV6))
   if (isRecord(options.story) && (
     result.continuityGraph.storyProjectId !== options.story.id
     || result.continuityGraph.storyRevision !== options.story.revision
@@ -1076,6 +1113,42 @@ export function assertVideoProductionCommand(input, projectInput) {
   if (command.type === 'sound.mix.approve') {
     knownFields(payload, new Set(), 'command.payload')
     approveSoundMix(project?.soundTimeline ?? fail('PROJECT_REQUIRED', 'A project is required to approve the mix'), { now: project.updatedAt })
+    return command
+  }
+  if (command.type === 'media-runs.propose') {
+    knownFields(payload, new Set(['run']), 'command.payload')
+    const run = assertMediaRun(payload.run, { nodeIds: project ? new Set(project.nodes.map(({ id: nodeId }) => nodeId)) : undefined })
+    if (run.status !== 'proposed' || run.jobId !== null) fail('MEDIA_PROPOSAL_INVALID', '媒体提议必须以proposed且未绑定Job状态创建')
+    if (project?.mediaRuns.some(({ id: runId }) => runId === run.id)) fail('DUPLICATE_ID', `Media run already exists: ${run.id}`)
+    return command
+  }
+  if (command.type === 'media-runs.attach-job') {
+    knownFields(payload, new Set(['runId', 'jobId', 'status']), 'command.payload')
+    id(payload.runId, 'command.payload.runId')
+    id(payload.jobId, 'command.payload.jobId')
+    if (!['queued', 'running'].includes(payload.status)) fail('MEDIA_STATUS_INVALID', '媒体Job绑定状态必须是queued或running')
+    const run = project?.mediaRuns.find(({ id: runId }) => runId === payload.runId) ?? fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+    if (run.status !== 'proposed' || run.jobId !== null) fail('MEDIA_RUN_NOT_PROPOSED', '只有未绑定的proposed媒体提议可以绑定Job')
+    return command
+  }
+  if (command.type === 'media-runs.reject') {
+    knownFields(payload, new Set(['runId', 'errorCode']), 'command.payload')
+    id(payload.runId, 'command.payload.runId')
+    if (payload.errorCode !== undefined && payload.errorCode !== null) string(payload.errorCode, 'command.payload.errorCode', 1, 120)
+    const run = project?.mediaRuns.find(({ id: runId }) => runId === payload.runId) ?? fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+    if (run.status !== 'proposed' || run.jobId !== null) fail('MEDIA_RUN_NOT_PROPOSED', '只有未绑定的proposed媒体提议可以拒绝')
+    return command
+  }
+  if (command.type === 'media-runs.reconcile') {
+    knownFields(payload, new Set(['runId', 'jobId', 'status', 'errorCode']), 'command.payload')
+    id(payload.runId, 'command.payload.runId')
+    id(payload.jobId, 'command.payload.jobId')
+    if (!['completed', 'failed', 'cancelled'].includes(payload.status)) fail('MEDIA_STATUS_INVALID', '媒体回填只能使用终态')
+    if (payload.errorCode !== undefined && payload.errorCode !== null) string(payload.errorCode, 'command.payload.errorCode', 1, 120)
+    const run = project?.mediaRuns.find(({ id: runId }) => runId === payload.runId) ?? fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+    if (run.jobId !== payload.jobId) fail('MEDIA_JOB_ID_MISMATCH', '回填Job不是该媒体提议绑定的Job')
+    if (run.status === payload.status && (run.errorCode ?? null) === (payload.errorCode ?? null)) return command
+    if (run.jobId === null || !['queued', 'running'].includes(run.status)) fail('MEDIA_RUN_NOT_ACTIVE', '只有已绑定的活动媒体Job可以回填终态')
     return command
   }
   knownFields(payload, new Set(command.type === 'node.edit'
@@ -1406,6 +1479,44 @@ export function applyVideoProductionCommand(projectInput, commandInput, options 
       next.soundTimeline = approveSoundMix(next.soundTimeline, { now })
       appendEvent(next, 'sound.mix-approved', 'sound-director', '48kHz 双声道混音规格已批准。', now)
       break
+    case 'media-runs.propose': {
+      const run = assertMediaRun(payload.run, { nodeIds: new Set(next.nodes.map(({ id: nodeId }) => nodeId)) })
+      next.mediaRuns.push(run)
+      appendEvent(next, 'media-run.proposed', run.nodeId, `已提出${run.kind}媒体执行候选；确认前不会启动真实任务。`, now)
+      break
+    }
+    case 'media-runs.attach-job': {
+      const run = next.mediaRuns.find(({ id: runId }) => runId === payload.runId)
+      if (!run) fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+      if (run.status !== 'proposed' || run.jobId !== null) fail('MEDIA_RUN_NOT_PROPOSED', '只有未绑定的proposed媒体提议可以绑定Job')
+      run.jobId = payload.jobId
+      run.status = payload.status
+      run.updatedAt = now
+      appendEvent(next, 'media-run.attached', run.nodeId, `${run.kind}媒体提议已绑定受管Job ${run.jobId}。`, now)
+      break
+    }
+    case 'media-runs.reject': {
+      const run = next.mediaRuns.find(({ id: runId }) => runId === payload.runId)
+      if (!run) fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+      if (run.status !== 'proposed' || run.jobId !== null) fail('MEDIA_RUN_NOT_PROPOSED', '只有未绑定的proposed媒体提议可以拒绝')
+      run.status = 'rejected'
+      run.errorCode = payload.errorCode ?? 'USER_REJECTED'
+      run.updatedAt = now
+      appendEvent(next, 'media-run.rejected', run.nodeId, `${run.kind}媒体提议已拒绝。`, now)
+      break
+    }
+    case 'media-runs.reconcile': {
+      const run = next.mediaRuns.find(({ id: runId }) => runId === payload.runId)
+      if (!run) fail('MEDIA_RUN_NOT_FOUND', `找不到媒体提议${payload.runId}`)
+      if (run.jobId !== payload.jobId) fail('MEDIA_JOB_ID_MISMATCH', '回填Job不是该媒体提议绑定的Job')
+      if (run.status === payload.status && (run.errorCode ?? null) === (payload.errorCode ?? null)) return clone(project)
+      if (run.jobId === null || !['queued', 'running'].includes(run.status)) fail('MEDIA_RUN_NOT_ACTIVE', '只有已绑定的活动媒体Job可以回填终态')
+      run.status = payload.status
+      run.errorCode = payload.errorCode ?? null
+      run.updatedAt = now
+      appendEvent(next, 'media-run.reconciled', run.nodeId, `${run.kind}媒体Job已回填${payload.status}终态。`, now)
+      break
+    }
     default:
       fail('UNKNOWN_COMMAND', `Unsupported production command ${command.type}`)
   }

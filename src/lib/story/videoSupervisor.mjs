@@ -1,4 +1,5 @@
 import { assertVideoProductionProject } from './productionPipeline.mjs'
+import { evaluateMediaSupervisor } from './mediaSupervisor.mjs'
 
 export const VIDEO_SUPERVISOR_DECISION_SCHEMA_VERSION = 1
 
@@ -41,7 +42,7 @@ function decision(project, status, action, node, message, options = {}) {
   }
 }
 
-export function evaluateVideoSupervisor(projectInput) {
+export function evaluateVideoSupervisor(projectInput, options = {}) {
   const project = assertVideoProductionProject(projectInput)
   const nodes = orderedNodes(project)
   const current = nodes.find((node) => node.status !== 'approved') ?? nodes.at(-1) ?? null
@@ -82,6 +83,14 @@ export function evaluateVideoSupervisor(projectInput) {
   if (paused) {
     return decision(project, 'node-paused', 'resume-node', paused,
       `${paused.title}已由用户暂停；恢复前督导不会继续。`)
+  }
+
+  const mediaDecision = evaluateMediaSupervisor(project, options)
+  if (mediaDecision.status !== 'none') {
+    const mediaNode = mediaDecision.run ? nodes.find((item) => item.id === mediaDecision.run.nodeId) ?? current : current
+    return decision(project, mediaDecision.status, mediaDecision.action, mediaNode, mediaDecision.message, {
+      canContinue: mediaDecision.canContinue,
+    })
   }
 
   const active = nodes.find((node) => node.status === 'running')

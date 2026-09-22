@@ -2,7 +2,8 @@ import { seedCamera } from '../data/canvasDefaults'
 import { createCanvasDocument } from './canvasCore'
 import { createPixelDocument, serializePixelDocument } from './pixel'
 import type { ProjectModeDocument, WorkspaceProject } from './project'
-import { serializeSmartVideoDocument, type WorkspaceModeDocument } from './projectApi'
+import type { WorkspaceModeDocument } from './projectApi'
+import { serializeSmartVideoDocument } from './story/smartVideoDocument'
 import {
   createSmartVideoPreviewPlan,
   SMART_VIDEO_STARTER_SCRIPT,

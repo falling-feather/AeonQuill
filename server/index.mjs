@@ -93,14 +93,20 @@ import {
   SOUND_RENDERER_VERSION,
   assertResolvedSoundAsset,
   compileSoundMixPlan,
+  compileLocalSoundRemixPlan,
   compileSpeechSynthesisPlan,
   renderAssSubtitles,
   renderSoundMix,
+  renderLocalSoundRemix,
   renderSrtSubtitles,
   renderVttSubtitles,
   validateSoundRenderRequest,
 } from './sound-renderer.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION, WorkflowCenterService } from './workflow-center.mjs'
+import { WorkflowRecipeStore } from './workflow-recipe-store.mjs'
+import { SpeechAlignmentJobService } from './speech-alignment-jobs.mjs'
+import { probeSpeechAlignment } from './speech-alignment.mjs'
+import { prepareMediaJobEnvelope } from './media-job-binding.mjs'
 import { executionIdentity, resolveBuildIdentity } from './build-identity.mjs'
 import { RuntimeRegistryMigrationService } from './runtime-registry-migration.mjs'
 import { AgentAdapterService } from './agent-adapter.mjs'
@@ -114,7 +120,7 @@ import {
   compileH3Prompt,
   H3_SCENARIO_PRESETS,
 } from '../src/lib/video/h3PromptAgent.mjs'
-import { assertVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
+import { assertVideoProductionProject, migrateVideoProductionProject } from '../src/lib/story/productionPipeline.mjs'
 import {
   assertLocalVideoCandidateBackfill,
   assertLocalVideoCandidateJobBinding,
@@ -177,6 +183,14 @@ const workflowCenter = new WorkflowCenterService({
   rootDirectory: join(dataDirectory, 'workflow-center'),
   getComfyRoot: () => localRuntimeConfig.comfyRoot,
   getRuntimeConfig: () => localRuntimeConfig,
+})
+const workflowRecipes = new WorkflowRecipeStore(join(dataDirectory, 'workflow-center'), {
+  getWorkflow(id) {
+    try { return workflowCenter.customExecutionSummary(id) } catch (error) {
+      if (error.code === 'CUSTOM_WORKFLOW_NOT_FOUND') return null
+      throw error
+    }
+  },
 })
 const runtimeRegistryMigration = new RuntimeRegistryMigrationService({
   rootDirectory: join(dataDirectory, 'runtime-registry-migrations'),
@@ -247,6 +261,7 @@ await Promise.all([
   workspaceStore.open(),
   clientStateStore.open(),
   workflowCenter.open(),
+  workflowRecipes.open(),
   runtimeRegistryMigration.open(),
   assetPreviewService.open(),
   storageLifecycle.open(),
@@ -277,6 +292,13 @@ const semanticImageOperations = new Set([SEMANTIC_ELEMENT_EXTRACT_OPERATION, ...
 const scheduler = new JobScheduler({
   store,
   resourceLimits: { cpu: imageJobConcurrency, gpu: 1, orchestration: 1 },
+})
+const speechAlignmentConfiguration = () => ({ ...localRuntimeConfig.audioTools, ffmpegPath, ffprobePath })
+const speechAlignmentJobs = new SpeechAlignmentJobService({
+  rootDirectory: join(dataDirectory, 'speech-alignments'), store, scheduler,
+  getAuthority: authoritativeSoundProduction,
+  resolveAudio: (projectId, cue) => resolveSoundMixAssets(projectId, { cues: [{ cueId: cue.id, asset: cue.asset }] })[0],
+  getConfiguration: speechAlignmentConfiguration,
 })
 let runtimeCache = null
 let runtimeCacheAt = 0
@@ -974,6 +996,7 @@ function newJob(request, inputPath, lastFramePath, options = {}) {
     workflowVersion: WORKFLOW_VERSION,
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'gpu', estimateVideoMilliseconds(request), now)],
     request,
@@ -1011,6 +1034,7 @@ function newCustomWorkflowJob(request, workflow, options = {}) {
     workflowVersion: CUSTOM_WORKFLOW_EXECUTION_VERSION,
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'gpu', 15 * 60_000, now)],
     request,
@@ -1055,6 +1079,7 @@ function newFinalCutJob(request, options = {}) {
     workflowVersion: VIDEO_FINALIZER_VERSION,
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'cpu', 10 * 60_000, now)],
     request,
@@ -1081,7 +1106,7 @@ function newSoundRenderJob(request, options = {}) {
     id,
     kind: 'sound-render',
     tool: 'sound-render',
-    label: preparesSpeech ? '声音导演 · 批量配音' : '声音导演 · 混音字幕',
+    label: preparesSpeech ? '声音导演 · 批量配音' : request.action === 'render-local' ? '声音导演 · 局部重混' : '声音导演 · 混音字幕',
     status: 'queued',
     phase: 'queued',
     progress: 0,
@@ -1091,6 +1116,7 @@ function newSoundRenderJob(request, options = {}) {
     workflowVersion: SOUND_RENDERER_VERSION,
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, resourceClass, preparesSpeech ? 5 * 60_000 : 2 * 60_000, now)],
     request,
@@ -1142,6 +1168,7 @@ function newVideoChainJob(request, options = {}) {
     workflowVersion: 'aeonquill-video-chain-v2',
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'orchestration', estimatedMilliseconds, now)],
     request,
@@ -1215,6 +1242,7 @@ function newImageJob(request, inputPath, options = {}) {
     ),
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, resourceClass, estimateImageMilliseconds(request.operation), now)],
     request,
@@ -2122,7 +2150,11 @@ async function runVideoJob(jobId, { signal }) {
   }
 }
 
-function authoritativeSoundProduction(request, { requireProductionRevision = true } = {}) {
+function authoritativeSoundProduction(request, { requireProductionRevision = true, requireSoundTimelineRevision = true } = {}) {
+  const owner = workspaceStore.getCatalog().catalog.projects.find(({ id }) => id === request.projectId)
+  if (!owner || owner.status !== 'active' || !owner.documents.some((document) => document.id === request.documentId && document.modeId === 'smart-video')) {
+    throw Object.assign(new Error('声音任务需要当前活动项目中的智能视频文档'), { code: 'SOUND_WORKSPACE_NOT_FOUND', status: 404 })
+  }
   const stored = workspaceStore.getModeDocument(request.documentId)
   if (!stored || stored.modeId !== 'smart-video' || stored.projectId !== request.projectId) {
     throw Object.assign(new Error('声音任务所属的智能视频项目不存在或身份不匹配'), {
@@ -2139,9 +2171,9 @@ function authoritativeSoundProduction(request, { requireProductionRevision = tru
       status: 409,
     })
   }
-  const production = assertVideoProductionProject(payload?.production)
+  const production = migrateVideoProductionProject(payload?.production)
   if ((requireProductionRevision && production.revision !== request.productionRevision)
-    || production.soundTimeline.revision !== request.soundTimelineRevision) {
+    || (requireSoundTimelineRevision && production.soundTimeline.revision !== request.soundTimelineRevision)) {
     throw Object.assign(new Error('声音时间线已变化；请等待项目保存后重新检查并提交'), {
       code: 'SOUND_TIMELINE_STALE',
       status: 409,
@@ -2432,11 +2464,48 @@ async function runSoundMixJob(jobId, job, timeline, signal) {
   }
 }
 
+async function runLocalSoundRemixJob(jobId, job, timeline, signal) {
+  const plan = compileLocalSoundRemixPlan(timeline, { cueIds: job.request.cueIds, overlapMs: job.request.overlapMs })
+  const resolved = resolveSoundMixAssets(job.request.projectId, plan)
+  const filename = `${job.id}-local.wav`
+  const outputPath = join(assetDirectory, filename)
+  const temporaryOutputPath = join(assetDirectory, `${job.id}.part.wav`)
+  let completed = false
+  try {
+    await store.update(jobId, { phase: 'preparing', progress: 4, detail: '验证两个已批准片段，准备局部试听', outputPath, temporaryOutputPath })
+    await Promise.all(resolved.map(async ({ path, bytes }) => {
+      if ((await stat(path)).size !== bytes) throw Object.assign(new Error('声音资源字节数已变化'), { code: 'SOUND_ASSET_BYTES_MISMATCH', status: 409 })
+    }))
+    const rendered = await renderLocalSoundRemix({
+      ffmpegPath, ffprobePath, inputPaths: resolved.map(({ path }) => path), outputPath: temporaryOutputPath, plan, signal,
+      onProgress: ({ phase, progress }) => { void store.update(jobId, { phase, progress, detail: '正在渲染选中片段的交叉淡化试听' }) },
+    })
+    authoritativeSoundProduction(job.request)
+    await rename(temporaryOutputPath, outputPath)
+    const outputVersion = await describeOutputVersion(job, outputPath, 'audio/wav')
+    const delivery = await deliverConfiguredOutput(jobId, outputPath, filename)
+    await store.update(jobId, {
+      status: 'completed', phase: 'completed', progress: 100, detail: '局部重混试听已完成，原时间线与其他片段保留',
+      outputUrl: `/api/assets/${encodeURIComponent(filename)}`, output: { filename, subfolder: '', type: 'output' }, outputVersion, delivery,
+      soundRenderMetadata: { action: 'render-local', ...rendered, generatedBindings: [], preservedCueIds: plan.preservedCueIds,
+        sourceAssets: resolved.map(({ cueId, contentHash, mimeType }) => ({ cueId, contentHash, mimeType })) },
+      completedAt: Date.now(), temporaryOutputPath: undefined,
+    })
+    completed = true
+  } finally {
+    if (!completed) {
+      await unlink(temporaryOutputPath).catch(() => {})
+      await unlink(outputPath).catch(() => {})
+    }
+  }
+}
+
 async function runSoundRenderJob(jobId, { signal }) {
   const job = store.get(jobId)
   if (!job) return
   const { timeline } = authoritativeSoundProduction(job.request)
   if (job.request.action === 'prepare-speech') await runSpeechPreparationJob(jobId, job, timeline, signal)
+  else if (job.request.action === 'render-local') await runLocalSoundRemixJob(jobId, job, timeline, signal)
   else await runSoundMixJob(jobId, job, timeline, signal)
 }
 
@@ -3251,6 +3320,7 @@ async function createVideoJob(body, retrySource, options = {}) {
     ? assertManagedPrivatePath(retrySource.lastFramePath, inputDirectory)
     : undefined
   const job = newJob(request, inputPath, lastFramePath, {
+    mediaBinding: options.mediaBinding,
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -3301,6 +3371,7 @@ async function createCustomWorkflowJob(body, retrySource, options = {}) {
   if (existing) return { job: store.publicJob(existing), reused: true }
   await assertStorageCapacity(runtimeDirectory, 320 * 1024 * 1024)
   const job = newCustomWorkflowJob(request, validated.workflow, {
+    mediaBinding: options.mediaBinding,
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -3326,6 +3397,7 @@ async function createFinalCutJob(body, retrySource, options = {}) {
   if (existing) return { job: store.publicJob(existing), reused: true }
   await assertStorageCapacity(runtimeDirectory, 768 * 1024 * 1024)
   const job = newFinalCutJob(request, {
+    mediaBinding: options.mediaBinding,
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -3345,6 +3417,8 @@ async function createSoundRenderJob(body, retrySource, options = {}) {
   const { timeline } = authoritativeSoundProduction(request)
   const plan = request.action === 'prepare-speech'
     ? compileSpeechSynthesisPlan(timeline)
+    : request.action === 'render-local'
+      ? compileLocalSoundRemixPlan(timeline, { cueIds: request.cueIds, overlapMs: request.overlapMs })
     : compileSoundMixPlan(timeline)
   if (request.action === 'prepare-speech' && !generationAdapters.status().speech.configured) {
     throw Object.assign(new Error('本次 sidecar 会话没有 TTS 密钥；请先在生成适配器中配置语音服务'), {
@@ -3364,6 +3438,7 @@ async function createSoundRenderJob(body, retrySource, options = {}) {
     : Math.max(128 * 1024 * 1024, Math.ceil(plan.durationMs / 1_000) * 192_000 + 64 * 1024 * 1024)
   await assertStorageCapacity(runtimeDirectory, estimatedBytes)
   const job = newSoundRenderJob(request, {
+    mediaBinding: options.mediaBinding,
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -3399,6 +3474,7 @@ async function createVideoChainJob(body, retrySource, options = {}) {
   )
   await assertStorageCapacity(runtimeDirectory, requiredStorageBytes)
   const job = newVideoChainJob(request, {
+    mediaBinding: options.mediaBinding,
     idempotencyKey,
     requestHash: requestHashValue,
     priority: options.priority,
@@ -3637,6 +3713,7 @@ function newProviderVideoJob(request, options = {}) {
     workflowVersion: adapterStatus.profile,
     requestHash: options.requestHash,
     retryOf: options.retryOf,
+    mediaBinding: options.mediaBinding,
     scheduling,
     costEvents: [createEstimateCostEvent(id, 'cpu', Math.max(1_000, request.durationSeconds * 1_000), now)],
     providerEstimateUsd: Number((adapterStatus.costRateUsd * request.durationSeconds).toFixed(6)),
@@ -3854,6 +3931,7 @@ scheduler
   .register(CUSTOM_WORKFLOW_JOB_KIND, (jobId, context) => customWorkflowExecutor.run(jobId, context))
   .register('provider-video', runProviderVideoJob)
   .register('sound-render', runSoundRenderJob)
+  .register('speech-alignment', (id, context) => speechAlignmentJobs.execute(id, context))
   .register('final-cut', runFinalCutJob)
   .register('video-chain', runVideoChainJob)
   .register('storage-cleanup', runStorageCleanupJob)
@@ -4030,6 +4108,23 @@ async function serveStatic(response, pathname) {
   } catch {
     sendError(response, 503, 'FRONTEND_NOT_BUILT', 'Frontend build was not found. Run npm run build first.')
   }
+}
+
+async function submitMediaBoundJob(raw, kinds, createJob, options) {
+  const envelope = await prepareMediaJobEnvelope(raw, kinds, { workspaceStore })
+  if (envelope.mediaBinding) {
+    const existing = store.findByIdempotencyKey(envelope.idempotencyKey)
+    if (existing) {
+      if (!existing.mediaBinding || Object.keys(envelope.mediaBinding).some((key) => existing.mediaBinding[key] !== envelope.mediaBinding[key])) {
+        throw Object.assign(new Error('媒体任务幂等键已绑定不同提议'), { code: 'MEDIA_JOB_IDEMPOTENCY_CONFLICT', status: 409 })
+      }
+      return { job: store.publicJob(existing), reused: true }
+    }
+  }
+  return createJob(envelope.body, undefined, {
+    ...options,
+    ...(envelope.mediaBinding ? { mediaBinding: envelope.mediaBinding, idempotencyKey: envelope.idempotencyKey } : {}),
+  })
 }
 
 const server = createServer(async (request, response) => {
@@ -4241,6 +4336,52 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && pathname === '/api/workflow-center/jobs') {
       return sendJson(response, 200, { jobs: workflowCenter.jobs() })
+    }
+    if (request.method === 'GET' && pathname === '/api/workflow-center/recipes') {
+      return sendJson(response, 200, workflowRecipes.list())
+    }
+    if (request.method === 'GET' && pathname === '/api/speech-alignment/status') {
+      return sendJson(response, 200, sanitizePublicPayload(await probeSpeechAlignment(speechAlignmentConfiguration())))
+    }
+    if (request.method === 'POST' && pathname === '/api/jobs/speech-alignment') {
+      const body = await readJsonBody(request, 8 * 1024)
+      const result = await speechAlignmentJobs.create(body, { idempotencyKey: resolveIdempotencyKey(request.headers['idempotency-key']) })
+      return sendJson(response, result.reused ? 200 : 202, result)
+    }
+    const alignmentResultMatch = /^\/api\/jobs\/([^/]+)\/alignment$/u.exec(pathname)
+    if (request.method === 'GET' && alignmentResultMatch) {
+      return sendJson(response, 200, await speechAlignmentJobs.result(decodeURIComponent(alignmentResultMatch[1])))
+    }
+    if (request.method === 'POST' && pathname === '/api/workflow-center/recipes') {
+      const recipe = await workflowRecipes.create(await readJsonBody(request, 16 * 1024))
+      return sendJson(response, 201, { recipe })
+    }
+    const recipeResolveMatch = /^\/api\/workflow-center\/recipes\/([^/]+)\/resolve$/u.exec(pathname)
+    if (request.method === 'POST' && recipeResolveMatch) {
+      const body = await readJsonBody(request, 1024)
+      if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).length) {
+        return sendError(response, 400, 'INVALID_WORKFLOW_RECIPE', '应用配方请求必须是空对象')
+      }
+      return sendJson(response, 200, { recipe: workflowRecipes.resolve(decodeURIComponent(recipeResolveMatch[1])) })
+    }
+    const recipeDeleteMatch = /^\/api\/workflow-center\/recipes\/([^/]+)$/u.exec(pathname)
+    if (request.method === 'DELETE' && recipeDeleteMatch) {
+      return sendJson(response, 200, { result: await workflowRecipes.remove(decodeURIComponent(recipeDeleteMatch[1])) })
+    }
+    const workflowRunsMatch = /^\/api\/workflow-center\/custom\/([^/]+)\/runs$/u.exec(pathname)
+    if (request.method === 'GET' && workflowRunsMatch) {
+      const customId = decodeURIComponent(workflowRunsMatch[1])
+      workflowCenter.customExecutionSummary(customId)
+      const projectId = url.searchParams.get('projectId')
+      const project = workspaceStore.getCatalog().catalog.projects.find(({ id }) => id === projectId)
+      if (!project || project.status !== 'active') return sendError(response, 404, 'WORKSPACE_PROJECT_NOT_FOUND', '请选择有效的活动项目')
+      const jobs = store.list()
+        .filter((job) => job.kind === CUSTOM_WORKFLOW_JOB_KIND && job.request?.customWorkflowId === customId
+          && job.request?.projectId === projectId && job.status === 'completed' && job.outputUrl)
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 20)
+        .map((job) => store.publicJob(job))
+      return sendJson(response, 200, { jobs })
     }
     const workflowPackInstallMatch = /^\/api\/workflow-center\/packs\/([^/]+)\/install$/u.exec(pathname)
     if (request.method === 'POST' && workflowPackInstallMatch) {
@@ -4900,7 +5041,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/jobs/video') {
       const body = await readJsonBody(request)
-      const result = await createVideoJob(body, undefined, {
+      const result = await submitMediaBoundJob(body, ['video'], createVideoJob, {
         idempotencyKey: request.headers['idempotency-key'],
         priority: request.headers['x-miaohui-priority'] === undefined
           ? undefined
@@ -4910,7 +5051,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/jobs/custom-workflow') {
       const body = await readJsonBody(request, 64 * 1024)
-      const result = await createCustomWorkflowJob(body, undefined, {
+      const result = await submitMediaBoundJob(body, ['image', 'video'], createCustomWorkflowJob, {
         idempotencyKey: request.headers['idempotency-key'],
         priority: request.headers['x-miaohui-priority'] === undefined
           ? undefined
@@ -4950,7 +5091,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/jobs/sound-render') {
       const body = await readJsonBody(request, 32 * 1024)
-      const result = await createSoundRenderJob(body, undefined, {
+      const result = await submitMediaBoundJob(body, ['prepare-speech', 'render-mix'], createSoundRenderJob, {
         idempotencyKey: request.headers['idempotency-key'],
         priority: request.headers['x-miaohui-priority'] === undefined
           ? undefined
@@ -4960,7 +5101,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/jobs/final-cut') {
       const body = await readJsonBody(request, 32 * 1024)
-      const result = await createFinalCutJob(body, undefined, {
+      const result = await submitMediaBoundJob(body, ['final-cut'], createFinalCutJob, {
         idempotencyKey: request.headers['idempotency-key'],
         priority: request.headers['x-miaohui-priority'] === undefined
           ? undefined
@@ -4970,7 +5111,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/jobs/video-chain') {
       const body = await readJsonBody(request, 256 * 1024)
-      const result = await createVideoChainJob(body, undefined, {
+      const result = await submitMediaBoundJob(body, ['video'], createVideoChainJob, {
         idempotencyKey: request.headers['idempotency-key'],
         priority: request.headers['x-miaohui-priority'] === undefined
           ? undefined
@@ -5017,6 +5158,9 @@ const server = createServer(async (request, response) => {
       if (!['failed', 'cancelled'].includes(source.status)) {
         return sendError(response, 409, 'JOB_NOT_RETRYABLE', 'Only failed or cancelled tasks can be retried')
       }
+      if (source.mediaBinding) {
+        return sendError(response, 409, 'MEDIA_REPROPOSAL_REQUIRED', '请返回制片工作室重新提议，检查当前素材后再确认执行')
+      }
       if ((source.scheduling?.attempt || 1) >= (source.scheduling?.maxAttempts || 3)) {
         return sendError(response, 409, 'JOB_MAX_ATTEMPTS', 'Task has reached its maximum retry attempts')
       }
@@ -5036,6 +5180,8 @@ const server = createServer(async (request, response) => {
           ? await createProviderVideoJob({}, source, options)
           : source.kind === 'sound-render'
             ? await createSoundRenderJob({}, source, options)
+          : source.kind === 'speech-alignment'
+            ? await speechAlignmentJobs.create(source.request, { ...options, retryOf: source.id, attempt: (source.scheduling?.attempt || 1) + 1 })
           : source.kind === 'final-cut'
             ? await createFinalCutJob({}, source, options)
             : source.kind === 'video-chain'

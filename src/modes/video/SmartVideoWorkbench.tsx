@@ -69,10 +69,10 @@ import {
 } from '../../lib/story/localVideoCandidate.mjs'
 import {
   commitWorkspaceCreativePlan,
-  deserializeSmartVideoDocument,
   flushWorkspaceModeDocument,
   listWorkspaceCreativePlanReceipts,
 } from '../../lib/projectApi'
+import { deserializeSmartVideoDocument, serializeSmartVideoDocument } from '../../lib/story/smartVideoDocument'
 import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
 import { AgentPlanComposer } from '../../components/AgentPlanComposer'
 import {
@@ -90,6 +90,7 @@ import {
   createFinalCutJob,
   createVideoChainJob,
   createVideoJob,
+  createSoundRenderJob,
   fetchRuntimeStatus,
   fetchVideoJobs,
   normalizeVideoFirstFrame,
@@ -98,12 +99,16 @@ import {
   subscribeVideoJobs,
   type JobEvent,
 } from '../../lib/videoApi'
-import type { ProcessingJob, RuntimeStatus } from '../../types'
-import type { LibraryAssetInsertion } from '../../lib/libraryApi'
+import type { ProcessingJob, RuntimeStatus, VideoJobRequest, SoundRenderJobRequest, FinalCutJobRequest, CustomWorkflowJobRequest } from '../../types'
+import { listLibraryAssets, type LibraryAsset, type LibraryAssetInsertion } from '../../lib/libraryApi'
+import { createCustomWorkflowJob, fetchWorkflowCenterCatalog, type CustomWorkflowSummary } from '../../lib/workflowCenterApi'
+import { mediaJobFingerprint } from '../../lib/story/mediaJobBinding.mjs'
+import type { MediaRun } from '../../lib/story/mediaSupervisor.mjs'
 import {
   ProductionStudio,
   type ApprovedProductionStorySource,
   type ProductionAgentPlanRequest,
+  type MediaStepPreparationInput,
 } from './ProductionStudio'
 import './smart-video-workbench.css'
 
@@ -125,10 +130,16 @@ export type SmartVideoWorkbenchProps = {
   projectTitle?: string
   runtime?: SmartVideoRuntimeSummary
   onBack?: () => void
-  onPlanReady?: (result: SmartVideoPlanResult) => void
+  onPlanReady?: (result: SmartVideoPlanResult, serializedDocument: string) => void
   libraryAsset?: LibraryAssetInsertion
   onLibraryAssetConsumed?: (nonce: number) => void
 }
+
+type PreparedMediaCall =
+  | { kind: 'image'; targetId: string; request: CustomWorkflowJobRequest }
+  | { kind: 'video'; targetId: string; itemId: string; request: VideoJobRequest }
+  | { kind: 'prepare-speech' | 'render-mix'; targetId: null; request: SoundRenderJobRequest }
+  | { kind: 'final-cut'; targetId: null; request: FinalCutJobRequest }
 
 type FrameAssetState = {
   contract: ManagedFrameAsset
@@ -315,6 +326,15 @@ export function SmartVideoWorkbench({
   const [frameStrategy, setFrameStrategy] = useState<FrameStrategy>(initialResult?.project.settings.frameStrategy ?? 'start-end')
   const [result, setResult] = useState<SmartVideoPlanResult>(() => initialResult
     ?? createSmartVideoPreviewPlan(initialText, initialKind, '16:9', 'start-end', projectId, projectTitle))
+  const resultRef = useRef(result)
+  resultRef.current = result
+  const preparedMediaRef = useRef(new Map<string, PreparedMediaCall>())
+  const [mediaWorkflows, setMediaWorkflows] = useState<CustomWorkflowSummary[]>([])
+  const [mediaAssets, setMediaAssets] = useState<LibraryAsset[]>([])
+  const [mediaWorkflowId, setMediaWorkflowId] = useState('')
+  const [mediaSourceId, setMediaSourceId] = useState('')
+  const [mediaLastSourceId, setMediaLastSourceId] = useState('')
+  const [mediaSpeechBudget, setMediaSpeechBudget] = useState(5)
   const firstShotId = result.project.scenes[0]?.shots[0]?.id ?? ''
   const [error, setError] = useState<string | null>(null)
   const [executionError, setExecutionError] = useState<string | null>(null)
@@ -346,6 +366,20 @@ export function SmartVideoWorkbench({
   const [agentPlanError, setAgentPlanError] = useState<string | null>(null)
   const [latestAgentReceipt, setLatestAgentReceipt] = useState<CreativePlanReceipt | null>(null)
   const consumedLibraryAssetRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (activeWorkspace !== 'production' || !workspaceProjectId) return
+    let disposed = false
+    void Promise.all([fetchWorkflowCenterCatalog(), listLibraryAssets({ scope: 'project', projectId: workspaceProjectId })])
+      .then(([catalog, assets]) => {
+        if (disposed) return
+        const workflows = catalog.customWorkflows.filter((workflow) => workflow.enabled && workflow.outputMediaKind === 'image')
+        setMediaWorkflows(workflows)
+        setMediaAssets(assets.filter((asset) => asset.mediaKind === 'image'))
+        setMediaWorkflowId((current) => workflows.some(({ id }) => id === current) ? current : workflows.length === 1 ? workflows[0].id : '')
+      }).catch((reason) => { if (!disposed) setExecutionError(errorMessage(reason)) })
+    return () => { disposed = true }
+  }, [activeWorkspace, workspaceProjectId])
 
   useEffect(() => {
     if (!workspaceProjectId) return
@@ -444,14 +478,14 @@ export function SmartVideoWorkbench({
     const sessionJobs = submittedJobIds.map((id) => jobById.get(id)).filter((job): job is ProcessingJob => Boolean(job))
     const seen = new Set(sessionJobs.map(({ id }) => id))
     const restoredChains = jobs.filter((job) => (
-      ['video-chain', 'final-cut'].includes(job.kind ?? '')
+      ((job.mediaBinding?.projectId === chainWorkspaceId && job.mediaBinding?.documentId === (projectId ?? result.project.id)) || (['video-chain', 'final-cut'].includes(job.kind ?? '')
       && job.request
       && 'projectId' in job.request
-      && job.request.projectId === chainWorkspaceId
+      && job.request.projectId === chainWorkspaceId))
       && !seen.has(job.id)
-    )).slice(0, 8)
+    ))
     return [...sessionJobs, ...restoredChains]
-  }, [chainWorkspaceId, jobById, jobs, submittedJobIds])
+  }, [chainWorkspaceId, jobById, jobs, submittedJobIds, projectId, result.project.id])
   const completedShotJobs = useMemo(
     () => submittedJobs.filter((job) => ['video', 'provider-video'].includes(job.kind ?? '') && job.status === 'completed' && job.outputUrl),
     [submittedJobs],
@@ -491,7 +525,7 @@ export function SmartVideoWorkbench({
       invalidateExecution()
       setError(null)
       setExecutionError(null)
-      onPlanReady?.(next)
+      onPlanReady?.(next, serializeSmartVideoDocument(next))
     } catch (nextError) {
       setError(errorMessage(nextError))
     }
@@ -571,8 +605,9 @@ export function SmartVideoWorkbench({
     }
   }
 
-  const buildChecklist = (runtimeSnapshot: ExecutionRuntimeSnapshot, createdAt: number) => {
-    const selections = selectedShots.map(({ shot }) => {
+  const buildChecklist = (runtimeSnapshot: ExecutionRuntimeSnapshot, createdAt: number, onlyShotId?: string, mediaPreset?: VideoExecutionPreset) => {
+    const choices = onlyShotId ? plannedShots.filter(({ shot }) => shot.id === onlyShotId) : selectedShots
+    const selections = choices.map(({ shot }) => {
       const first = frameAssets[assetSlotKey(shot.id, 'first-frame')]
       const last = frameAssets[assetSlotKey(shot.id, 'last-frame')]
       const frameMode: VideoFrameMode = executionMode === 'text-to-video' ? 'none' : imageFrameMode
@@ -580,7 +615,7 @@ export function SmartVideoWorkbench({
         shotId: shot.id,
         mode: executionMode,
         frameMode,
-        preset,
+        preset: mediaPreset ?? preset,
         audio,
         firstFrameBindingId: executionMode === 'image-to-video' ? first?.contract.bindingId ?? null : null,
         lastFrameBindingId: executionMode === 'image-to-video' && imageFrameMode === 'first-last'
@@ -800,7 +835,7 @@ export function SmartVideoWorkbench({
       invalidateExecution()
       setError(null)
       setExecutionError(null)
-      onPlanReady?.(next)
+      onPlanReady?.(next, serializeSmartVideoDocument(next))
       revealWorkspace('plan')
     } catch (nextError) {
       setError(errorMessage(nextError))
@@ -919,7 +954,7 @@ export function SmartVideoWorkbench({
         })
     const next = { ...result, production: alignedProduction }
     setResult(next)
-    onPlanReady?.(next)
+    onPlanReady?.(next, serializeSmartVideoDocument(next))
   }
 
   const openAgentPlan = useCallback((plan: CreativePlan) => {
@@ -1012,7 +1047,7 @@ export function SmartVideoWorkbench({
       }
       setResult(next)
       invalidateExecution()
-      onPlanReady?.(next)
+      onPlanReady?.(next, serializeSmartVideoDocument(next))
       setLatestAgentReceipt(receipt)
       setAgentPlanReview(null)
       setBridgeMessage('变更卡已通过受控计划写入；恢复点与 SHA-256 执行回执已保存。')
@@ -1022,6 +1057,121 @@ export function SmartVideoWorkbench({
       setAgentPlanBusy(false)
     }
   }, [agentPlanBusy, agentPlanReview, onPlanReady, result, workspaceProjectId, workspaceRevision])
+
+  const prepareControlledMediaStep = async (input: MediaStepPreparationInput) => {
+    if (!workspaceProjectId) throw new Error('请先保存当前智能视频项目')
+    const current = resultRef.current
+    const documentId = projectId ?? current.project.id
+    let prepared: PreparedMediaCall
+    let requestSummary: string
+    if (input.kind === 'image') {
+      const workflowId = input.targetId ?? mediaWorkflowId
+      const workflow = mediaWorkflows.find(({ id, enabled }) => id === workflowId && enabled)
+      if (!workflow) throw new Error('请先选择已启用的素材工作流')
+      if (workflow.mappings.sourceImage && !mediaSourceId) throw new Error('请为素材工作流选择参考图')
+      if (workflow.mappings.lastFrame && !mediaLastSourceId) throw new Error('请为素材工作流选择第二张参考图')
+      const node = current.production.nodes.find(({ id }) => id === 'asset-producer')
+      prepared = { kind: 'image', targetId: workflow.id, request: {
+        customWorkflowId: workflow.id, projectId: workspaceProjectId,
+        workflowHash: workflow.hash, mappingHash: workflow.mappingHash,
+        title: `${current.production.title} · 素材候选`.slice(0, 120),
+        prompt: [current.production.brief, node?.instructions, node?.outputSummary].filter(Boolean).join('\n').slice(0, 8000),
+        ...(workflow.mappings.sourceImage ? { sourceLibraryItemId: mediaSourceId, sourceContentHash: mediaAssets.find(({ id }) => id === mediaSourceId)?.version.assetId } : {}),
+        ...(workflow.mappings.lastFrame ? { lastFrameLibraryItemId: mediaLastSourceId, lastFrameContentHash: mediaAssets.find(({ id }) => id === mediaLastSourceId)?.version.assetId } : {}),
+      } }
+      requestSummary = `本地素材工作流：${workflow.title}。生成后进入项目资源库，由你选择和绑定。`
+    } else if (input.kind === 'video') {
+      const target = current.production.continuityGraph.shots.find((shot) => input.targetId
+        ? shot.id === input.targetId
+        : shot.storyShotId === selectedShotIds[0])
+        ?? current.production.continuityGraph.shots.find((shot) => shot.status !== 'blocked')
+      if (!target?.storyShotId || target.status === 'blocked') throw new Error('请先为目标镜头绑定并批准必要素材，并同步故事分镜')
+      const snapshot = await loadRuntimeSnapshot()
+      const mediaPreset = current.production.settings.generationMode === 'quality' ? 'cinemaBase' : 'fast'
+      const currentChecklist = buildChecklist(snapshot, Date.now(), target.storyShotId, mediaPreset)
+      const item = currentChecklist.items.find(({ shotId }) => shotId === target.storyShotId)
+      if (!item || item.status !== 'ready') throw new Error(item?.blocks.map(({ message }) => message).join('；') || '镜头清单尚不可执行')
+      const required = new Set([item.assetBindings.firstFrame?.bindingId, item.assetBindings.lastFrame?.bindingId].filter(Boolean))
+      const payloads = Object.values(frameAssets).filter(({ contract }) => required.has(contract.bindingId)).map(({ contract, dataUrl }) => ({ bindingId: contract.bindingId, assetVersionId: contract.assetVersionId, dataUrl }))
+      const previewConfirmation = createVideoExecutionConfirmation(currentChecklist, { itemIds: [item.id], now: Date.now() })
+      const submission = compileConfirmedVideoRequests(currentChecklist, previewConfirmation, payloads)[0]
+      prepared = { kind: 'video', targetId: target.id, itemId: item.id, request: {
+        ...submission.request,
+        candidateBinding: createLocalVideoCandidateJobBinding({ projectId: workspaceProjectId, documentId,
+          production: current.production, shotId: target.id, executionItemId: item.id, submissionId: 'media-preview' }),
+      } }
+      requestSummary = `本地 H3 · ${target.label} · ${submission.request.duration} 秒 · ${mediaPreset === 'fast' ? '快速预览' : 'Base 质量档'}。完成后进入镜头候选，等待人工复核。`
+    } else if (input.kind === 'prepare-speech' || input.kind === 'render-mix') {
+      if (input.kind === 'prepare-speech' && (!Number.isFinite(mediaSpeechBudget) || mediaSpeechBudget < 0.01 || mediaSpeechBudget > 50)) throw new Error('配音费用上限应为 0.01–50 美元')
+      const soundIdentity = {
+        projectId: workspaceProjectId, documentId,
+        productionRevision: current.production.revision, soundTimelineRevision: current.production.soundTimeline.revision,
+        title: `${current.production.title} · ${input.kind === 'prepare-speech' ? '配音' : '混音字幕'}`.slice(0, 120),
+      }
+      const request: SoundRenderJobRequest = input.kind === 'prepare-speech'
+        ? { ...soundIdentity, action: 'prepare-speech', format: 'mp3', speechBudgetUsd: mediaSpeechBudget }
+        : { ...soundIdentity, action: 'render-mix' }
+      prepared = { kind: input.kind, targetId: null, request }
+      requestSummary = input.kind === 'prepare-speech'
+        ? `使用本次配置的语音服务，为缺失的对白生成配音；费用上限 ${mediaSpeechBudget.toFixed(2)} 美元，完成后需试听批准。`
+        : '按当前已批准的音频、字幕和混音设置生成本地声音版本。'
+    } else {
+      const sourceJobIds = current.production.continuityGraph.shots.map((shot) => {
+        const candidate = current.production.continuityGraph.candidates.find((entry) => entry.id === shot.selectedCandidateId && entry.inputFingerprint === shot.inputFingerprint)
+        const job = candidate && jobs.find((entry) => entry.status === 'completed' && ['video', 'provider-video'].includes(entry.kind ?? '') && entry.outputVersion?.assetId === candidate.asset.contentHash)
+        if (!job) throw new Error('请先为每个镜头选定当前输入对应的完成候选')
+        return job.id
+      })
+      if (sourceJobIds.length < 2 || new Set(sourceJobIds).size !== sourceJobIds.length) throw new Error('成片需要至少两个不同的已选镜头')
+      prepared = { kind: 'final-cut', targetId: null, request: {
+        sourceJobIds, projectId: workspaceProjectId,
+        ...(completedSoundMixJob ? { soundRenderJobId: completedSoundMixJob.id } : {}),
+        title: `${current.production.title} · 720P 成片`.slice(0, 120), transitionSeconds: 0.24, width: 1280, height: 720, fps: 24,
+      } }
+      requestSummary = `按分镜顺序剪辑 ${sourceJobIds.length} 个已选镜头，输出 720P 成片${completedSoundMixJob ? '并使用当前混音字幕' : '，保留镜头原声'}。`
+    }
+    const inputFingerprint = await mediaJobFingerprint(prepared.kind, prepared.request)
+    preparedMediaRef.current.set(inputFingerprint, prepared)
+    while (preparedMediaRef.current.size > 12) {
+      const oldest = preparedMediaRef.current.keys().next().value
+      if (!oldest) break
+      preparedMediaRef.current.delete(oldest)
+    }
+    return { targetId: prepared.targetId, inputFingerprint, requestSummary }
+  }
+
+  const runControlledMediaStep = async (proposal: MediaRun) => {
+    if (!workspaceProjectId) throw new Error('当前项目尚未保存')
+    const documentId = projectId ?? resultRef.current.project.id
+    await flushWorkspaceModeDocument(documentId)
+    const prepared = preparedMediaRef.current.get(proposal.inputFingerprint)
+    if (!prepared || prepared.kind !== proposal.kind || prepared.targetId !== proposal.targetId) throw new Error('媒体提议已过期，请重新检查并确认')
+    const production = resultRef.current.production
+    const mediaBinding = { projectId: workspaceProjectId, documentId, runId: proposal.id, inputFingerprint: proposal.inputFingerprint }
+    let job: ProcessingJob
+    if (prepared.kind === 'video') {
+      const binding = createLocalVideoCandidateJobBinding({ projectId: workspaceProjectId, documentId, production,
+        shotId: prepared.targetId, executionItemId: prepared.itemId, submissionId: proposal.id })
+      job = await createVideoJob({ ...prepared.request, candidateBinding: binding }, { mediaBinding, priority: 45 })
+      setLatestJobIdByItem((current) => ({ ...current, [prepared.itemId]: job.id }))
+    } else if (prepared.kind === 'image') {
+      job = await createCustomWorkflowJob(prepared.request, { mediaBinding, priority: 50 })
+    } else if (prepared.kind === 'final-cut') {
+      job = await createFinalCutJob(prepared.request, { mediaBinding, priority: 40 })
+    } else {
+      job = await createSoundRenderJob({ ...prepared.request, productionRevision: production.revision }, { mediaBinding, priority: 42 })
+    }
+    setJobs((current) => upsertJob(current, job))
+    setSubmittedJobIds((current) => current.includes(job.id) ? current : [...current, job.id])
+    return job
+  }
+
+  const renderMediaSettings = (nodeId: string) => nodeId === 'asset-producer' ? <div className="aq-media-execution-settings">
+    <label>素材工作流<select value={mediaWorkflowId} onChange={(event) => { setMediaWorkflowId(event.target.value); setMediaSourceId(''); setMediaLastSourceId('') }}><option value="">请选择已启用的图像工作流</option>{mediaWorkflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.title}</option>)}</select></label>
+    {mediaWorkflows.find(({ id }) => id === mediaWorkflowId)?.mappings.sourceImage ? <label>参考图<select value={mediaSourceId} onChange={(event) => setMediaSourceId(event.target.value)}><option value="">选择项目图片</option>{mediaAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label> : null}
+    {mediaWorkflows.find(({ id }) => id === mediaWorkflowId)?.mappings.lastFrame ? <label>第二张参考图<select value={mediaLastSourceId} onChange={(event) => setMediaLastSourceId(event.target.value)}><option value="">选择项目图片</option>{mediaAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label> : null}
+    {!mediaWorkflows.length ? <small>在工作流中心导入并启用一个输出图片的流程后，即可在这里生成素材。</small> : null}
+  </div> : nodeId === 'sound-director' ? <div className="aq-media-execution-settings"><label>本次配音费用上限（美元）<input type="number" min={0.01} max={50} step={0.1} value={mediaSpeechBudget} onChange={(event) => setMediaSpeechBudget(Number(event.target.value))} /></label><small>仅在确认配音提议后调用已配置的语音服务。</small></div> : null
 
   const prepareLocalCandidateShot = (continuityShotId: string) => {
     const continuityShot = result.production.continuityGraph.shots.find(({ id }) => id === continuityShotId)
@@ -1137,6 +1287,10 @@ export function SmartVideoWorkbench({
           jobs={jobs}
           onJobTracked={(job) => setJobs((existing) => upsertJob(existing, job))}
           onPrepareLocalShot={prepareLocalCandidateShot}
+          onPrepareMediaStep={prepareControlledMediaStep}
+          onRunMediaStep={runControlledMediaStep}
+          onCancelMediaJob={cancelVideoJob}
+          renderMediaSettings={renderMediaSettings}
           onReviewAgentPlan={reviewProductionAgentPlan}
           onReviewSupervisorPlan={openAgentPlan}
         />

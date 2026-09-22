@@ -19,6 +19,7 @@ import {
   createVideoProductionProjectForStory,
 } from '../src/lib/story/productionPipeline.mjs'
 import { evaluateVideoSupervisor } from '../src/lib/story/videoSupervisor.mjs'
+import { createMediaRunProposal } from '../src/lib/story/mediaSupervisor.mjs'
 
 function apply(project, type, payload = {}, now = project.updatedAt + 1) {
   return applyVideoProductionCommand(
@@ -233,4 +234,22 @@ test('supervisor never calls a model at an existing approval gate and rejects no
     assert.equal(store.getModeDocument(registered.documentId).value, registered.value)
     assert.equal(store.listAgentPlanReceipts(registered.projectId).length, 0)
   })
+})
+
+test('video supervisor waits for proposed and running media jobs, then stops at media review', () => {
+  let project = readyCharacterFixture('document-supervisor-media').production
+  for (const nodeId of ['character-designer', 'art-director', 'storyboard-director']) project = approveNode(project, nodeId)
+  const run = createMediaRunProposal({
+    nodeId: 'video-director',
+    kind: 'video',
+    targetId: 'shot-1',
+    inputFingerprint: 'media-fingerprint',
+    requestSummary: '受控 H3 视频执行',
+  }, { now: project.updatedAt + 1 })
+  project = apply(project, 'media-runs.propose', { run })
+  assert.equal(evaluateVideoSupervisor(project).status, 'media-proposed')
+  project = apply(project, 'media-runs.attach-job', { runId: run.id, jobId: 'media-job-1', status: 'running' })
+  assert.equal(evaluateVideoSupervisor(project).status, 'media-running')
+  project = apply(project, 'media-runs.reconcile', { runId: run.id, jobId: 'media-job-1', status: 'completed', errorCode: null })
+  assert.equal(evaluateVideoSupervisor(project).status, 'media-review')
 })

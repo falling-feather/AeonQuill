@@ -414,6 +414,11 @@ export type SoundRenderJobRequest = SoundRenderJobIdentity & (
   | {
       action: 'render-mix'
     }
+  | {
+      action: 'render-local'
+      cueIds: [string, string]
+      overlapMs: number
+    }
 )
 
 export type VideoChainShotRequest = Omit<
@@ -438,6 +443,10 @@ export type VideoChainJobRequest = {
 
 export type CustomWorkflowJobRequest = {
   customWorkflowId: string
+  workflowHash?: string
+  mappingHash?: string
+  sourceContentHash?: string
+  lastFrameContentHash?: string
   projectId: string
   title: string
   prompt: string
@@ -449,6 +458,20 @@ export type CustomWorkflowJobRequest = {
   height?: number
   frames?: number
   steps?: number
+  cfg?: number
+  denoise?: number
+  loraStrength?: number
+  loraClipStrength?: number
+  controlStrength?: number
+}
+
+export type SpeechAlignmentJobRequest = {
+  projectId: string
+  documentId: string
+  productionRevision: number
+  soundTimelineRevision: number
+  cueId: string
+  language: string
 }
 
 export type StorageRetentionDays = {
@@ -566,7 +589,7 @@ export type StorageCleanupResult = {
 
 export type ProcessingJob = {
   id: string
-  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'sound-render' | 'final-cut' | 'video-chain' | 'storage-cleanup'
+  kind?: 'image' | 'video' | 'custom-workflow' | 'provider-video' | 'sound-render' | 'speech-alignment' | 'final-cut' | 'video-chain' | 'storage-cleanup'
   tool: ImageLabMode | ImageOperationId | VideoGenerationMode | 'custom-comfy-workflow' | 'byok-video' | 'sound-render' | 'final-cut' | 'video-chain' | 'storage-lifecycle'
   label: string
   status: ProcessingJobStatus
@@ -674,10 +697,21 @@ export type ProcessingJob = {
     | StoredSemanticImageJobRequest
     | CustomWorkflowJobRequest
     | SoundRenderJobRequest
+    | SpeechAlignmentJobRequest
     | FinalCutJobRequest
     | VideoChainJobRequest
     | StorageCleanupRequest
   sourceElementId?: string
+  mediaBinding?: import('./lib/story/mediaJobBinding.mjs').MediaJobBinding
+  alignmentMetadata?: {
+    cueId: string
+    cueFingerprint: string
+    audioContentHash: string
+    language: string
+    durationMs?: number
+    wordCount?: number
+    resultHash?: string
+  }
   comfyPromptId?: string
   sampleStep?: number
   sampleSteps?: number
@@ -711,7 +745,7 @@ export type ProcessingJob = {
     elapsedMs: number
   }
   soundRenderMetadata?: {
-    action: 'prepare-speech' | 'render-mix'
+    action: 'prepare-speech' | 'render-mix' | 'render-local'
     timelineDigest?: string
     timelineDurationMs?: number
     requestedCueCount?: number

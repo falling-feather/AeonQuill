@@ -29,6 +29,7 @@ try {
   await page.getByRole('button', { name: '打开工作流中心', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '工作流中心' })
   await dialog.waitFor({ state: 'visible' })
+  await dialog.getByRole('tab', { name: '内置能力包', exact: true }).click()
   await dialog.getByRole('button', { name: /H3 质量母版/u }).click()
   await dialog.getByRole('heading', { name: 'H3 质量母版 · INT8 ConvRot', exact: true }).waitFor({ state: 'visible' })
   await dialog.getByText('MiniMax-H3 Community License Agreement', { exact: true }).waitFor({ state: 'visible' })

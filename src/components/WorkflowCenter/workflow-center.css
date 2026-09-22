@@ -1375,3 +1375,38 @@
     overflow-wrap: anywhere;
   }
 }
+.aq-workflow-center__tabs { overflow-x: auto; flex-shrink: 0; }
+.aq-workflow-center__tabs button { white-space: nowrap; }
+.aq-workflow-tasks, .aq-workflow-recipes { grid-column: 1 / -1; min-width: 0; }
+.aq-workflow-tasks h3, .aq-workflow-recipes h3, .aq-workflow-candidates h3 { margin: 0 0 6px; font-size: 17px; }
+.aq-workflow-tasks header p, .aq-workflow-recipes header p, .aq-workflow-candidates header p { margin: 0 0 18px; color: #777b8c; font-size: 13px; }
+.aq-workflow-task-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+.aq-workflow-task-card, .aq-workflow-recipe-card { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 10px; padding: 20px; border: 1px solid #e3e1ee; border-radius: 14px; background: #fff; text-align: left; color: #343448; }
+.aq-workflow-task-card { cursor: pointer; transition: border-color .15s, background .15s; }
+.aq-workflow-task-card:hover { border-color: #8066ed; background: #faf8ff; }
+.aq-workflow-task-card svg { color: #7356e4; }
+.aq-workflow-task-card strong { font-size: 16px; }
+.aq-workflow-task-card span, .aq-workflow-recipe-card p { font-size: 13px; margin: 0; }
+.aq-workflow-task-card small, .aq-workflow-recipe-card small, .aq-workflow-recipe-save small { color: #777b8c; font-size: 12px; line-height: 1.6; }
+.aq-workflow-tasks footer, .aq-workflow-recipe-card footer { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.aq-workflow-recipe-card h4 { margin: 0; }
+.aq-workflow-recipe-card footer { margin-top: auto; padding-top: 12px; }
+.aq-workflow-tasks button:not(.aq-workflow-task-card), .aq-workflow-recipes button, .aq-workflow-recipe-save button, .aq-workflow-candidates button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 12px; border: 1px solid #dbd7ea; border-radius: 8px; background: white; color: #6246ce; cursor: pointer; }
+.aq-workflow-recipes button:disabled, .aq-workflow-recipe-save button:disabled { opacity: .5; cursor: not-allowed; }
+.aq-workflow-tasks__empty { border: 1px dashed #dcd8ed; border-radius: 12px; padding: 24px; color: #6e7283; text-align: center; }
+.aq-workflow-recipe-save { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 18px 0; padding: 14px; background: #f7f6fc; border-radius: 10px; }
+.aq-workflow-recipe-save label { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 180px; font-size: 12px; }
+.aq-workflow-recipe-save input, .aq-workflow-candidates select { padding: 8px 10px; border: 1px solid #dcdce6; border-radius: 7px; background: white; min-width: 0; color: #38384a; }
+.aq-workflow-recipe-save small { flex-basis: 100%; }
+.aq-workflow-candidates { padding: 18px 0 8px; min-width: 0; }
+.aq-workflow-candidates header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.aq-workflow-candidates__selectors, .aq-workflow-candidates__media { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.aq-workflow-candidates__selectors label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 12px; }
+.aq-workflow-candidates__media figure { margin: 0; min-width: 0; padding: 8px; border: 1px solid #e5e5ed; border-radius: 10px; }
+.aq-workflow-candidates__media img, .aq-workflow-candidates__media video { display: block; width: 100%; height: 220px; object-fit: contain; background: #f4f4f8; }
+.aq-workflow-candidates__media audio { max-width: 100%; }
+.aq-workflow-candidates__media figcaption { padding-top: 8px; font-size: 12px; }
+@media (max-width: 640px) {
+  .aq-workflow-candidates__selectors, .aq-workflow-candidates__media { grid-template-columns: 1fr; }
+  .aq-workflow-task-card, .aq-workflow-recipe-card { padding: 15px; }
+}

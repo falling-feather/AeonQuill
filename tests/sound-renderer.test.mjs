@@ -17,8 +17,11 @@ import {
   SoundRendererError,
   assertResolvedSoundAsset,
   buildSoundMixFilter,
+  buildLocalSoundRemixFilter,
   compileSoundMixPlan,
   compileSpeechSynthesisPlan,
+  compileLocalSoundRemixPlan,
+  renderLocalSoundRemix,
   renderAssSubtitles,
   renderSrtSubtitles,
   renderVttSubtitles,
@@ -34,8 +37,10 @@ function story() {
 镜头 1：顾舟撑伞走向渡船
 旁白：雨把灯火揉成了金线。
 顾舟：开船吧。
+顾舟：等一下。
 镜头 2：船离开码头
-音效：木桨划过水面。`,
+音效：木桨划过水面。
+顾舟：船已离岸。`,
     aspectRatio: '16:9',
     frameStrategy: 'start-end',
     now: 1_000,
@@ -103,6 +108,14 @@ test('validates exact action-specific sound job contracts', () => {
   )
 })
 
+test('local remix accepts only two managed cues and a bounded crossfade', () => {
+  const request = { action: 'render-local', projectId: 'project-1', documentId: 'document-1', productionRevision: 2, soundTimelineRevision: 4, title: '局部试听', cueIds: ['cue-1', 'cue-2'], overlapMs: 120 }
+  assert.deepEqual(validateSoundRenderRequest(request), request)
+  for (const patch of [{ cueIds: ['cue-1', 'cue-1'] }, { overlapMs: 0 }, { path: 'private.wav' }]) {
+    assert.throws(() => validateSoundRenderRequest({ ...request, ...patch }), SoundRendererError)
+  }
+})
+
 test('compiles only missing speech against approved voice profiles', () => {
   let timeline = createSoundTimeline({ story: story(), now: 1_200 })
   assert.throws(
@@ -166,5 +179,63 @@ test('resolved library bytes must match the exact approved item, version, hash a
       mimeType: approved.mimeType,
     }),
     (error) => error instanceof SoundRendererError && error.code === 'SOUND_ASSET_HASH_MISMATCH',
+  )
+})
+
+test('compiles a bounded crossfade only for adjacent same-kind approved cues', () => {
+  const timeline = approvedTimeline()
+  const speech = timeline.audioCues.filter(({ kind }) => kind === 'dialogue').sort((left, right) => left.startMs - right.startMs)
+  const untouchedBefore = timeline.audioCues.filter(({ id }) => ![speech[0].id, speech[1].id].includes(id)).map(({ id, startMs, endMs, asset }) => ({ id, startMs, endMs, asset }))
+  const plan = compileLocalSoundRemixPlan(timeline, {
+    cueIds: [speech[0].id, speech[1].id],
+    overlapMs: 80,
+  })
+  assert.equal(plan.kind, 'aeonquill.sound-local-remix-plan')
+  assert.deepEqual(plan.cueIds, [speech[0].id, speech[1].id])
+  assert.equal(plan.overlapMs, 80)
+  assert.equal(plan.preservedCueIds.length, timeline.audioCues.length - 2)
+  assert.equal(plan.cues[0].asset.contentHash, speech[0].asset.contentHash)
+  assert.equal(plan.cues[1].asset.contentHash, speech[1].asset.contentHash)
+  assert.deepEqual(timeline.audioCues.filter(({ id }) => !plan.cueIds.includes(id)).map(({ id, startMs, endMs, asset }) => ({ id, startMs, endMs, asset })), untouchedBefore)
+  const graph = buildLocalSoundRemixFilter(plan)
+  assert.match(graph.filter, /acrossfade/u)
+  assert.match(graph.filter, /atrim/u)
+})
+
+test('local remix plan cannot include non-adjacent, mixed-kind, or unapproved audio', () => {
+  const timeline = approvedTimeline()
+  const speech = timeline.audioCues.filter(({ kind }) => kind === 'dialogue').sort((left, right) => left.startMs - right.startMs)
+  assert.throws(
+    () => compileLocalSoundRemixPlan(timeline, { cueIds: [speech[0].id, speech.at(-1).id], overlapMs: 80 }),
+    (error) => error instanceof SoundRendererError && error.code === 'SOUND_CUES_NOT_ADJACENT',
+  )
+  assert.throws(
+    () => compileLocalSoundRemixPlan(timeline, { cueIds: [speech[0].id, timeline.audioCues.find(({ kind }) => kind === 'music').id], overlapMs: 80 }),
+    (error) => error instanceof SoundRendererError && error.code === 'SOUND_CUE_KIND_MISMATCH',
+  )
+  const pending = createSoundTimeline({ story: story(), now: 1_400 })
+  const pendingSpeech = pending.audioCues.filter(({ required }) => required)
+  assert.throws(
+    () => compileLocalSoundRemixPlan(pending, { cueIds: [pendingSpeech[0].id, pendingSpeech[1].id], overlapMs: 80 }),
+    (error) => error instanceof SoundRendererError && error.code === 'SOUND_CUE_NOT_APPROVED',
+  )
+})
+
+test('local remix execution accepts exactly the two planned audio inputs', async () => {
+  const timeline = approvedTimeline()
+  const speech = timeline.audioCues.filter(({ kind }) => kind === 'dialogue').sort((left, right) => left.startMs - right.startMs)
+  const plan = compileLocalSoundRemixPlan(timeline, {
+    cueIds: [speech[0].id, speech[1].id],
+    overlapMs: 80,
+  })
+  await assert.rejects(
+    renderLocalSoundRemix({
+      ffmpegPath: 'D:/missing/ffmpeg.exe',
+      ffprobePath: 'D:/missing/ffprobe.exe',
+      inputPaths: ['D:/only-one.wav'],
+      outputPath: 'D:/local-remix.wav',
+      plan,
+    }),
+    (error) => error instanceof SoundRendererError && error.code === 'SOUND_LOCAL_REMIX_INPUT_MISMATCH',
   )
 })

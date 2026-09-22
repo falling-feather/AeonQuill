@@ -25,7 +25,6 @@ import {
 import {
   ProjectApiError,
   createWorkspaceRecoveryPoint,
-  deserializeSmartVideoDocument,
   downloadWorkspaceProjectPackage,
   importWorkspaceProjectPackage,
   initializeWorkspaceModeDocument,
@@ -35,7 +34,6 @@ import {
   loadWorkspaceModeDocument,
   saveWorkspaceCatalog,
   saveWorkspaceModeDocument,
-  serializeSmartVideoDocument,
   takeWorkspaceCreativePlanCommit,
   previewWorkspaceProjectPackage,
   previewWorkspaceProjectPackageFile,
@@ -1085,6 +1083,7 @@ export default function ProductApp() {
         setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty', document })
         try { localStorage.setItem(pixelStorageKey(document.id), serialized) } catch { /* SQLite remains canonical */ }
       } else if (restored.document?.modeId === 'smart-video') {
+        const { deserializeSmartVideoDocument } = await import('./lib/story/smartVideoDocument')
         const body = deserializeSmartVideoDocument(restored.document.value)
         const result = { project: body.project, plan: body.plan, production: body.production }
         const session = smartVideoSessionFromResult(result)
@@ -1329,7 +1328,7 @@ export default function ProductApp() {
       }
       return stored
     })()
-      .then((stored) => {
+      .then(async (stored) => {
         if (disposed) return
         if (activeModeDocumentMode === 'pixel') {
           if (stored) {
@@ -1343,6 +1342,8 @@ export default function ProductApp() {
           return
         }
         if (stored) {
+          const { deserializeSmartVideoDocument } = await import('./lib/story/smartVideoDocument')
+          if (disposed) return
           const body = deserializeSmartVideoDocument(stored.value)
           const result = { project: body.project, plan: body.plan, production: body.production }
           const session = smartVideoSessionFromResult(result)
@@ -1785,7 +1786,7 @@ export default function ProductApp() {
     }
   }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog, queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
 
-  const handleVideoPlanReady = useCallback((result: SmartVideoPlanResult) => {
+  const handleVideoPlanReady = useCallback((result: SmartVideoPlanResult, serializedDocument: string) => {
     const catalogDocumentId = activeWorkspaceProjectId && activeModeDocumentMode === 'smart-video'
       ? activeModeDocumentId
       : undefined
@@ -1824,7 +1825,7 @@ export default function ProductApp() {
           documentId: catalogDocumentId,
           modeId: 'smart-video',
           revision: documentRevision,
-          value: serializeSmartVideoDocument(result),
+          value: serializedDocument,
           reason: 'smart-video-plan-autosave',
         }).catch((error) => {
           setVideoSession({

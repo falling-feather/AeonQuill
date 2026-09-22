@@ -99,7 +99,9 @@ let plannedBridgeRestart = false
 page.on('pageerror', (error) => issues.push(`pageerror: ${error.message}`))
 page.on('console', (message) => {
   const entry = `${message.type()}: ${message.text()}`
-  if (plannedBridgeRestart && entry.includes('net::ERR_CONNECTION_RESET')) return
+  // A deliberately stopped bridge can either reset an existing connection or
+  // refuse a new poll. Outside this bounded restart window both remain errors.
+  if (plannedBridgeRestart && /net::ERR_CONNECTION_(?:RESET|REFUSED)/u.test(entry)) return
   if (message.type() === 'error' || message.type() === 'warning') issues.push(entry)
 })
 page.on('response', (response) => {
@@ -339,13 +341,13 @@ try {
   const audioAsset = libraryAssets.assets.find((asset) => asset.mediaKind === 'audio')
   assert.ok(audioAsset)
 
-  await studio.getByText('素材生成', { exact: true }).first().click()
+  await studio.getByRole('list', { name: '制片智能体依赖图' }).getByText('素材生成', { exact: true }).click()
   await bindProjectImageToContinuityCards(studio, '人物视图', true)
   await bindProjectImageToContinuityCards(studio, '服饰状态')
   await bindProjectImageToContinuityCards(studio, '地点基准')
   await studio.getByText('0 镜头受阻', { exact: true }).waitFor({ state: 'visible' })
 
-  await studio.getByText('H3 镜头生成', { exact: true }).first().click()
+  await studio.getByRole('list', { name: '制片智能体依赖图' }).getByText('H3 镜头生成', { exact: true }).click()
   const candidatePool = studio.getByRole('region', { name: '当前镜头视频候选' })
   await candidatePool.getByText(/暂无候选/u).waitFor({ state: 'visible' })
   await videoAdapter.getByRole('button', { name: '生成 5 秒 720P 候选', exact: true }).click()
@@ -369,7 +371,7 @@ try {
   assert.ok(fixtureRequests.length >= 10)
   assert.ok(fixtureRequests.every(({ authorization }) => authorization === 'Bearer qa-image-secret-1234' || authorization === 'Bearer qa-speech-secret-1234' || authorization === 'Bearer qa-video-secret-1234'))
 
-  await studio.getByText('声音字幕', { exact: true }).first().click()
+  await studio.getByRole('list', { name: '制片智能体依赖图' }).getByText('声音字幕', { exact: true }).click()
   const soundTimeline = studio.getByRole('region', { name: '声音字幕时间线' })
   await soundTimeline.waitFor({ state: 'visible' })
   await soundTimeline.getByRole('button', { name: '声线', exact: true }).click()
@@ -424,7 +426,7 @@ try {
   const restoredCandidatePool = restoredStudio.getByRole('region', { name: '当前镜头视频候选' })
   assert.equal(await restoredCandidatePool.locator('[data-video-candidate]').count(), 2)
   await restoredStudio.getByText(/候选 #2 · 已接受/u).waitFor({ state: 'visible' })
-  await restoredStudio.getByText('声音字幕', { exact: true }).first().click()
+  await restoredStudio.getByRole('list', { name: '制片智能体依赖图' }).getByText('声音字幕', { exact: true }).click()
   const restoredSoundTimeline = restoredStudio.getByRole('region', { name: '声音字幕时间线' })
   await restoredSoundTimeline.getByText(/sha256:/u).first().waitFor({ state: 'visible' })
   await restoredSoundTimeline.getByText('已批准', { exact: true }).first().waitFor({ state: 'visible' })
@@ -435,10 +437,10 @@ try {
   const localFixture = await injectCompletedLocalCandidateJobs(workspaceProjectId)
   assert.equal(localFixture.jobIds.length, 2)
   await page.reload({ waitUntil: 'domcontentloaded' })
-  plannedBridgeRestart = false
   await page.getByText('多智能体制片工作室', { exact: true }).first().waitFor({ state: 'visible', timeout: 10_000 })
   const localStudio = page.getByRole('region', { name: '多智能体制片工作室' })
   await localStudio.getByText(/已把 2 个本地 H3 成品写入对应镜头候选池/u).waitFor({ state: 'visible', timeout: 15_000 })
+  plannedBridgeRestart = false
   await localStudio.getByRole('listitem').filter({ hasText: 'H3 镜头生成' }).click()
   await localStudio.getByRole('heading', { name: 'H3 镜头生成', exact: true }).waitFor({ state: 'visible' })
   const localCandidatePool = localStudio.getByRole('region', { name: '当前镜头视频候选' })

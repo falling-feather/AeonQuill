@@ -8,6 +8,7 @@
     "../.runtime/release/embedded-build-identity.json",
     "../dist/**/*",
     "../server/rembg-runner.py",
+    "../server/align-speech-runner.py",
     "../server/workflows/*.json"
   ],
   "compress": "GZip",

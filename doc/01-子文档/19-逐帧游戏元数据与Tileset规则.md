@@ -3,7 +3,7 @@
 > 该文档隶属于[01-开发者文档](../01-开发者文档.md)，用于说明游戏元数据、Terrain、Tileset 与引擎交付。
 > 本文回答：锚点、碰撞区、8 邻域 Tileset、多 Terrain 地图、八方向角色和 Godot/Unity/RPG Maker 导出怎样实现。
 
-**最后一次更新时间**：2026-09-04
+**最后一次更新时间**：2026-09-23
 
 **更新者**：像素模式组、游戏资产责任域、文档专项组
 
@@ -162,6 +162,14 @@ UI 支持：
 笔触期间只更新 draft cells；结束后用一次 `terrain-maps.cells.patch` 提交去重变化。
 
 ---
+
+### 6.1 schema v8 的地形与对象层
+
+地图新增 `terrainLayer.visible/locked` 和有稳定 ID 的 `objectLayers`。对象保存像素坐标、尺寸、名称、标量 properties，以及可选 `frameId/collisionId`。v7 项目迁移时得到可见未锁定 Terrain 层和空对象层；不会丢失原有多 Terrain 格。
+
+所有编辑走 `pixelCore.mjs` 的 `terrain-object-layers.*` 与 `terrain-objects.*` 可逆命令，检查锁定、重复 ID、坐标界限和引用完整性。仍被对象使用的帧/碰撞区不能直接删除。对象锁定和显隐写入正文，撤销/重做、保存重开遵循相同语义。
+
+TMJ 导出 objectgroup，JSON/manifest 保留同一对象事实；地图 PNG、共享 Atlas 与 TMJ 统一 columns/padding/spacing。`inspectPixelTerrainCoverage` 给出实际缺失邻接 mask 和受影响格，不静默补画。契约测试为 `tests/pixel-object-layers.test.mjs`；真实浏览器入口为 `scripts/validate-pixel-objects-worker-ui.mjs`。
 
 ## 7. 多 Terrain 推断
 
@@ -341,8 +349,8 @@ npm run build
 
 ## 17. 当前限制
 
-- Terrain 编辑器目前是格子与规则层，没有独立对象层。
-- 缺失 bitmask 只做确定性 fallback，不自动生成缺失图块。
+- 对象层支持矩形位置/尺寸、标量属性及帧/碰撞引用；不提供任意脚本、旋转、多边形或嵌套对象。
+- 缺失 bitmask 可查看准确缺口与补画建议；预览保留确定性 fallback，不自动生成或覆盖图块。
 - 引擎桥是单向交付，不支持从引擎反向同步。
 - 碰撞矩形不支持多边形、旋转或骨骼。
 - 引擎脚本不执行事件、不嵌入音频，也不保证第三方插件兼容。

@@ -52,6 +52,25 @@ try {
     method: 'POST', body: JSON.stringify({ enabled: true }),
   })
 
+  const recipeInput = {
+    name: 'API 可复用配方', workflowId: custom.customWorkflow.id,
+    workflowHash: custom.customWorkflow.hash, mappingHash: custom.customWorkflow.mappingHash, parameters: {},
+  }
+  const savedRecipe = await requestJson(bridge, '/api/workflow-center/recipes', {
+    method: 'POST', body: JSON.stringify(recipeInput),
+  }, 201)
+  const recipeCatalog = await requestJson(bridge, '/api/workflow-center/recipes')
+  assert.equal(recipeCatalog.recipes[0].id, savedRecipe.recipe.id)
+  assert.equal(recipeCatalog.recipes[0].availability, 'ready')
+  const resolvedRecipe = await requestJson(bridge, `/api/workflow-center/recipes/${savedRecipe.recipe.id}/resolve`, {
+    method: 'POST', body: '{}',
+  })
+  assert.deepEqual(resolvedRecipe.recipe.parameters, {})
+  const privateRecipe = await requestJson(bridge, '/api/workflow-center/recipes', {
+    method: 'POST', body: JSON.stringify({ ...recipeInput, prompt: 'must not be retained' }),
+  }, 400)
+  assert.equal(privateRecipe.error.code, 'INVALID_WORKFLOW_RECIPE')
+
   const rejected = await requestJson(bridge, '/api/jobs/custom-workflow', {
     method: 'POST',
     body: JSON.stringify({ customWorkflowId: custom.customWorkflow.id, projectId: 'project-custom-api', title: '拒绝', prompt: 'x', arbitraryPath: 'D:\\escape' }),
@@ -72,6 +91,10 @@ try {
   const outputResponse = await bridge.request(completed.outputUrl)
   assert.equal(outputResponse.status, 200)
   assert.deepEqual(Buffer.from(await outputResponse.arrayBuffer()), fakeComfyPng)
+  const history = await requestJson(bridge, `/api/workflow-center/custom/${custom.customWorkflow.id}/runs?projectId=project-custom-api`)
+  assert.equal(history.jobs.length, 1)
+  assert.equal(history.jobs[0].id, completed.id)
+  await requestJson(bridge, `/api/workflow-center/custom/${custom.customWorkflow.id}/runs?projectId=project-not-found`, {}, 404)
 
   const missing = await requestJson(bridge, '/api/jobs/custom-workflow', {
     method: 'POST',

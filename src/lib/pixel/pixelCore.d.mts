@@ -10,6 +10,8 @@ export type PixelCommandType =
   | 'animation-events.add' | 'animation-events.remove' | 'animation-events.restore' | 'animation-events.patch'
   | 'terrain-maps.add' | 'terrain-maps.remove' | 'terrain-maps.restore' | 'terrain-maps.patch'
   | 'terrain-maps.resize' | 'terrain-maps.restore-shape' | 'terrain-maps.cells.patch'
+  | 'terrain-object-layers.add' | 'terrain-object-layers.remove' | 'terrain-object-layers.restore' | 'terrain-object-layers.patch'
+  | 'terrain-objects.add' | 'terrain-objects.remove' | 'terrain-objects.restore' | 'terrain-objects.patch'
   | 'onion-skin.set'
 
 export type PixelPaletteColor = { id: string; name: string; color: string }
@@ -27,12 +29,34 @@ export type PixelBlendMode = 'normal' | 'multiply' | 'screen' | 'add'
 export type PixelCollisionType = 'solid' | 'hitbox' | 'hurtbox' | 'interaction'
 export type PixelCollisionShape = { id: string; name: string; type: PixelCollisionType; x: number; y: number; width: number; height: number }
 export type PixelTileRule = { terrainId: string; bitmask: number }
+export type PixelTerrainLayer = { visible: boolean; locked: boolean }
+export type PixelTerrainObjectProperties = Record<string, string | number | boolean>
+export type PixelTerrainObject = {
+  id: string
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  frameId: string | null
+  collisionId: string | null
+  properties: PixelTerrainObjectProperties
+}
+export type PixelTerrainObjectLayer = {
+  id: string
+  name: string
+  visible: boolean
+  locked: boolean
+  objects: PixelTerrainObject[]
+}
 export type PixelTerrainMap = {
   id: string
   name: string
   width: number
   height: number
   cells: Array<string | null>
+  terrainLayer: PixelTerrainLayer
+  objectLayers: PixelTerrainObjectLayer[]
 }
 export type PixelFrameGameplay = {
   anchor: { x: number; y: number }
@@ -76,7 +100,7 @@ export type PixelAnimationEvent = {
 export type PixelOnionSkin = { enabled: boolean; previousFrames: number; nextFrames: number; opacity: number }
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 7
+  schemaVersion: 8
   id: string
   name: string
   width: number
@@ -110,7 +134,7 @@ export type SpriteSheetCell = {
 export type SpriteSheetFrame = SpriteSheetCell & { gameplay: PixelFrameGameplay }
 export type SpriteSheetLayout = { width: number; height: number; columns: number; rows: number; padding: number; spacing: number; cells: SpriteSheetCell[] }
 export type SpriteSheetMetadata = {
-  schemaVersion: 7
+  schemaVersion: 8
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -130,7 +154,7 @@ export type SpriteSheetMetadata = {
   terrainMaps: PixelTerrainMap[]
 }
 export type PixelAnimationClipMetadata = {
-  schemaVersion: 7
+  schemaVersion: 8
   kind: 'aeonquill.pixel-animation-clip'
   sourceDocumentId: string
   sourceRevision: number
@@ -152,7 +176,7 @@ export type PixelAnimationClipMetadata = {
 
 export class PixelContractError extends Error { code: string; details?: unknown }
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 7
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 8
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_PALETTE_CYCLE_DIRECTIONS: ReadonlyArray<PixelPaletteCycleDirection>
 export const PIXEL_ANIMATION_EVENT_TYPES: ReadonlyArray<PixelAnimationEventType>
@@ -163,7 +187,8 @@ export const PIXEL_LIMITS: Readonly<{
   maxWidth: number; maxHeight: number; maxPaletteColors: number; maxLayers: number; maxLayerGroups: number
   maxFrames: number; maxAnimationTags: number; maxPaletteCycles: number; maxPaletteCycleColors: number
   maxAnimationEvents: number; maxCollisionShapesPerFrame: number; maxTerrainMaps: number
-  maxTerrainMapWidth: number; maxTerrainMapHeight: number; maxTerrainMapCells: number; maxDocumentCells: number
+  maxTerrainMapWidth: number; maxTerrainMapHeight: number; maxTerrainMapCells: number; maxTerrainObjectLayers: number
+  maxTerrainObjects: number; maxTerrainObjectProperties: number; maxDocumentCells: number
   maxPixelsPerCommand: number; maxBulkCellsPerCommand: number; maxSpritePixels: number
 }>
 export function assertPixelDocument(input: unknown): PixelDocument
@@ -181,7 +206,8 @@ export function assertPixelCommand(input: unknown, document?: PixelDocument): Pi
 export function createPixelCommand(document: PixelDocument, type: PixelCommandType, payload: Record<string, unknown>, options?: { id?: string; actor?: PixelActor }): PixelCommand
 export function applyPixelCommand(document: PixelDocument, command: PixelCommand): PixelCommandResult
 export function renderPixelFrameRgba(document: PixelDocument, frameId: string, options?: { includeHiddenLayers?: boolean; paletteCycleElapsedMs?: number }): Uint8ClampedArray
+export function renderPixelFramesRgba(document: PixelDocument, frameIds: string[], options?: { includeHiddenLayers?: boolean; paletteCycleElapsedMs?: number }): { width: number; height: number; frames: Array<{ frameId: string; pixels: Uint8ClampedArray }> }
 export function createSpriteSheetLayout(document: PixelDocument, options?: { columns?: number; padding?: number; spacing?: number }): SpriteSheetLayout
 export function createSpriteSheetMetadata(document: PixelDocument, options?: { columns?: number; padding?: number; spacing?: number }): SpriteSheetMetadata
-export function renderSpriteSheetRgba(document: PixelDocument, options?: { columns?: number; padding?: number; spacing?: number }): { pixels: Uint8ClampedArray; layout: SpriteSheetLayout; metadata: SpriteSheetMetadata }
+export function renderSpriteSheetRgba(document: PixelDocument, options?: { columns?: number; padding?: number; spacing?: number; paletteCycleElapsedMs?: number }): { pixels: Uint8ClampedArray; layout: SpriteSheetLayout; metadata: SpriteSheetMetadata }
 export function renderPixelAnimationClipRgba(document: PixelDocument, tagId: string, options?: { columns?: number; padding?: number; spacing?: number }): { pixels: Uint8ClampedArray; layout: SpriteSheetLayout; metadata: PixelAnimationClipMetadata }

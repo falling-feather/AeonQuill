@@ -387,7 +387,7 @@ async function validatePixelGameUi(baseUrl) {
     assert.deepEqual([...terrainMapSprite.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.deepEqual([...terrainMapAtlas.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
     assert.deepEqual([...rpgMakerCharacter.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
-    assert.equal(project.schemaVersion, 7)
+    assert.equal(project.schemaVersion, 8)
     assert.equal(project.animationTags.some((tag) => tag.name === '八方演武'), true)
     assert.equal(project.paletteCycles.some((cycle) => cycle.name === '灵光轮转' && cycle.stepDurationMs === 80 && cycle.direction === 'ping-pong'), true)
     assert.equal(project.animationEvents.some((event) => event.name === '剑鸣' && event.type === 'sfx' && event.value === 'sfx.sword'), true)
@@ -415,7 +415,7 @@ async function validatePixelGameUi(baseUrl) {
       clipboardIndexes.map((index) => project.frames[clipboardTargetFrameIndex].cels[outlineLayerId][index]),
       clipboardIndexes.map((index) => project.frames[clipboardSourceFrameIndex].cels[lightLayerId][index]),
     )
-    assert.equal(manifest.schemaVersion, 7)
+    assert.equal(manifest.schemaVersion, 8)
     assert.equal(manifest.paletteCycles.some((cycle) => cycle.name === '灵光轮转'), true)
     assert.equal(manifest.animationEvents.some((event) => event.name === '剑鸣'), true)
     assert.equal(manifest.layerGroups.some((group) => group.id === groupId), true)
@@ -443,7 +443,7 @@ async function validatePixelGameUi(baseUrl) {
     assert.equal(/https?:\/\//u.test(viewer), false)
     assert.match(viewer, /collisionColors/u)
     assert.match(viewer, /paletteCycles/u)
-    assert.equal(clipManifest.schemaVersion, 7)
+    assert.equal(clipManifest.schemaVersion, 8)
     assert.equal(clipManifest.kind, 'aeonquill.pixel-animation-clip')
     assert.equal(clipManifest.frames.length, 8)
     assert.equal(clipManifest.animation.frameIds.length, 14)

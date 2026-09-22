@@ -17,6 +17,9 @@ const REQUEST_FIELDS = Object.freeze({
   'render-mix': new Set([
     'action', 'projectId', 'documentId', 'productionRevision', 'soundTimelineRevision', 'title',
   ]),
+  'render-local': new Set([
+    'action', 'projectId', 'documentId', 'productionRevision', 'soundTimelineRevision', 'title', 'cueIds', 'overlapMs',
+  ]),
 })
 
 export class SoundRendererError extends Error {
@@ -89,8 +92,8 @@ function digest(value) {
 
 export function validateSoundRenderRequest(input) {
   const action = input?.action
-  const fields = REQUEST_FIELDS[action]
-  if (!fields) fail('INVALID_SOUND_RENDER_REQUEST', 'action must be prepare-speech or render-mix')
+  const fields = Object.hasOwn(REQUEST_FIELDS, action) ? REQUEST_FIELDS[action] : null
+  if (!fields) fail('INVALID_SOUND_RENDER_REQUEST', 'Unsupported sound render action')
   const value = exactObject(input, fields, 'Sound render request')
   const common = {
     action,
@@ -108,6 +111,7 @@ export function validateSoundRenderRequest(input) {
       speechBudgetUsd: finite(value.speechBudgetUsd, 'speechBudgetUsd', 0, 1_000),
     }
   }
+  if (action === 'render-local') return { ...common, ...localRemixOptions({ cueIds: value.cueIds, overlapMs: value.overlapMs }) }
   return common
 }
 
@@ -205,6 +209,99 @@ export function compileSoundMixPlan(input) {
     subtitles,
     subtitleStyle: { ...timeline.subtitleStyle },
     mix: { ...timeline.mix },
+  }
+}
+
+function localRemixOptions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local remix options must be an object')
+  }
+  const unknown = Object.keys(value).filter((key) => !['cueIds', 'overlapMs'].includes(key))
+  if (unknown.length || !Object.hasOwn(value, 'cueIds')) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local remix options fields are invalid', { unknown })
+  }
+  if (!Array.isArray(value.cueIds) || value.cueIds.length !== 2 || value.cueIds[0] === value.cueIds[1]) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local remix requires two distinct cue ids')
+  }
+  value.cueIds.forEach((cueId, index) => identifier(cueId, `cueIds[${index}]`))
+  const overlapMs = value.overlapMs ?? 120
+  if (!Number.isSafeInteger(overlapMs) || overlapMs < 1 || overlapMs > 10_000) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'overlapMs must be an integer between 1 and 10,000')
+  }
+  return { cueIds: value.cueIds.slice(), overlapMs }
+}
+
+function approvedCueForLocalRemix(cue) {
+  if (!cue || cue.status !== 'approved' || cue.asset === null) {
+    fail('SOUND_CUE_NOT_APPROVED', 'Local remix only accepts approved immutable audio cues', 409, { cueId: cue?.id })
+  }
+  return cue
+}
+
+function adjacentSameKindCues(timeline, cueIds) {
+  const first = timeline.audioCues.find(({ id }) => id === cueIds[0])
+  const second = timeline.audioCues.find(({ id }) => id === cueIds[1])
+  if (!first || !second) fail('UNKNOWN_SOUND_CUE', 'Local remix references an unknown audio cue', 404)
+  approvedCueForLocalRemix(first)
+  approvedCueForLocalRemix(second)
+  if (first.kind !== second.kind) fail('SOUND_CUE_KIND_MISMATCH', 'Crossfade cues must have the same kind', 409, { cueIds })
+  const sortedSameKind = timeline.audioCues
+    .filter(({ kind }) => kind === first.kind)
+    .sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs || left.id.localeCompare(right.id))
+  const firstIndex = sortedSameKind.findIndex(({ id }) => id === first.id)
+  const secondIndex = sortedSameKind.findIndex(({ id }) => id === second.id)
+  if (Math.abs(firstIndex - secondIndex) !== 1) {
+    fail('SOUND_CUES_NOT_ADJACENT', 'Crossfade cues must be adjacent same-kind timeline cues', 409, { cueIds })
+  }
+  const left = first.startMs <= second.startMs ? first : second
+  const right = left.id === first.id ? second : first
+  if (right.startMs > left.endMs) {
+    fail('SOUND_CUES_NOT_ADJACENT', 'Crossfade cues must touch or overlap in the timeline', 409, { cueIds })
+  }
+  return { left, right }
+}
+
+/**
+ * Compile a local-only crossfade plan. The plan carries approved asset
+ * identities for exactly two adjacent same-kind cues; every other cue is
+ * listed as preserved so callers cannot silently widen the remixed region.
+ */
+export function compileLocalSoundRemixPlan(input, options) {
+  const timeline = assertSoundTimeline(input)
+  const { cueIds, overlapMs } = localRemixOptions(options)
+  const { left, right } = adjacentSameKindCues(timeline, cueIds)
+  const maxOverlapMs = Math.min(left.endMs - left.startMs, right.endMs - right.startMs)
+  if (overlapMs > maxOverlapMs) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Crossfade overlap exceeds one of the cue durations', 400, { overlapMs, maxOverlapMs })
+  }
+  const segmentStartMs = left.startMs
+  const segmentEndMs = right.endMs
+  const selectedIds = [left.id, right.id]
+  const cues = [left, right].map((cue, index) => ({
+    cueId: cue.id,
+    kind: cue.kind,
+    startMs: cue.startMs,
+    endMs: cue.endMs,
+    gainDb: cue.gainDb,
+    fadeInMs: cue.fadeInMs,
+    fadeOutMs: cue.fadeOutMs,
+    crossfadeInMs: index === 1 ? overlapMs : 0,
+    crossfadeOutMs: index === 0 ? overlapMs : 0,
+    asset: { ...cue.asset },
+  }))
+  return {
+    kind: 'aeonquill.sound-local-remix-plan',
+    schemaVersion: 1,
+    version: SOUND_RENDERER_VERSION,
+    timelineDigest: digest(timeline),
+    soundTimelineRevision: timeline.revision,
+    durationMs: timeline.durationMs,
+    segmentStartMs,
+    segmentEndMs,
+    cueIds: selectedIds,
+    overlapMs,
+    cues,
+    preservedCueIds: timeline.audioCues.filter(({ id }) => !selectedIds.includes(id)).map(({ id }) => id),
   }
 }
 
@@ -348,6 +445,68 @@ export function buildSoundMixFilter(plan) {
     'aresample=48000,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo[aout]',
   )
   return { filter: filters.join(';'), durationSeconds: plan.durationMs / 1_000 }
+}
+
+export function buildLocalSoundRemixFilter(plan) {
+  if (
+    !plan
+    || plan.kind !== 'aeonquill.sound-local-remix-plan'
+    || plan.schemaVersion !== 1
+    || !Array.isArray(plan.cues)
+    || plan.cues.length !== 2
+    || !Array.isArray(plan.cueIds)
+    || plan.cueIds.length !== 2
+    || plan.cueIds[0] !== plan.cues[0].cueId
+    || plan.cueIds[1] !== plan.cues[1].cueId
+  ) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local sound remix plan is invalid')
+  }
+  const durationMs = plan.segmentEndMs - plan.segmentStartMs
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0 || !Number.isSafeInteger(plan.overlapMs) || plan.overlapMs < 1 || plan.overlapMs >= durationMs) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local sound remix duration or overlap is invalid')
+  }
+  const [left, right] = plan.cues
+  const leftDurationMs = left.endMs - left.startMs
+  const rightDurationMs = right.endMs - right.startMs
+  const leftFadeDurationMs = durationMs - rightDurationMs + plan.overlapMs
+  if (
+    !Number.isSafeInteger(leftDurationMs)
+    || !Number.isSafeInteger(rightDurationMs)
+    || !Number.isSafeInteger(leftFadeDurationMs)
+    || leftDurationMs <= 0
+    || rightDurationMs <= 0
+    || leftFadeDurationMs <= 0
+    || left.crossfadeOutMs !== plan.overlapMs
+    || right.crossfadeInMs !== plan.overlapMs
+  ) {
+    fail('INVALID_SOUND_LOCAL_REMIX_PLAN', 'Local sound remix cue windows are invalid')
+  }
+  const leftChain = [
+    'aresample=48000',
+    'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo',
+    'asetpts=PTS-STARTPTS',
+    leftFadeDurationMs >= leftDurationMs
+      ? `apad=whole_dur=${fixedSeconds(leftFadeDurationMs)},atrim=duration=${fixedSeconds(leftFadeDurationMs)}`
+      : `atrim=duration=${fixedSeconds(leftFadeDurationMs)}`,
+    `volume=${left.gainDb.toFixed(1)}dB`,
+  ]
+  const rightChain = [
+    'aresample=48000',
+    'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo',
+    'asetpts=PTS-STARTPTS',
+    `atrim=duration=${fixedSeconds(rightDurationMs)}`,
+    `volume=${right.gainDb.toFixed(1)}dB`,
+  ]
+  const overlapSeconds = fixedSeconds(plan.overlapMs)
+  const segmentSeconds = fixedSeconds(durationMs)
+  const filter = [
+    `[0:a:0]${leftChain.join(',')}[local-left]`,
+    `[1:a:0]${rightChain.join(',')}[local-right]`,
+    `[local-left][local-right]acrossfade=d=${overlapSeconds}:c1=tri:c2=tri,` +
+      `atrim=duration=${segmentSeconds},` +
+      'aresample=48000,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo[local-out]',
+  ].join(';')
+  return { filter, durationSeconds: durationMs / 1_000 }
 }
 
 function terminate(child) {
@@ -494,6 +653,46 @@ export async function renderSoundMix({ ffmpegPath, ffprobePath, inputPaths, outp
       sampleRate: 48_000,
       channels: 2,
     },
+  }
+}
+
+export async function renderLocalSoundRemix({ ffmpegPath, ffprobePath, inputPaths, outputPath, plan, signal, onProgress }) {
+  if (!Array.isArray(inputPaths) || inputPaths.length !== 2) {
+    fail('SOUND_LOCAL_REMIX_INPUT_MISMATCH', 'Local remix requires exactly two resolved audio inputs', 409)
+  }
+  const graph = buildLocalSoundRemixFilter(plan)
+  onProgress?.({ phase: 'validating', progress: 10 })
+  await runCommand(ffmpegPath, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-i', inputPaths[0],
+    '-i', inputPaths[1],
+    '-filter_complex', graph.filter,
+    '-map', '[local-out]',
+    '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2',
+    outputPath,
+  ], {
+    signal,
+    timeoutMs: 15 * 60 * 1_000,
+  })
+  const outputProbe = await probeAudioAsset(ffprobePath, outputPath, signal)
+  if (outputProbe.sampleRate !== 48_000 || outputProbe.channels !== 2) {
+    fail('SOUND_RENDER_QA_FAILED', 'Local remix is not 48kHz stereo', 500, { outputProbe })
+  }
+  if (Math.abs(outputProbe.duration - graph.durationSeconds) > 0.08) {
+    fail('SOUND_RENDER_QA_FAILED', 'Local remix duration differs from its bounded segment', 500, {
+      expectedDuration: graph.durationSeconds,
+      outputDuration: outputProbe.duration,
+    })
+  }
+  onProgress?.({ phase: 'completed', progress: 100 })
+  return {
+    version: SOUND_RENDERER_VERSION,
+    timelineDigest: plan.timelineDigest,
+    soundTimelineRevision: plan.soundTimelineRevision,
+    segmentStartMs: plan.segmentStartMs,
+    segmentEndMs: plan.segmentEndMs,
+    cueIds: plan.cueIds.slice(),
+    outputProbe,
   }
 }
 
