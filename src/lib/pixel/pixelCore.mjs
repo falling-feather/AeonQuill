@@ -233,6 +233,16 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function clonePixelDocumentValue(document) {
+  const cloned = cloneJson({ ...document, frames: [] })
+  cloned.frames = document.frames.map((frame) => {
+    const clonedFrame = cloneJson({ ...frame, cels: {} })
+    for (const layerId of Object.keys(frame.cels)) clonedFrame.cels[layerId] = frame.cels[layerId].slice()
+    return clonedFrame
+  })
+  return cloned
+}
+
 function assertUniqueIds(items, path) {
   const seen = new Set()
   for (const item of items) {
@@ -895,7 +905,7 @@ function migrateLegacyDocument(input) {
 export function migratePixelDocument(input) {
   if (isRecord(input) && input.schemaVersion === PIXEL_DOCUMENT_SCHEMA_VERSION) {
     assertPixelDocument(input)
-    return cloneJson(input)
+    return clonePixelDocumentValue(input)
   }
   if (isRecord(input) && input.schemaVersion === 7) {
     const legacy = assertRecord(input, 'schemaSevenDocument')
@@ -1057,7 +1067,7 @@ export function deserializePixelDocument(serialized) {
 
 export function clonePixelDocument(document) {
   assertPixelDocument(document)
-  return cloneJson(document)
+  return clonePixelDocumentValue(document)
 }
 
 function resolveAnimationTagFrames(document, tag) {
@@ -1818,7 +1828,7 @@ export function applyPixelCommand(documentInput, commandInput) {
       received: command.baseRevision,
     })
   }
-  const next = cloneJson(document)
+  const next = clonePixelDocumentValue(document)
   const payload = command.payload
   let inverseType
   let inversePayload

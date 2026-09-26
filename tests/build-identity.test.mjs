@@ -10,6 +10,7 @@ import {
   resolveBuildIdentity,
 } from '../server/build-identity.mjs'
 import { JobStore } from '../server/job-store.mjs'
+import { FUNCTIONAL_TRACK } from '../desktop/release/product-identity.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const testRoot = join(projectRoot, '.runtime', 'tests')
@@ -22,14 +23,14 @@ test('build identity binds product, functional track, source commit and runtime 
     environment: {
       AEONQUILL_BUILD_COMMIT: sourceCommit,
       AEONQUILL_PRODUCT_VERSION: '0.7.1',
-      AEONQUILL_FUNCTIONAL_TRACK: 'V0.7.83',
+      AEONQUILL_FUNCTIONAL_TRACK: FUNCTIONAL_TRACK,
       AEONQUILL_BUILD_IDENTITY_VERSION: 'aeonquill-build-identity-v1',
       AEONQUILL_RUNTIME_REGISTRY_VERSION: 'aeonquill-runtime-registry-v1',
     },
   })
 
   assert.equal(identity.productVersion, '0.7.1')
-  assert.equal(identity.functionalTrack, 'V0.7.83')
+  assert.equal(identity.functionalTrack, FUNCTIONAL_TRACK)
   assert.equal(identity.sourceCommit, sourceCommit)
   assert.equal(identity.sourceCommitShort, sourceCommit.slice(0, 8))
   assert.equal(identity.runtimePackageId, runtimePackageId)
@@ -37,7 +38,7 @@ test('build identity binds product, functional track, source commit and runtime 
   assert.deepEqual(executionIdentity(identity), {
     identityHash: identity.identityHash,
     productVersion: '0.7.1',
-    functionalTrack: 'V0.7.83',
+    functionalTrack: FUNCTIONAL_TRACK,
     sourceCommit,
     runtimePackageId,
     runtimeRegistryVersion: 'aeonquill-runtime-registry-v1',
@@ -48,7 +49,7 @@ test('packaged build identity uses an immutable embedded commit and rejects drif
   const embeddedIdentity = {
     schemaVersion: 'aeonquill-embedded-build-identity-v1',
     productVersion: '0.7.1',
-    functionalTrack: 'V0.7.83',
+    functionalTrack: FUNCTIONAL_TRACK,
     buildIdentityVersion: 'aeonquill-build-identity-v1',
     runtimeRegistryVersion: 'aeonquill-runtime-registry-v1',
     sourceCommit,
@@ -57,6 +58,12 @@ test('packaged build identity uses an immutable embedded commit and rejects drif
   const identity = await resolveBuildIdentity({ environment: {}, embeddedIdentity })
   assert.equal(identity.sourceCommit, sourceCommit)
   assert.equal(identity.sourceState, 'commit')
+  assert.throws(
+    () => embeddedSourceCommit({ ...embeddedIdentity, functionalTrack: 'V0.0.0' }),
+    (error) => error.code === 'BUILD_IDENTITY_EMBEDDED_INVALID'
+      && error.expected === FUNCTIONAL_TRACK
+      && error.actual === 'V0.0.0',
+  )
   await assert.rejects(
     resolveBuildIdentity({
       environment: { AEONQUILL_BUILD_COMMIT: '5'.repeat(40) },

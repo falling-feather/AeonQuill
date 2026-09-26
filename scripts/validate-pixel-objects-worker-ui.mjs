@@ -45,7 +45,8 @@ const performanceThresholds = validatePerformanceThresholds(JSON.parse(await rea
   'utf8',
 )))
 
-function observePage(page, issues, requests) {
+function observePage(page, issues, requests, persistenceRequests = []) {
+  const persistenceByRequest = new Map()
   page.on('pageerror', (error) => issues.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') {
@@ -54,8 +55,36 @@ function observePage(page, issues, requests) {
   })
   page.on('response', (response) => {
     if (response.status() >= 400) issues.push(`http ${response.status()}: ${response.url()}`)
+    const persistence = persistenceByRequest.get(response.request())
+    if (persistence) {
+      persistence.status = response.status()
+      persistence.endedAt = Date.now()
+      persistence.durationMs = persistence.endedAt - persistence.startedAt
+      persistenceByRequest.delete(response.request())
+    }
   })
-  page.on('request', (request) => requests.push(request.url()))
+  page.on('requestfailed', (request) => {
+    const persistence = persistenceByRequest.get(request)
+    if (!persistence) return
+    persistence.endedAt = Date.now()
+    persistence.durationMs = persistence.endedAt - persistence.startedAt
+    persistence.error = request.failure()?.errorText ?? 'request failed'
+    persistenceByRequest.delete(request)
+  })
+  page.on('request', (request) => {
+    requests.push(request.url())
+    if (request.method() !== 'PUT' || !request.url().includes('/api/workspace/documents/')) return
+    const persistence = {
+      startedAt: Date.now(),
+      method: request.method(),
+      url: request.url(),
+      status: null,
+      endedAt: null,
+      durationMs: null,
+    }
+    persistenceRequests.push(persistence)
+    persistenceByRequest.set(request, persistence)
+  })
 }
 
 function fnv1a(bytes) {
@@ -118,6 +147,112 @@ async function waitForDownloads(downloads, count, timeoutMs = 20_000) {
 
 function delay(durationMs) {
   return new Promise((resolve) => setTimeout(resolve, durationMs))
+}
+
+async function captureInteractionState(page, persistenceRequests, cycle, phase) {
+  const ui = await page.evaluate(({ cycle: currentCycle, phase: currentPhase }) => {
+    const buttonState = (name) => {
+      const button = [...document.querySelectorAll('button')].find((entry) => entry.textContent?.trim() === name)
+      return {
+        exists: Boolean(button),
+        disabled: button?.disabled ?? null,
+        visible: Boolean(button?.getClientRects().length),
+      }
+    }
+    const status = (selector) => document.querySelector(selector)?.textContent?.trim().slice(0, 180) ?? null
+    const computation = document.querySelector('.aq-pixel-computation-status')
+    const telemetry = globalThis.__pixelWorkerTelemetry
+    return {
+      cycle: currentCycle,
+      phase: currentPhase,
+      capturedAt: new Date().toISOString(),
+      revision: status('.aq-pixel-document-title small'),
+      pixelStatus: status('.aq-pixel-status'),
+      computation: {
+        visible: Boolean(computation?.getClientRects().length),
+        text: computation?.textContent?.trim().slice(0, 180) ?? null,
+      },
+      history: {
+        undo: buttonState('撤销'),
+        redo: buttonState('重做'),
+      },
+      notices: [...document.querySelectorAll('[role="alert"], [role="status"]')]
+        .map((entry) => entry.textContent?.trim().slice(0, 180) ?? '')
+        .filter(Boolean)
+        .slice(-4),
+      worker: telemetry ? {
+        created: telemetry.created,
+        terminated: telemetry.terminated,
+        posts: telemetry.posts?.length ?? 0,
+        responses: telemetry.responses?.length ?? 0,
+        active: telemetry.created - telemetry.terminated,
+      } : null,
+    }
+  }, { cycle, phase })
+  const pending = persistenceRequests.filter((request) => request.endedAt === null)
+  const latest = persistenceRequests.at(-1)
+  return {
+    ...ui,
+    persistence: {
+      pendingCount: pending.length,
+      totalRequests: persistenceRequests.length,
+      latest: latest ? {
+        status: latest.status,
+        durationMs: latest.durationMs,
+        startedAt: latest.startedAt,
+        endedAt: latest.endedAt,
+      } : null,
+    },
+  }
+}
+
+async function captureInteractionFailure(page, persistenceRequests, cycle, phase, error) {
+  return {
+    ...(await captureInteractionState(page, persistenceRequests, cycle, phase)),
+    error: {
+      name: error?.name ?? 'Error',
+      message: error?.message ?? String(error),
+      stack: error?.stack?.split('\n').slice(0, 4).join('\n') ?? String(error),
+    },
+  }
+}
+
+function pixelRevisionFromText(text) {
+  const match = /revision\s+(\d+)/u.exec(text ?? '')
+  return match ? Number(match[1]) : null
+}
+
+function remainingControlMs(deadline) {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) throw new Error('pixel control deadline exceeded')
+  return remaining
+}
+
+async function waitForPixelRevisionAdvance(page, previousText, deadline) {
+  const previousRevision = pixelRevisionFromText(previousText)
+  if (!Number.isSafeInteger(previousRevision)) throw new Error(`Invalid pixel revision text: ${previousText}`)
+  await page.waitForFunction((expectedRevision) => {
+    const text = document.querySelector('.aq-pixel-document-title small')?.textContent ?? ''
+    const match = /revision\s+(\d+)/u.exec(text)
+    return match ? Number(match[1]) > expectedRevision : false
+  }, previousRevision, { timeout: remainingControlMs(deadline) })
+  const text = await page.locator('.aq-pixel-document-title small').textContent()
+  const revision = pixelRevisionFromText(text)
+  if (!Number.isSafeInteger(revision) || revision <= previousRevision) {
+    throw new Error(`Pixel revision did not advance from ${previousRevision}: ${text}`)
+  }
+  return { text, revision }
+}
+
+async function clickPixelHistoryButton(page, name, deadline) {
+  const button = page.getByRole('button', { name, exact: true })
+  await button.waitFor({ state: 'visible', timeout: remainingControlMs(deadline) })
+  await page.waitForFunction((buttonName) => [...document.querySelectorAll('button')].some((entry) => (
+    entry.textContent?.trim() === buttonName
+      && !entry.disabled
+      && entry.getClientRects().length > 0
+  )), name, { timeout: remainingControlMs(deadline) })
+  await button.click({ timeout: remainingControlMs(deadline) })
 }
 
 function metricMap(payload) {
@@ -212,7 +347,7 @@ function thresholdCheck(id, actual, limit, unit) {
   }
 }
 
-async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
+async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests) {
   const session = await context.newCDPSession(page)
   await session.send('Performance.enable')
   await session.send('HeapProfiler.enable')
@@ -234,6 +369,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
   let cancelTimeouts = 0
   let undoTimeouts = 0
   let redoTimeouts = 0
+  const interactionDiagnostics = []
+  const revisionVerification = { drawAdvances: 0, undoAdvances: 0, redoAdvances: 0, failures: 0 }
   let editedDocuments = 0
   let undoRedoPairs = 0
   let healthWritten = false
@@ -250,15 +387,20 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
       columns: 256,
       rows: 256,
     })
-    await delay(50)
-    const preflightRevisionAfter = await revisionText()
+    const preflightRevisionAfter = (await waitForPixelRevisionAdvance(
+      page,
+      preflightRevisionBefore,
+      Date.now() + 3_000,
+    )).text
     preflightSamples.push({ index, revisionBefore: preflightRevisionBefore, revisionAfter: preflightRevisionAfter, probe: preflight })
     assert.equal(preflight.status, 'ok', `PERF-004 input preflight ${index + 1} did not receive a real pointer event: ${JSON.stringify(preflight)}`)
     assert.notEqual(preflightRevisionAfter, preflightRevisionBefore, `PERF-004 preflight ${index + 1} did not advance the pixel document revision`)
     inputLatencies.push(preflight.handlerToFrameMs)
     inputEventToHandlerLatencies.push(preflight.eventToHandlerMs)
     editedDocuments += 1
-    await page.getByRole('button', { name: '撤销', exact: true }).click()
+    const preflightUndoDeadline = Date.now() + 3_000
+    await clickPixelHistoryButton(page, '撤销', preflightUndoDeadline)
+    await waitForPixelRevisionAdvance(page, preflightRevisionAfter, preflightUndoDeadline)
     if (index < 2) await delay(1_000)
   }
   const preflight = { requiredSamples: 3, samples: preflightSamples }
@@ -280,6 +422,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
       cancelTimeouts,
       undoTimeouts,
       redoTimeouts,
+      interactionDiagnostics,
+      revisionVerification,
       inputLatency: {
         handlerToFrame: inputLatencies.length ? summarizeSamples(inputLatencies) : null,
         eventToHandler: inputEventToHandlerLatencies.length ? summarizeSamples(inputEventToHandlerLatencies) : null,
@@ -312,6 +456,7 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
   while (Date.now() - soakStartedAt < durationMs) {
     const cycleStartedAt = Date.now()
     await page.bringToFront()
+    const revisionBeforeDraw = await revisionText()
     const column = cycles % 16
     const row = 128 + (Math.floor(cycles / 16) % 16)
     const inputLatency = await measureCanvasInputLatency(page, canvas, {
@@ -331,15 +476,29 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
       inputLatencyDiagnostics.push(inputLatency)
     }
     editedDocuments += 1
+    let drawRevision = null
+    const undoDeadline = Date.now() + 3_000
     try {
-      await page.getByRole('button', { name: '撤销', exact: true }).click({ force: true, timeout: 3_000 })
-    } catch {
+      drawRevision = await waitForPixelRevisionAdvance(page, revisionBeforeDraw, undoDeadline)
+      revisionVerification.drawAdvances += 1
+      await clickPixelHistoryButton(page, '撤销', undoDeadline)
+    } catch (error) {
       undoTimeouts += 1
+      revisionVerification.failures += 1
+      interactionDiagnostics.push(await captureInteractionFailure(page, persistenceRequests, cycles, 'undo-catch', error))
     }
+    const redoDeadline = Date.now() + 3_000
     try {
-      await page.getByRole('button', { name: '重做', exact: true }).click({ force: true, timeout: 3_000 })
-    } catch {
+      if (!drawRevision) throw new Error('Undo was not attempted because draw revision did not advance')
+      const undoRevision = await waitForPixelRevisionAdvance(page, drawRevision.text, redoDeadline)
+      revisionVerification.undoAdvances += 1
+      await clickPixelHistoryButton(page, '重做', redoDeadline)
+      await waitForPixelRevisionAdvance(page, undoRevision.text, redoDeadline)
+      revisionVerification.redoAdvances += 1
+    } catch (error) {
       redoTimeouts += 1
+      revisionVerification.failures += 1
+      interactionDiagnostics.push(await captureInteractionFailure(page, persistenceRequests, cycles, 'redo-catch', error))
     }
     undoRedoPairs += 1
     // Completion can remove the control between two automation calls. Resolve
@@ -443,6 +602,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
       cancelTimeouts,
       undoTimeouts,
       redoTimeouts,
+      interactionDiagnostics,
+      revisionVerification,
       foregroundBackgroundSwitches: cycles,
       visibilityStates: [...new Set(visibilityStates)],
     },
@@ -520,6 +681,7 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
   const page = await context.newPage()
   const issues = []
   const requests = []
+  const persistenceRequests = []
   const downloads = []
   const workerTelemetry = {
     created: 0,
@@ -611,7 +773,7 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
       }
     }
   })
-  observePage(page, issues, requests)
+  observePage(page, issues, requests, persistenceRequests)
   page.on('download', (download) => downloads.push(download))
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
@@ -792,7 +954,7 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
     await page.screenshot({ path: largeScreenshotPath, fullPage: true })
 
     const soakResult = soakMinutes > 0
-      ? await runPixelSoak(page, context, workerTelemetry, largeMapEditor)
+      ? await runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests)
       : null
     if (soakResult?.thresholdAssessment.status === 'failed') {
       const failedChecks = soakResult.thresholdAssessment.checks

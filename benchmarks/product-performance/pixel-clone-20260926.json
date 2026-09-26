@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "status": "core-verified-stress-pending",
+  "generatedAt": "2026-09-26T04:25:10.664Z",
+  "environment": {
+    "browser": "Microsoft Edge via Playwright",
+    "edgePath": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "node": "v24.20.0",
+    "platform": "win32-10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+    "logicalCpuCount": 22,
+    "totalMemoryBytes": 33844576256,
+    "gpu": "disabled by --disable-gpu",
+    "build": "existing dist; no build run by profile"
+  },
+  "cloneOptimization": {
+    "fixture": {
+      "width": 256,
+      "height": 256,
+      "frames": 96,
+      "layers": 1,
+      "serializedBytes": 31475418,
+      "sampleCount": 7,
+      "order": "baseline/optimized alternating per sample"
+    },
+    "baselineJsonClone": {
+      "count": 7,
+      "medianMs": 198.035,
+      "p95Ms": 224.892,
+      "minMs": 190.796,
+      "maxMs": 225.409,
+      "samplesMs": [
+        190.796,
+        192.538,
+        194.197,
+        198.035,
+        208.459,
+        223.684,
+        225.409
+      ]
+    },
+    "optimizedClonePixelDocument": {
+      "count": 7,
+      "medianMs": 36.234,
+      "p95Ms": 42.766,
+      "minMs": 27.045,
+      "maxMs": 43.933,
+      "samplesMs": [
+        27.045,
+        29.104,
+        29.373,
+        36.234,
+        39.55,
+        40.041,
+        43.933
+      ]
+    },
+    "speedup": {
+      "medianRatio": 5.465,
+      "p95Ratio": 5.259
+    },
+    "applyPixelCommand": {
+      "count": 7,
+      "medianMs": 35.314,
+      "p95Ms": 42.059,
+      "minMs": 34.154,
+      "maxMs": 43.955,
+      "samplesMs": [
+        34.154,
+        34.523,
+        35.271,
+        35.314,
+        35.367,
+        37.636,
+        43.955
+      ]
+    },
+    "serializePixelDocument": {
+      "count": 7,
+      "medianMs": 149.194,
+      "p95Ms": 161.196,
+      "minMs": 140.251,
+      "maxMs": 161.78,
+      "samplesMs": [
+        140.251,
+        143.398,
+        144.679,
+        149.194,
+        154.834,
+        159.835,
+        161.78
+      ]
+    },
+    "byteEquality": {
+      "serializedEqual": true,
+      "baselineBytes": 31475418,
+      "optimizedBytes": 31475418,
+      "topLevelKeyOrderEqual": true,
+      "frameKeyOrderEqual": true,
+      "celKeyOrderEqual": true,
+      "nestedIsolation": true
+    },
+    "previousProfileCoreBench": {
+      "documentShape": {
+        "width": 256,
+        "height": 256,
+        "frames": 96,
+        "layers": 1,
+        "celCells": 6291456,
+        "terrainCells": 1,
+        "approximateCelArrayBytes": 50331648
+      },
+      "serializedBytes": 31475418,
+      "applyPixelCommandMs": {
+        "count": 5,
+        "p50": 191.67,
+        "p95": 202.98,
+        "min": 176.29,
+        "max": 204.54,
+        "samples": [
+          191.67,
+          176.29,
+          176.84,
+          196.76,
+          204.54
+        ]
+      },
+      "serializePixelDocumentMs": {
+        "count": 5,
+        "p50": 140.93,
+        "p95": 150.88,
+        "min": 134.51,
+        "max": 152.36,
+        "samples": [
+          144.96,
+          140.93,
+          152.36,
+          134.51,
+          138.75
+        ]
+      }
+    }
+  },
+  "coreTests": {
+    "passed": 16,
+    "failed": 0
+  },
+  "stress": {
+    "status": "failed",
+    "cycles": 60,
+    "redoTimeouts": 1,
+    "workerCreated": 568,
+    "workerTerminated": 568,
+    "inputHandlerToFrameP95Ms": 1364.08
+  },
+  "limitations": [
+    "Microbenchmark measures deep copy, not whole-editor responsiveness.",
+    "The first stress run failed one redo control timeout. Its precise cause was not captured. Revised instrumentation awaits a fresh full run."
+  ]
+}

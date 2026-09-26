@@ -6,6 +6,7 @@ import {
   assertPixelDocument,
   createPixelCommand,
   createPixelDocument,
+  clonePixelDocument,
   createSpriteSheetLayout,
   createSpriteSheetMetadata,
   deserializePixelDocument,
@@ -36,6 +37,12 @@ function withoutRevision(document) {
   const copy = structuredClone(document)
   delete copy.revision
   return copy
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const child of Object.values(value)) deepFreeze(child)
+  return Object.freeze(value)
 }
 
 function makeMultiLayerMultiFrameDocument() {
@@ -306,6 +313,54 @@ test('serializes schema v8 without loss and migrates v1-v7 plus the single-layer
   assert.equal(migrated.palette[0].color, '#112233FF')
   assert.equal(migrated.frames[0].durationMs, 90)
   assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 2 }, collisions: [], tileRule: null })
+})
+
+test('keeps PixelDocument clone key order and nested independence', () => {
+  const document = makeMultiLayerMultiFrameDocument()
+  const serialized = serializePixelDocument(document)
+  const cloned = clonePixelDocument(document)
+  const migrated = migratePixelDocument(document)
+
+  assert.equal(serializePixelDocument(cloned), serialized)
+  assert.equal(serializePixelDocument(migrated), serialized)
+  assert.deepEqual(Object.keys(cloned), Object.keys(document))
+  assert.deepEqual(Object.keys(cloned.frames[0]), Object.keys(document.frames[0]))
+  assert.deepEqual(Object.keys(cloned.frames[0].cels), Object.keys(document.frames[0].cels))
+
+  cloned.frames[1].cels['layer-1'][0] = 'blue'
+  cloned.frames[0].gameplay.anchor.x = 0
+  cloned.palette[0].color = '#010203FF'
+  migrated.frames[1].cels.highlight[0] = 'red'
+  assert.notEqual(cloned.frames[1].cels['layer-1'][0], document.frames[1].cels['layer-1'][0])
+  assert.equal(document.frames[0].gameplay.anchor.x, 1)
+  assert.equal(document.palette[0].color, '#FF0000FF')
+  assert.notEqual(migrated.frames[1].cels.highlight[0], document.frames[1].cels.highlight[0])
+})
+
+test('applies paint, undo and redo from a deeply frozen PixelDocument', () => {
+  const frozen = deepFreeze(structuredClone(makeMultiLayerMultiFrameDocument()))
+  const paint = createPixelCommand(frozen, 'pixels.paint', {
+    frameId: frozen.activeFrameId,
+    layerId: frozen.activeLayerId,
+    pixels: [{ x: 0, y: 0, colorId: 'blue' }],
+  }, { id: 'frozen-paint', actor: 'user' })
+  const changed = applyPixelCommand(frozen, paint)
+  const undone = applyPixelCommand(changed.document, {
+    ...changed.inverse,
+    id: 'frozen-undo',
+    baseRevision: changed.document.revision,
+  })
+  const redone = applyPixelCommand(undone.document, {
+    ...paint,
+    id: 'frozen-redo',
+    baseRevision: undone.document.revision,
+  })
+
+  assert.deepEqual(withoutRevision(undone.document), withoutRevision(frozen))
+  assert.deepEqual(withoutRevision(redone.document), withoutRevision(changed.document))
+  assert.equal(frozen.frames[0].cels['layer-1'][0], 'red')
+  assert.equal(changed.document.frames[0].cels[frozen.activeLayerId][0], 'blue')
+  assert.equal(redone.document.frames[0].cels[frozen.activeLayerId][0], 'blue')
 })
 
 test('multi-terrain maps are bounded, persistent and exactly reversible across cell, metadata and top-left resize commands', () => {

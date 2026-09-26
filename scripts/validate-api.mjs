@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
 import { createProjectCatalog, createWorkspaceProject, serializeProjectCatalog } from '../src/lib/project/projectCatalog.mjs'
 import { startIsolatedBridge } from './qa-runtime.mjs'
+import { FUNCTIONAL_TRACK } from '../desktop/release/product-identity.mjs'
 
 const sourcePath = fileURLToPath(new URL('../src/assets/sample-summer-character.png', import.meta.url))
 const libraryPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg=='
@@ -26,7 +27,7 @@ function assertPublicJob(job) {
     assert.ok(!(privateKey in job), `public job must not expose ${privateKey}`)
   }
   assert.equal(job.executionIdentity?.productVersion, '0.7.1')
-  assert.equal(job.executionIdentity?.functionalTrack, 'V0.7.83')
+  assert.equal(job.executionIdentity?.functionalTrack, FUNCTIONAL_TRACK)
   assert.match(job.executionIdentity?.identityHash || '', /^[a-f0-9]{64}$/u)
 }
 
@@ -79,7 +80,7 @@ try {
   assert.equal(health.ok, true)
   assert.equal(health.service, 'miaohui-local-bridge')
   assert.equal(health.identity.productVersion, '0.7.1')
-  assert.equal(health.identity.functionalTrack, 'V0.7.83')
+  assert.equal(health.identity.functionalTrack, FUNCTIONAL_TRACK)
   assert.equal(health.identity.runtimeRegistryVersion, 'aeonquill-runtime-registry-v1')
   assert.match(health.identity.sourceCommit || '', /^[a-f0-9]{40}$/u)
 
