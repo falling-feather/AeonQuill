@@ -166,6 +166,78 @@ test('region, point and portrait requests normalize into strict stored contracts
   assert.equal(portrait.params.identityStrength, 0.9)
 })
 
+test('Qwen image requests accept lightning4 and retain base40 compatibility', () => {
+  const base = validateSemanticImageRequest({
+    workflowId: 'region-edit',
+    projectId: 'project-semantic',
+    sourceImageDataUrl,
+    maskImageDataUrl,
+    params: { instruction: '修改颜色', preset: 'base40' },
+  })
+  assert.equal(base.workflowVersion, 'qwen-image-edit-2511-int8-v1')
+  assert.equal('preset' in base.params, false)
+
+  const lightning = validateSemanticImageRequest({
+    workflowId: 'region-edit',
+    projectId: 'project-semantic',
+    sourceImageDataUrl,
+    maskImageDataUrl,
+    params: { instruction: '修改颜色', preset: 'lightning4' },
+  })
+  assert.equal(lightning.workflowVersion, 'qwen-image-edit-2511-int8-lightning4-v1')
+  assert.equal(lightning.params.preset, 'lightning4')
+
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'element-extract',
+      sourceImageDataUrl,
+      params: { positivePoints: [{ x: 0.5, y: 0.5 }], preset: 'lightning4' },
+    }),
+    /unsupported field/u,
+  )
+  assert.throws(
+    () => validateSemanticImageRequest({
+      workflowId: 'portrait-adjust',
+      projectId: 'project-semantic',
+      sourceImageDataUrl,
+      params: { instruction: '调整', preset: 'unknown' },
+    }),
+    (error) => error.code === 'INVALID_IMAGE_EDIT_PRESET',
+  )
+})
+
+test('Qwen catalog exposes installed and runtime status for base40 and lightning4 presets', () => {
+  const definitions = semanticWorkflowDefinitions()
+  const required = new Set(definitions.flatMap((item) => item.requiredArtifacts))
+  const extensions = new Set(definitions.flatMap((item) => item.requiredExtensions))
+  const objectInfo = Object.fromEntries(definitions.flatMap((item) => item.requiredNodes).map((id) => [id, {}]))
+  const catalog = evaluateSemanticWorkflowCatalog({
+    extensions,
+    artifacts: [...required, 'qwen-image-edit-2511-lightning4-bf16-v1'],
+    objectInfo: { ...objectInfo, LoraLoaderModelOnly: {} },
+    runtime: { connected: true },
+  })
+  for (const id of ['region-edit', 'point-edit', 'portrait-adjust']) {
+    const workflow = catalog.workflows.find((item) => item.id === id)
+    assert.deepEqual(workflow.presets.map(({ id: presetId }) => presetId), ['base40', 'lightning4'])
+    assert.equal(workflow.presets.every(({ installed }) => installed), true)
+    assert.equal(workflow.presets.every(({ status }) => status === 'ready'), true)
+    assert.equal(workflow.presets.every(({ available }) => available), true)
+  }
+
+  const missing = evaluateSemanticWorkflowCatalog({
+    artifacts: [...required],
+    objectInfo,
+    runtime: { connected: true },
+  })
+  const lightning = missing.workflows.find((item) => item.id === 'region-edit').presets.find(({ id }) => id === 'lightning4')
+  assert.equal(lightning.installed, false)
+  assert.equal(lightning.available, false)
+  assert.equal(lightning.status, 'missing-dependency')
+  assert.deepEqual(lightning.missingArtifacts, ['qwen-image-edit-2511-lightning4-bf16-v1'])
+  assert.deepEqual(lightning.missingNodes, ['LoraLoaderModelOnly'])
+})
+
 test('generative semantic requests reject invalid masks, parameters and ambiguous sources', () => {
   assert.throws(
     () => validateSemanticImageRequest({

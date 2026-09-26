@@ -3868,6 +3868,7 @@ const semanticImageExecutor = new SemanticImageExecutor({
   comfy,
   runtimeManager,
   inspectSemanticWorkflows,
+  verifyArtifacts: (artifactIds, options) => workflowCenter.verifyRegisteredArtifacts(artifactIds, options),
   imageProcessor,
   runProcess,
   ffmpegPath,

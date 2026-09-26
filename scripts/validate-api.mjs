@@ -121,7 +121,11 @@ try {
 
   const workflowCenter = await requestJson(bridge.baseUrl, '/api/workflow-center/catalog?refresh=1')
   assert.equal(workflowCenter.version, 'aeonquill-workflow-center-v2')
-  assert.equal(workflowCenter.packs.length, 6)
+  assert.equal(workflowCenter.packs.length, 7)
+  const lightningPack = workflowCenter.packs.find(({ id }) => id === 'image-qwen-edit-2511-lightning4')
+  assert.equal(lightningPack?.maturity, 'experimental')
+  assert.equal(lightningPack.artifacts.length, 4)
+  assert.ok(lightningPack.artifacts.some(({ id }) => id === 'qwen-image-edit-2511-lightning4-bf16-v1'))
   const h3QualityPack = workflowCenter.packs.find(({ id }) => id === 'h3-quality-int8')
   assert.equal(h3QualityPack.minVramGb, 8)
   assert.equal(h3QualityPack.license.acceptanceRequired, true)

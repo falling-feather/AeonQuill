@@ -1,4 +1,5 @@
 import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
+import type { ImageEditPresetId, ImageEditPresetMaturity } from './lib/imageEditPresets.mjs'
 
 export type ElementKind =
   | 'poster'
@@ -171,6 +172,17 @@ export type SemanticWorkflowCapability = {
   missingExtensions: string[]
   missingArtifacts: string[]
   missingNodes: string[]
+  presets?: Array<{
+    id: ImageEditPresetId
+    label: string
+    maturity: ImageEditPresetMaturity
+    available: boolean
+    installed: boolean
+    status: SemanticWorkflowStatus
+    message: string
+    missingArtifacts: string[]
+    missingNodes: string[]
+  }>
   resources: {
     class: 'cpu' | 'gpu'
     minVramGb: number
@@ -212,6 +224,7 @@ export type SemanticRegionEditRequest = {
   sourceElementId?: string
   title?: string
   params: {
+    preset?: ImageEditPresetId
     instruction: string
     seed: number
     maskChannel: 'alpha' | 'luma'
@@ -225,6 +238,7 @@ export type SemanticPointEditRequest = {
   sourceElementId?: string
   title?: string
   params: {
+    preset?: ImageEditPresetId
     positivePoints: SemanticPoint[]
     negativePoints: SemanticPoint[]
     threshold: number
@@ -240,6 +254,7 @@ export type SemanticPortraitAdjustRequest = {
   sourceElementId?: string
   title?: string
   params: {
+    preset?: ImageEditPresetId
     instruction: string
     identityStrength: number
     seed: number

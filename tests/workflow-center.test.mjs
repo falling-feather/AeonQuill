@@ -108,7 +108,7 @@ function fixturePack({ url, payload, manual = false }) {
 
 test('builtin workflow catalog exposes exact install, license, and RTX 4060 requirements', () => {
   const packs = builtinWorkflowPacks()
-  assert.equal(packs.length, 6)
+  assert.equal(packs.length, 7)
   const quality = packs.find(({ id }) => id === 'h3-quality-int8')
   assert.equal(quality.minVramGb, 8)
   assert.equal(quality.runtime.torchCudaFloor, 130)
@@ -122,6 +122,37 @@ test('builtin workflow catalog exposes exact install, license, and RTX 4060 requ
   assert.equal(qwen.license.spdx, 'Apache-2.0')
   assert.equal(qwen.artifacts.length, 3)
   assert.equal(qwen.artifacts.find(({ id }) => id === 'qwen-image-edit-2511-int8-convrot').sha256, '11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829')
+  const lightning = packs.find(({ id }) => id === 'image-qwen-edit-2511-lightning4')
+  assert.equal(lightning.maturity, 'experimental')
+  assert.equal(lightning.minVramGb, 8)
+  assert.equal(lightning.recommendedVramGb, 24)
+  assert.equal(lightning.estimatedMinutes, '待本机校准')
+  assert.equal(lightning.artifacts.length, 4)
+  assert.equal(lightning.requiredNodes.includes('LoraLoaderModelOnly'), true)
+  assert.equal(lightning.artifacts.find(({ id }) => id === 'qwen-image-edit-2511-lightning4-bf16-v1').sha256, '22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f')
+})
+
+test('verifyRegisteredArtifacts reuses registered candidates and fails closed for unknown ids', async () => {
+  const workspace = await temporaryWorkspace()
+  const payload = Buffer.from('registered artifact payload')
+  const pack = fixturePack({ url: 'https://example.com/payload.bin', payload })
+  const service = new WorkflowCenterService({ rootDirectory: workspace.stateRoot, getComfyRoot: () => workspace.comfyRoot, packs: [pack] })
+  try {
+    await service.open()
+    await mkdir(join(workspace.comfyRoot, 'models', 'test'), { recursive: true })
+    await writeFile(join(workspace.comfyRoot, 'models', 'test', 'payload.bin'), payload)
+    assert.deepEqual(
+      await service.verifyRegisteredArtifacts(['fixture-model']),
+      [{ id: 'fixture-model', sha256: digest(payload), bytes: payload.length }],
+    )
+    await assert.rejects(
+      service.verifyRegisteredArtifacts(['unregistered-model']),
+      (error) => error.code === 'WORKFLOW_WEIGHT_ARTIFACT_UNREGISTERED',
+    )
+  } finally {
+    await service.close()
+    await rm(workspace.root, { recursive: true, force: true })
+  }
 })
 
 test('resumes a controlled download, verifies SHA-256, atomically installs, and enables the pack', async () => {

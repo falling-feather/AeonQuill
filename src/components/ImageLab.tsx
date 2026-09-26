@@ -47,6 +47,7 @@ import type {
 import { MaskEditor } from './MaskEditor'
 import { SemanticPointEditor } from './SemanticPointEditor'
 import { ImageComparison } from './ImageComparison'
+import { IMAGE_EDIT_PRESETS, type ImageEditPresetId } from '../lib/imageEditPresets.mjs'
 
 export type ImageLabResult =
   | {
@@ -332,6 +333,7 @@ export function ImageLab({
     'portrait-adjust': '',
   })
   const [semanticSeed, setSemanticSeed] = useState(0)
+  const [editPreset, setEditPreset] = useState<ImageEditPresetId>('base40')
   const [identityStrength, setIdentityStrength] = useState(90)
   const [capabilityLoading, setCapabilityLoading] = useState(true)
   const [capabilityError, setCapabilityError] = useState<string | null>(null)
@@ -374,9 +376,12 @@ export function ImageLab({
   )
   const semanticCapability = useMemo<ImageToolCapability | undefined>(() => {
     if (!semanticWorkflow) return undefined
+    const usePreset = semanticWorkflow.id !== 'element-extract' && editPreset !== 'base40'
+    const preset = usePreset ? semanticWorkflow.presets?.find(({ id }) => id === editPreset) : undefined
     const runnableOnDemand = semanticWorkflow.implemented
-      && semanticWorkflow.installed
-      && ['ready', 'runtime-stopped'].includes(semanticWorkflow.status)
+      && (!usePreset || Boolean(preset))
+      && (preset?.installed ?? semanticWorkflow.installed)
+      && ['ready', 'runtime-stopped'].includes(preset?.status ?? semanticWorkflow.status)
     return {
       id: semanticWorkflow.operation ?? 'semantic-element-extract',
       label: semanticWorkflow.label,
@@ -384,7 +389,9 @@ export function ImageLab({
       provider: semanticWorkflow.id === 'element-extract' ? 'comfy-impact-sam' : 'comfy-qwen-image-edit-2511-int8',
       deterministic: false,
       available: runnableOnDemand,
-      unavailableReason: semanticWorkflow.message,
+      unavailableReason: usePreset
+        ? preset?.message ?? '当前后端尚未登记此编辑档位，请刷新能力或安装对应工作流包。'
+        : semanticWorkflow.message,
       models: semanticWorkflow.missingArtifacts.length
         ? []
         : semanticWorkflow.id === 'element-extract'
@@ -392,7 +399,7 @@ export function ImageLab({
           : ['qwen-image-edit-2511-int8'],
       params: semanticWorkflow.inputs,
     }
-  }, [semanticWorkflow])
+  }, [editPreset, semanticWorkflow])
   const remoteOperation: ImageOperationId | null = mode === 'upscale'
     ? upscaleProcessor
     : mode === 'element-extract'
@@ -643,6 +650,7 @@ export function ImageLab({
           title: `${element.name} · 区域编辑`,
           params: {
             instruction: semanticInstructions['region-edit'],
+            ...(editPreset !== 'base40' ? { preset: editPreset } : {}),
             seed: semanticSeed,
             maskChannel: 'alpha',
           },
@@ -660,6 +668,7 @@ export function ImageLab({
             negativePoints: semanticPoints.negativePoints,
             threshold: semanticThreshold / 100,
             instruction: semanticInstructions['point-edit'],
+            ...(editPreset !== 'base40' ? { preset: editPreset } : {}),
             seed: semanticSeed,
           },
         })
@@ -673,6 +682,7 @@ export function ImageLab({
           title: `${element.name} · 人像调整`,
           params: {
             instruction: semanticInstructions['portrait-adjust'],
+            ...(editPreset !== 'base40' ? { preset: editPreset } : {}),
             identityStrength: identityStrength / 100,
             seed: semanticSeed,
           },
@@ -947,6 +957,27 @@ export function ImageLab({
                   </div>
                 ) : null}
               </section>
+
+              {isQwenSemantic ? (
+                <div className="lab-setting-group">
+                  <label className="lab-select-setting">
+                    <span>编辑档位</span>
+                    <select aria-label="编辑档位" value={editPreset} disabled={isGenerating}
+                      onChange={(event) => setEditPreset(event.target.value as ImageEditPresetId)}>
+                      {Object.values(IMAGE_EDIT_PRESETS).map((preset) => {
+                        const capability = semanticWorkflow?.presets?.find(({ id }) => id === preset.id)
+                        const ready = preset.id === 'base40' || Boolean(capability?.installed && ['ready', 'runtime-stopped'].includes(capability.status))
+                        return <option key={preset.id} value={preset.id} disabled={!ready}>{preset.label}{ready ? '' : ' · 依赖未就绪'}</option>
+                      })}
+                    </select>
+                  </label>
+                  <small role="status">
+                    {editPreset === 'base40'
+                      ? '标准编辑流程。快速实验档需要在工作流中心安装对应加速模型。'
+                      : '使用固定加速 LoRA 生成候选，请检查效果后再接受。'}
+                  </small>
+                </div>
+              ) : null}
 
               {mode === 'adjust' ? (
                 <div className="lab-setting-group">

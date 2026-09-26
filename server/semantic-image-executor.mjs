@@ -6,8 +6,9 @@ import { MAX_ASSET_BYTES } from './project-store.mjs'
 import { redactSensitiveText, sanitizePublicPayload } from './security.mjs'
 import {
   buildSemanticImageWorkflow,
-  QWEN_SEMANTIC_WORKFLOW_VERSION,
 } from './semantic-image-workflow.mjs'
+import { getImageEditPreset } from '../src/lib/imageEditPresets.mjs'
+import { ARTIFACTS } from './workflow-artifacts.mjs'
 
 const SAFE_COMFY_SEGMENT = /^[A-Za-z0-9._-]+$/u
 const IMAGE_MIME_TYPES = new Map([
@@ -17,8 +18,44 @@ const IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp'],
 ])
 
+const QWEN_IMAGE_EDIT_ARTIFACTS = Object.freeze([
+  ARTIFACTS.qwenImageEdit2511Int8,
+  ARTIFACTS.qwenImageTextEncoderFp8,
+  ARTIFACTS.qwenImageVae,
+])
+
 function semanticError(code, message, status = 400, details) {
   return Object.assign(new Error(message), { code, status, ...(details ? { details } : {}) })
+}
+
+function normalizeVerifiedArtifacts(value, expectedArtifacts) {
+  if (!Array.isArray(value) || value.length !== expectedArtifacts.length) {
+    throw semanticError('SEMANTIC_ARTIFACT_VERIFICATION_INVALID', 'Registered artifact verification did not return the fixed artifact set', 409)
+  }
+  const expectedById = new Map(expectedArtifacts.map((artifact) => [artifact.id, artifact]))
+  const seen = new Set()
+  const verifiedById = new Map()
+  for (const artifact of value) {
+    if (
+      !artifact
+      || typeof artifact.id !== 'string'
+      || typeof artifact.sha256 !== 'string'
+      || !Number.isSafeInteger(artifact.bytes)
+      || seen.has(artifact.id)
+    ) {
+      throw semanticError('SEMANTIC_ARTIFACT_VERIFICATION_INVALID', 'Registered artifact verification returned an incomplete or duplicate identity', 409)
+    }
+    const expected = expectedById.get(artifact.id)
+    if (!expected || artifact.sha256 !== expected.sha256 || artifact.bytes !== expected.bytes) {
+      throw semanticError('SEMANTIC_ARTIFACT_VERIFICATION_INVALID', 'Registered artifact verification returned a forged identity', 409)
+    }
+    seen.add(artifact.id)
+    verifiedById.set(artifact.id, { id: artifact.id, sha256: artifact.sha256, bytes: artifact.bytes })
+  }
+  if (seen.size !== expectedArtifacts.length) {
+    throw semanticError('SEMANTIC_ARTIFACT_VERIFICATION_INVALID', 'Registered artifact verification omitted a fixed artifact', 409)
+  }
+  return expectedArtifacts.map(({ id }) => verifiedById.get(id))
 }
 
 function safeManagedInputPath(root, name) {
@@ -155,6 +192,7 @@ export class SemanticImageExecutor {
     ffmpegPath,
     inputDirectory,
     managedComfyInputRoot,
+    verifyArtifacts,
     deliverOutput = async () => undefined,
     scheduleRuntimeIdleStop = async () => undefined,
     delay = (duration, signal) => new Promise((resolvePromise, rejectPromise) => {
@@ -181,6 +219,7 @@ export class SemanticImageExecutor {
       ffmpegPath,
       inputDirectory,
       managedComfyInputRoot,
+      verifyArtifacts,
       deliverOutput,
       scheduleRuntimeIdleStop,
       delay,
@@ -303,11 +342,31 @@ export class SemanticImageExecutor {
       await this.runtimeManager.ensureReady({ reason: `semantic-qwen:${jobId}` })
       const catalog = await this.inspectSemanticWorkflows(true)
       const capability = catalog.workflows.find((item) => item.id === job.request.workflowId)
-      if (!capability?.available) {
-        throw semanticError('SEMANTIC_WORKFLOW_UNAVAILABLE', capability?.message || 'Qwen semantic workflow is unavailable', 409, {
-          missingArtifacts: capability?.missingArtifacts,
-          missingNodes: capability?.missingNodes,
+      const preset = getImageEditPreset(job.request.params?.preset)
+      const presetCapability = capability?.presets?.find((item) => item.id === preset.id)
+      if (job.request.workflowVersion !== preset.version) {
+        throw semanticError(
+          'SEMANTIC_PRESET_VERSION_MISMATCH',
+          'Semantic image preset version does not match the fixed workflow version',
+          409,
+          { preset: preset.id, expectedVersion: preset.version, actualVersion: job.request.workflowVersion },
+        )
+      }
+      if (!capability?.available || (preset.id !== 'base40' && !presetCapability?.available)) {
+        const unavailableCapability = preset.id === 'base40' ? capability : presetCapability
+        throw semanticError('SEMANTIC_WORKFLOW_UNAVAILABLE', unavailableCapability?.message || 'Qwen semantic workflow is unavailable', 409, {
+          missingArtifacts: unavailableCapability?.missingArtifacts || capability?.missingArtifacts,
+          missingNodes: unavailableCapability?.missingNodes || capability?.missingNodes,
         })
+      }
+      let verifiedArtifacts
+      if (preset.id === 'lightning4') {
+        if (typeof this.verifyArtifacts !== 'function') {
+          throw semanticError('SEMANTIC_ARTIFACT_VERIFIER_UNAVAILABLE', 'Lightning preset requires registered artifact verification', 409)
+        }
+        const expectedArtifacts = [...QWEN_IMAGE_EDIT_ARTIFACTS, ARTIFACTS.qwenLightning4Lora]
+        const result = await this.verifyArtifacts(expectedArtifacts.map(({ id }) => id), { signal })
+        verifiedArtifacts = normalizeVerifiedArtifacts(result, expectedArtifacts)
       }
       assertExecutionActive(this.store, jobId, signal)
       const sourceDimensions = await this.imageProcessor.dimensions(job.inputPath, signal)
@@ -339,6 +398,7 @@ export class SemanticImageExecutor {
       }
       const built = buildSemanticImageWorkflow({
         workflowId: job.request.workflowId,
+        preset: preset.id,
         sourceImageName: sourceName,
         maskImageName: maskName,
         instruction: job.request.params.instruction,
@@ -347,15 +407,18 @@ export class SemanticImageExecutor {
         jobId,
       })
       await this.store.update(jobId, {
-        workflowVersion: QWEN_SEMANTIC_WORKFLOW_VERSION,
+        workflowVersion: built.metadata.version,
         workflowMetadata: {
           ...built.metadata,
           instruction: undefined,
           instructionHash: hashInstruction(built.metadata.instruction),
+          ...(verifiedArtifacts ? { verifiedArtifacts } : {}),
         },
         phase: 'queued',
         progress: 18,
-        detail: '提交 Qwen 2511 质量模式固定工作流',
+        detail: preset.id === 'lightning4'
+          ? '提交 Qwen 2511 Lightning 4 步实验工作流'
+          : '提交 Qwen 2511 质量模式固定工作流',
       })
       await this.store.log(jobId, 'success', '依赖、输入、蒙版与固定节点模板复检通过')
       const clientId = `aeonquill-semantic-${job.id}`
@@ -381,7 +444,7 @@ export class SemanticImageExecutor {
         scope: 'project',
         projectId: job.request.projectId,
         title: job.request.title || capability.label,
-        description: `${capability.label} · Qwen Image Edit 2511 INT8 · 质量模式`,
+        description: `${capability.label} · Qwen Image Edit 2511 INT8 · ${preset.label}`,
         tags: ['semantic-edit', job.request.workflowId, 'qwen-2511'],
         collectionIds: [],
         dataUrl: `data:${output.mimeType};base64,${bytes.toString('base64')}`,
@@ -390,7 +453,9 @@ export class SemanticImageExecutor {
         provenance: {
           jobId,
           workflowId: job.request.workflowId,
-          workflowVersion: QWEN_SEMANTIC_WORKFLOW_VERSION,
+          workflowVersion: built.metadata.version,
+          preset: built.metadata.preset,
+          lora: built.metadata.lora,
           promptVersion: built.metadata.promptVersion,
           instructionHash,
           sourceElementId: job.sourceElementId,
@@ -403,6 +468,7 @@ export class SemanticImageExecutor {
           cfg: built.metadata.cfg,
           sampler: built.metadata.sampler,
           identityStrength: built.metadata.identityStrength,
+          ...(verifiedArtifacts ? { verifiedArtifacts } : {}),
         },
       })
       const storedAsset = this.projectStore.getAsset(libraryAsset.version.assetId)

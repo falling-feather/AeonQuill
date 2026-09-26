@@ -34,6 +34,11 @@ import {
   VIDEO_WEIGHT_ARTIFACT_ROLES,
   VIDEO_WORKFLOW_REGISTRY_VERSION,
 } from './video-workflow-registry.mjs'
+import {
+  APACHE_2,
+  ARTIFACTS,
+  H3_LICENSE,
+} from './workflow-artifacts.mjs'
 
 export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v2'
 export const WORKFLOW_CENTER_STATE_VERSION = 1
@@ -69,184 +74,6 @@ const CONTROL_MAPPING_TARGETS = Object.freeze({
   controlStrength: Object.freeze({ nodeTypes: Object.freeze(['ControlNetApply', 'ControlNetApplyAdvanced']), inputName: 'strength' }),
 })
 const STRICT_CONTROL_MAPPING_ROLES = new Set(Object.keys(CONTROL_MAPPING_TARGETS))
-
-const H3_LICENSE = Object.freeze({
-  id: 'minimax-h3-community-license-2026-08',
-  name: 'MiniMax-H3 Community License Agreement',
-  spdx: null,
-  acceptanceRequired: true,
-  commercialUse: 'conditional',
-  redistribution: 'not-bundled-by-aeonquill',
-  sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-  notice: '适用地区、署名和商业条款必须由使用者自行确认；AEONQUILL 轻量包不重分发 H3 权重。',
-})
-
-const APACHE_2 = Object.freeze({
-  id: 'apache-2.0',
-  name: 'Apache License 2.0',
-  spdx: 'Apache-2.0',
-  acceptanceRequired: false,
-  commercialUse: 'permitted-with-notice',
-  redistribution: 'permitted-with-license-and-notice',
-  sourceUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
-  notice: '保留许可证与 NOTICE，并分别核对模型上游条款。',
-})
-
-const ARTIFACTS = Object.freeze({
-  h3Fp8: Object.freeze({
-    id: 'h3-fl2va-fp8',
-    kind: 'model',
-    label: 'MiniMax H3 FL2VA FP8 scaled',
-    relativePath: 'models/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors',
-    bytes: 20_958_205_608,
-    sha256: '12944c1f7791637e7de12208aef04da82bd26b95271b1b47d817364315ade993',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-    licenseId: H3_LICENSE.id,
-  }),
-  h3Int8: Object.freeze({
-    id: 'h3-fl2va-int8-convrot',
-    kind: 'model',
-    label: 'MiniMax H3 FL2VA INT8 ConvRot',
-    relativePath: 'models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors',
-    bytes: 20_970_379_616,
-    sha256: 'e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-    licenseId: H3_LICENSE.id,
-  }),
-  h3TextEncoder: Object.freeze({
-    id: 'h3-qwen3vl-nvfp4',
-    kind: 'model',
-    label: 'Qwen3-VL 32B MiniMax H3 NVFP4/AWQ',
-    relativePath: 'models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
-    bytes: 15_687_142_551,
-    sha256: '35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-    licenseId: H3_LICENSE.id,
-  }),
-  h3VideoVae: Object.freeze({
-    id: 'h3-video-vae',
-    kind: 'model',
-    label: 'MiniMax H3 Video VAE FP16',
-    relativePath: 'models/vae/minimax_h3_video_vae_fp16.safetensors',
-    bytes: 5_207_808_496,
-    sha256: '7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-    licenseId: H3_LICENSE.id,
-  }),
-  h3AudioVae: Object.freeze({
-    id: 'h3-audio-vae',
-    kind: 'model',
-    label: 'MiniMax H3 Audio VAE FP32',
-    relativePath: 'models/vae/minimax_h3_audio_vae_fp32.safetensors',
-    bytes: 605_254_808,
-    sha256: '8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/MiniMax-H3',
-    licenseId: H3_LICENSE.id,
-  }),
-  h3TurboLora: Object.freeze({
-    id: 'h3-turbo-lora-v4',
-    kind: 'model',
-    label: 'MiniMax H3 Turbo v4 LoRA',
-    relativePath: 'models/loras/minimax_h3_turbo_v4_step600_ema.safetensors',
-    bytes: 779_849_816,
-    sha256: '5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3',
-    downloadUrl: 'https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600_ema.safetensors',
-    sourceUrl: 'https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora',
-    licenseId: APACHE_2.id,
-  }),
-  seedVr2Model: Object.freeze({
-    id: 'seedvr2-3b-int8-convrot',
-    kind: 'model',
-    label: 'SeedVR2 3B INT8 ConvRot',
-    relativePath: 'models/diffusion_models/seedvr2_3b_int8_convrot.safetensors',
-    bytes: 3_458_259_704,
-    sha256: 'c3dec8bcc5916843a8a858572970597462e1f2dc598d6dfd818f6cd40f53a157',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_3b_int8_convrot.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/SeedVR2',
-    licenseId: APACHE_2.id,
-  }),
-  seedVr2Vae: Object.freeze({
-    id: 'seedvr2-vae-fp16',
-    kind: 'model',
-    label: 'SeedVR2 EMA VAE FP16',
-    relativePath: 'models/vae/seedvr2_ema_vae_fp16.safetensors',
-    bytes: 501_324_814,
-    sha256: '20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/SeedVR2',
-    licenseId: APACHE_2.id,
-  }),
-  samVitB: Object.freeze({
-    id: 'sam-vit-b',
-    kind: 'model',
-    label: 'Segment Anything ViT-B',
-    relativePath: 'models/sams/sam_vit_b_01ec64.pth',
-    bytes: 375_042_383,
-    sha256: 'ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912',
-    downloadUrl: 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth',
-    sourceUrl: 'https://github.com/facebookresearch/segment-anything',
-    licenseId: APACHE_2.id,
-  }),
-  impactPack: Object.freeze({
-    id: 'impact-pack',
-    kind: 'manual-extension',
-    label: 'ComfyUI Impact Pack',
-    presentCandidates: ['custom_nodes/ComfyUI-Impact-Pack', 'custom_nodes/comfyui-impact-pack'],
-    sourceUrl: 'https://github.com/ltdrdata/ComfyUI-Impact-Pack',
-    licenseId: 'gpl-3.0-only',
-    instruction: '通过 ComfyUI Manager 安装 Impact Pack，重启 ComfyUI 后复检。',
-  }),
-  qwenImageEdit2511Int8: Object.freeze({
-    id: 'qwen-image-edit-2511-int8-convrot',
-    kind: 'model',
-    label: 'Qwen Image Edit 2511 INT8 ConvRot',
-    relativePath: 'models/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors',
-    bytes: 20_499_083_824,
-    sha256: '11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI',
-    licenseId: APACHE_2.id,
-  }),
-  qwenImageTextEncoderFp8: Object.freeze({
-    id: 'qwen-image-qwen25vl-7b-fp8',
-    kind: 'model',
-    label: 'Qwen2.5-VL 7B FP8 scaled',
-    relativePath: 'models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors',
-    bytes: 9_384_670_680,
-    sha256: 'cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI',
-    licenseId: APACHE_2.id,
-  }),
-  qwenImageVae: Object.freeze({
-    id: 'qwen-image-vae',
-    kind: 'model',
-    label: 'Qwen Image VAE',
-    relativePath: 'models/vae/qwen_image_vae.safetensors',
-    bytes: 253_806_246,
-    sha256: 'a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f',
-    downloadUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors',
-    sourceUrl: 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI',
-    licenseId: APACHE_2.id,
-  }),
-  fluxKontext: Object.freeze({
-    id: 'flux-kontext-guided',
-    kind: 'manual-model-set',
-    label: 'Flux Kontext 受控区域编辑模型组',
-    presentCandidates: [
-      'models/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors',
-      'models/unet/flux1-kontext-dev-Q4_K_M.gguf',
-    ],
-    sourceUrl: 'https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI',
-    licenseId: 'flux-kontext-upstream',
-    instruction: '根据上游许可选择 FP8 或 GGUF 权重，并按来源页补齐文本编码器与 VAE；工作流中心不会猜测或重分发这些文件。',
-  }),
-})
 
 const H3_COMMON = Object.freeze([
   ARTIFACTS.h3TextEncoder,
@@ -368,6 +195,38 @@ const PACKS = Object.freeze([
       'ImageToMask', 'ImageCompositeMasked', 'SaveImage',
     ],
     sourceUrl: 'https://docs.comfy.org/tutorials/image/qwen/qwen-image-edit-2511',
+  }),
+  Object.freeze({
+    id: 'image-qwen-edit-2511-lightning4',
+    version: '1.0.0',
+    category: 'image',
+    title: 'Qwen 2511 语义编辑 · Lightning 4 步',
+    summary: '基于 INT8 ConvRot 与官方 4 步 Lightning LoRA 的实验档；标准 40 步档保持独立。',
+    capabilities: ['region-edit', 'point-edit', 'portrait-adjust', 'reference-image', 'masked-composite', 'lightning4'],
+    maturity: 'experimental',
+    minVramGb: 8,
+    recommendedVramGb: 24,
+    minSystemRamGb: 32,
+    estimatedMinutes: '待本机校准',
+    runtime: { minComfy: '0.31.0', python: '3.12', cuda: '12.9+' },
+    license: Object.freeze({
+      ...APACHE_2,
+      sourceUrl: 'https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/tree/d74eba145674fd7e31b949324e148e21e7118abd',
+      notice: 'Qwen Image Edit 2511 与 Lightning LoRA 均按 Apache-2.0 来源条款保留许可证与 NOTICE。',
+    }),
+    artifacts: [
+      ARTIFACTS.qwenImageEdit2511Int8,
+      ARTIFACTS.qwenImageTextEncoderFp8,
+      ARTIFACTS.qwenImageVae,
+      ARTIFACTS.qwenLightning4Lora,
+    ],
+    requiredNodes: [
+      'LoadImage', 'FluxKontextImageScale', 'UNETLoader', 'ModelSamplingAuraFlow', 'CFGNorm',
+      'CLIPLoader', 'VAELoader', 'TextEncodeQwenImageEditPlus',
+      'FluxKontextMultiReferenceLatentMethod', 'VAEEncode', 'LoraLoaderModelOnly', 'KSampler', 'VAEDecode',
+      'ImageToMask', 'ImageCompositeMasked', 'SaveImage',
+    ],
+    sourceUrl: 'https://github.com/Comfy-Org/workflow_templates/blob/98fd32ca756dd9d72077fbe3457146d11cbc88cb/templates/image_qwen_image_edit_2511_int8.json',
   }),
   Object.freeze({
     id: 'flux-kontext-region-edit',
@@ -1221,28 +1080,18 @@ export class WorkflowCenterService {
     return this._customWeightSetForWorkflow(this.#custom(customId).workflow)
   }
 
-  async verifyWeightSet(weightSet, { signal } = {}) {
+  async verifyRegisteredArtifacts(artifactIds, { signal } = {}) {
     throwIfWeightVerificationAborted(signal)
-    let normalized
-    try {
-      normalized = validateWorkflowWeightSet(weightSet)
-    } catch (error) {
-      throw workflowError(error.message, 'WORKFLOW_WEIGHT_SET_INVALID', 400)
-    }
-    if (!normalized) throw workflowError('固定权重身份不能为空', 'WORKFLOW_WEIGHT_SET_INVALID', 400)
-    const expected = this.getVideoWeightSet(normalized.profileId, normalized.samplingMode)
-    try {
-      assertWorkflowWeightSetCompatible(normalized, expected)
-    } catch (error) {
-      throw workflowError('固定权重登记与当前权威集合不一致', 'WORKFLOW_WEIGHT_SET_MISMATCH', 409, { expected, actual: normalized })
+    if (!Array.isArray(artifactIds) || artifactIds.some((artifactId) => typeof artifactId !== 'string' || !artifactId)) {
+      throw workflowError('固定权重 artifact 身份必须是非空字符串数组', 'WORKFLOW_WEIGHT_ARTIFACT_IDS_INVALID', 400)
     }
     const registry = await this.runtimeRegistry()
     throwIfWeightVerificationAborted(signal)
     if (!registry.configured) throw workflowError('请先配置 ComfyUI 运行时', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
     const verified = []
-    for (const identity of expected.artifacts) {
+    for (const artifactId of artifactIds) {
       throwIfWeightVerificationAborted(signal)
-      const artifact = this._registeredArtifact(identity.id)
+      const artifact = this._registeredArtifact(artifactId)
       const candidates = [...new Map(registeredArtifactCandidates(artifact, registry).map((candidate) => [
         process.platform === 'win32' ? resolve(candidate.targetPath).toLocaleLowerCase('en-US') : resolve(candidate.targetPath),
         candidate,
@@ -1281,9 +1130,28 @@ export class WorkflowCenterService {
       if (!existingCount) {
         throw workflowError(`${artifact.label} 尚未安装`, 'WORKFLOW_WEIGHT_MISSING', 409, { artifactId: artifact.id })
       }
-      verified.push(identity)
+      verified.push({ id: artifact.id, sha256: artifact.sha256, bytes: artifact.bytes })
     }
     await this.#save()
+    return clone(verified)
+  }
+
+  async verifyWeightSet(weightSet, { signal } = {}) {
+    throwIfWeightVerificationAborted(signal)
+    let normalized
+    try {
+      normalized = validateWorkflowWeightSet(weightSet)
+    } catch (error) {
+      throw workflowError(error.message, 'WORKFLOW_WEIGHT_SET_INVALID', 400)
+    }
+    if (!normalized) throw workflowError('固定权重身份不能为空', 'WORKFLOW_WEIGHT_SET_INVALID', 400)
+    const expected = this.getVideoWeightSet(normalized.profileId, normalized.samplingMode)
+    try {
+      assertWorkflowWeightSetCompatible(normalized, expected)
+    } catch (error) {
+      throw workflowError('固定权重登记与当前权威集合不一致', 'WORKFLOW_WEIGHT_SET_MISMATCH', 409, { expected, actual: normalized })
+    }
+    await this.verifyRegisteredArtifacts(expected.artifacts.map(({ id }) => id), { signal })
     return clone(expected)
   }
 

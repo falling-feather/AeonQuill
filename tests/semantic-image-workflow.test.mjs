@@ -63,6 +63,86 @@ test('portrait adjust uses the unmasked fixed graph and compiles identity streng
   assert.equal(built.metadata.identityStrength, 0.92)
 })
 
+test('lightning4 inserts the fixed model-only LoRA and switches to its sampler parameters', () => {
+  const built = buildSemanticImageWorkflow({
+    workflowId: 'region-edit',
+    preset: 'lightning4',
+    sourceImageName: 'source.png',
+    maskImageName: 'mask.png',
+    instruction: '把衣服改成银色',
+    seed: 9,
+    jobId: 'lightning-4',
+  })
+  assert.equal(built.metadata.preset, 'lightning4')
+  assert.equal(built.metadata.version, 'qwen-image-edit-2511-int8-lightning4-v1')
+  assert.equal(built.metadata.lora.strength, 1)
+  assert.equal(built.workflow['119'].class_type, 'LoraLoaderModelOnly')
+  assert.deepEqual(built.workflow['119'].inputs.model, ['105', 0])
+  assert.equal(built.workflow['119'].inputs.lora_name, 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors')
+  assert.equal(built.workflow['119'].inputs.strength_model, 1)
+  assert.deepEqual(built.workflow['113'].inputs.model, ['119', 0])
+  assert.equal(built.workflow['113'].inputs.steps, 4)
+  assert.equal(built.workflow['113'].inputs.cfg, 1)
+  assert.equal(built.workflow['113'].inputs.sampler_name, 'euler')
+  assert.equal(built.workflow['113'].inputs.scheduler, 'simple')
+  assert.equal(built.workflow['104'].inputs.shift, 3.1)
+})
+
+test('lightning4 fixed graph rejects changed LoRA strength and sampling parameters', () => {
+  const built = buildSemanticImageWorkflow({
+    workflowId: 'portrait-adjust',
+    preset: 'lightning4',
+    sourceImageName: 'portrait.png',
+    instruction: '调整光线',
+    jobId: 'lightning-tamper',
+  })
+  built.workflow['119'].inputs.strength_model = 0.5
+  assert.throws(
+    () => assertAllowedSemanticImageWorkflow('portrait-adjust', built.workflow, 'lightning4'),
+    (error) => error.code === 'SEMANTIC_WORKFLOW_NOT_ALLOWED',
+  )
+
+  const second = buildSemanticImageWorkflow({
+    workflowId: 'portrait-adjust',
+    preset: 'lightning4',
+    sourceImageName: 'portrait.png',
+    instruction: '调整光线',
+    jobId: 'lightning-tamper-steps',
+  })
+  second.workflow['113'].inputs.steps = 40
+  assert.throws(
+    () => assertAllowedSemanticImageWorkflow('portrait-adjust', second.workflow, 'lightning4'),
+    (error) => error.code === 'SEMANTIC_WORKFLOW_NOT_ALLOWED',
+  )
+})
+
+test('fixed Qwen graph rejects model links that bypass the registered sampling chain', () => {
+  const built = buildSemanticImageWorkflow({
+    workflowId: 'portrait-adjust',
+    sourceImageName: 'portrait.png',
+    instruction: '调整光线',
+    jobId: 'sampling-link-tamper',
+  })
+  built.workflow['104'].inputs.model = ['106', 0]
+  assert.throws(
+    () => assertAllowedSemanticImageWorkflow('portrait-adjust', built.workflow),
+    (error) => error.code === 'SEMANTIC_WORKFLOW_NOT_ALLOWED',
+  )
+
+  const lightning = buildSemanticImageWorkflow({
+    workflowId: 'portrait-adjust',
+    preset: 'lightning4',
+    sourceImageName: 'portrait.png',
+    instruction: '调整光线',
+    jobId: 'sampling-link-tamper-lightning',
+  })
+  lightning.workflow['105'].inputs.model = ['106', 0]
+  assert.throws(
+    () => assertAllowedSemanticImageWorkflow('portrait-adjust', lightning.workflow, 'lightning4'),
+    (error) => error.code === 'SEMANTIC_WORKFLOW_NOT_ALLOWED',
+  )
+})
+
 test('semantic workflow builder rejects traversal, invalid parameters and graph tampering', () => {
   assert.throws(
     () => buildSemanticImageWorkflow({

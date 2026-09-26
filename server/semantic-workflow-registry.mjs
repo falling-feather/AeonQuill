@@ -1,9 +1,13 @@
 import { stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import {
-  QWEN_SEMANTIC_MODELS,
   QWEN_SEMANTIC_WORKFLOW_VERSION,
 } from './semantic-image-workflow.mjs'
+import {
+  getImageEditPreset,
+  IMAGE_EDIT_PRESETS,
+} from '../src/lib/imageEditPresets.mjs'
+import { ARTIFACTS as REGISTERED_ARTIFACTS } from './workflow-artifacts.mjs'
 
 export const SEMANTIC_WORKFLOW_CATALOG_VERSION = 'semantic-image-v2'
 export const SEMANTIC_ELEMENT_EXTRACT_OPERATION = 'semantic-element-extract'
@@ -29,20 +33,24 @@ const EXTENSIONS = {
 
 const ARTIFACTS = {
   'sam-vit-b': {
-    candidates: ['models/sams/sam_vit_b_01ec64.pth'],
+    candidates: [REGISTERED_ARTIFACTS.samVitB.relativePath],
     minBytes: 350_000_000,
   },
   'qwen-image-edit-2511-int8': {
-    candidates: [`models/diffusion_models/${QWEN_SEMANTIC_MODELS.diffusion}`],
+    candidates: [REGISTERED_ARTIFACTS.qwenImageEdit2511Int8.relativePath],
     minBytes: 20_000_000_000,
   },
   'qwen-image-text-encoder-fp8': {
-    candidates: [`models/text_encoders/${QWEN_SEMANTIC_MODELS.textEncoder}`],
+    candidates: [REGISTERED_ARTIFACTS.qwenImageTextEncoderFp8.relativePath],
     minBytes: 9_000_000_000,
   },
   'qwen-image-vae': {
-    candidates: [`models/vae/${QWEN_SEMANTIC_MODELS.vae}`],
+    candidates: [REGISTERED_ARTIFACTS.qwenImageVae.relativePath],
     minBytes: 250_000_000,
+  },
+  'qwen-image-edit-2511-lightning4-bf16-v1': {
+    candidates: [REGISTERED_ARTIFACTS.qwenLightning4Lora.relativePath],
+    minBytes: REGISTERED_ARTIFACTS.qwenLightning4Lora.bytes,
   },
   'flux-kontext-model': {
     candidates: [
@@ -236,6 +244,17 @@ const DEFINITIONS = [
   },
 ]
 
+const QWEN_WORKFLOW_IDS = new Set(['region-edit', 'point-edit', 'portrait-adjust'])
+
+function presetRequirements(presetId) {
+  const preset = getImageEditPreset(presetId)
+  return {
+    preset,
+    artifactIds: preset.loraArtifactId ? [preset.loraArtifactId] : [],
+    nodeTypes: preset.loraArtifactId ? ['LoraLoaderModelOnly'] : [],
+  }
+}
+
 function clone(value) {
   return structuredClone(value)
 }
@@ -338,7 +357,7 @@ export function evaluateSemanticWorkflowCatalog({
       message = 'ComfyUI 已连接，但节点注册与受控契约不匹配'
     }
 
-    return publicDefinition(definition, {
+    const evaluated = publicDefinition(definition, {
       available,
       installed,
       status,
@@ -347,6 +366,50 @@ export function evaluateSemanticWorkflowCatalog({
       missingArtifacts,
       missingNodes,
     })
+    if (!QWEN_WORKFLOW_IDS.has(definition.id)) return evaluated
+
+    const presets = Object.values(IMAGE_EDIT_PRESETS).map((presetDefinition) => {
+      const requirements = presetRequirements(presetDefinition.id)
+      const presetMissingArtifacts = [...new Set([
+        ...definition.requiredArtifacts,
+        ...requirements.artifactIds,
+      ])].filter((id) => !artifactSet.has(id))
+      const presetMissingNodes = connected
+        ? [...new Set([...definition.requiredNodes, ...requirements.nodeTypes])].filter((id) => !nodeTypes.has(id))
+        : []
+      const presetInstalled = missingExtensions.length === 0 && presetMissingArtifacts.length === 0
+      const presetAvailable = definition.implemented && presetInstalled && connected && presetMissingNodes.length === 0
+
+      let presetStatus = 'ready'
+      let presetMessage = '本机工作流已就绪'
+      if (!definition.implemented) {
+        presetStatus = 'template-pending'
+        presetMessage = '依赖盘点已登记，受控模板和质量门禁尚未完成'
+      } else if (!presetInstalled) {
+        presetStatus = 'missing-dependency'
+        presetMessage = '缺少本机扩展或模型文件'
+      } else if (!connected) {
+        presetStatus = 'runtime-stopped'
+        presetMessage = '本机依赖已安装；启动 ComfyUI 后可执行'
+      } else if (presetMissingNodes.length) {
+        presetStatus = 'node-mismatch'
+        presetMessage = 'ComfyUI 已连接，但节点注册与受控契约不匹配'
+      }
+
+      return {
+        id: presetDefinition.id,
+        label: presetDefinition.label,
+        maturity: presetDefinition.maturity,
+        installed: presetInstalled,
+        status: presetStatus,
+        available: presetAvailable,
+        message: presetMessage,
+        missingArtifacts: presetMissingArtifacts,
+        missingNodes: presetMissingNodes,
+      }
+    })
+
+    return { ...evaluated, presets }
   })
 
   return {
@@ -486,7 +549,11 @@ function normalizePointsParams(params, { instruction = false, seed = false } = {
   }
 }
 
-function commonRequest(body, workflowId, operation, { projectRequired = true, maskRequired = false } = {}) {
+function commonRequest(body, workflowId, operation, {
+  projectRequired = true,
+  maskRequired = false,
+  workflowVersion,
+} = {}) {
   const projectId = normalizeProjectId(body.projectId, projectRequired)
   const source = normalizeSource(body, 'source')
   const mask = normalizeSource(body, 'mask', { required: maskRequired })
@@ -500,7 +567,7 @@ function commonRequest(body, workflowId, operation, { projectRequired = true, ma
   return {
     operation,
     workflowId,
-    workflowVersion: workflowId === 'element-extract' ? 'impact-sam-v1' : QWEN_SEMANTIC_WORKFLOW_VERSION,
+    workflowVersion: workflowVersion || (workflowId === 'element-extract' ? 'impact-sam-v1' : QWEN_SEMANTIC_WORKFLOW_VERSION),
     ...(projectId ? { projectId } : {}),
     ...(source.assetId ? { sourceAssetId: source.assetId } : {}),
     ...(mask.assetId ? { maskAssetId: mask.assetId } : {}),
@@ -531,40 +598,48 @@ export function validateSemanticImageRequest(body) {
   }
   if (workflowId === 'region-edit') {
     assertOnlyKeys(body, [...commonKeys, 'maskImageDataUrl', 'maskAssetId'], 'request')
-    assertOnlyKeys(params, ['instruction', 'seed', 'maskChannel'], 'params')
+    assertOnlyKeys(params, ['instruction', 'seed', 'maskChannel', 'preset'], 'params')
+    const preset = getImageEditPreset(params.preset)
     const maskChannel = params.maskChannel === undefined ? 'alpha' : params.maskChannel
     if (!['alpha', 'luma'].includes(maskChannel)) {
       semanticError('INVALID_SEMANTIC_MASK', 'maskChannel must be alpha or luma')
     }
     return {
-      ...commonRequest(body, workflowId, SEMANTIC_REGION_EDIT_OPERATION, { maskRequired: true }),
+      ...commonRequest(body, workflowId, SEMANTIC_REGION_EDIT_OPERATION, { maskRequired: true, workflowVersion: preset.version }),
       params: {
         instruction: normalizeInstruction(params.instruction),
         seed: normalizeSeed(params.seed),
         maskChannel,
+        ...(preset.id === 'base40' ? {} : { preset: preset.id }),
       },
     }
   }
   if (workflowId === 'point-edit') {
     assertOnlyKeys(body, commonKeys, 'request')
-    assertOnlyKeys(params, ['positivePoints', 'negativePoints', 'threshold', 'instruction', 'seed'], 'params')
+    assertOnlyKeys(params, ['positivePoints', 'negativePoints', 'threshold', 'instruction', 'seed', 'preset'], 'params')
+    const preset = getImageEditPreset(params.preset)
     return {
-      ...commonRequest(body, workflowId, SEMANTIC_POINT_EDIT_OPERATION),
-      params: normalizePointsParams(params, { instruction: true, seed: true }),
+      ...commonRequest(body, workflowId, SEMANTIC_POINT_EDIT_OPERATION, { workflowVersion: preset.version }),
+      params: {
+        ...normalizePointsParams(params, { instruction: true, seed: true }),
+        ...(preset.id === 'base40' ? {} : { preset: preset.id }),
+      },
     }
   }
   assertOnlyKeys(body, commonKeys, 'request')
-  assertOnlyKeys(params, ['instruction', 'identityStrength', 'seed'], 'params')
+  assertOnlyKeys(params, ['instruction', 'identityStrength', 'seed', 'preset'], 'params')
+  const preset = getImageEditPreset(params.preset)
   const identityStrength = params.identityStrength === undefined ? 0.8 : Number(params.identityStrength)
   if (!Number.isFinite(identityStrength) || identityStrength < 0 || identityStrength > 1) {
     semanticError('INVALID_SEMANTIC_IDENTITY_STRENGTH', 'identityStrength must be from 0 to 1')
   }
   return {
-    ...commonRequest(body, workflowId, SEMANTIC_PORTRAIT_ADJUST_OPERATION),
+    ...commonRequest(body, workflowId, SEMANTIC_PORTRAIT_ADJUST_OPERATION, { workflowVersion: preset.version }),
     params: {
       instruction: normalizeInstruction(params.instruction, 1_000),
       identityStrength,
       seed: normalizeSeed(params.seed),
+      ...(preset.id === 'base40' ? {} : { preset: preset.id }),
     },
   }
 }

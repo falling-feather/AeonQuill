@@ -1,4 +1,8 @@
-export const QWEN_SEMANTIC_WORKFLOW_VERSION = 'qwen-image-edit-2511-int8-v1'
+import { getImageEditPreset } from '../src/lib/imageEditPresets.mjs'
+import { ARTIFACTS } from './workflow-artifacts.mjs'
+
+export const QWEN_SEMANTIC_WORKFLOW_VERSION = getImageEditPreset('base40').version
+export const QWEN_SEMANTIC_LIGHTNING4_WORKFLOW_VERSION = getImageEditPreset('lightning4').version
 export const QWEN_SEMANTIC_PROMPT_VERSION = 'aeonquill-semantic-prompt-v1'
 
 export const QWEN_SEMANTIC_MODELS = Object.freeze({
@@ -124,17 +128,77 @@ function safeOutputPrefix(jobId) {
   return `AEONQUILL/QWEN_EDIT_${safeId}`
 }
 
-function expectedNodeTypes(workflowId) {
-  return MASKED_WORKFLOWS.has(workflowId)
+function expectedNodeTypes(workflowId, presetId = 'base40') {
+  const base = MASKED_WORKFLOWS.has(workflowId)
     ? { ...BASE_NODE_TYPES, ...MASK_NODE_TYPES }
     : BASE_NODE_TYPES
+  return presetId === 'lightning4'
+    ? { ...base, '119': 'LoraLoaderModelOnly' }
+    : base
 }
 
-export function assertAllowedSemanticImageWorkflow(workflowId, workflow) {
+function artifactFilename(artifact) {
+  const relativePath = String(artifact?.relativePath || '').replace(/\\/gu, '/')
+  return relativePath.split('/').filter(Boolean).at(-1) || ''
+}
+
+function assertFixedSemanticImageWorkflowParameters(workflow, presetId) {
+  const preset = getImageEditPreset(presetId)
+  const sampling = workflow['104']
+  const cfgNorm = workflow['105']
+  const sampler = workflow['113']
+  const expectedModel = presetId === 'lightning4' ? ['119', 0] : ['105', 0]
+  if (
+    !Array.isArray(sampling?.inputs?.model)
+    || sampling.inputs.model[0] !== '103'
+    || sampling.inputs.model[1] !== 0
+    || sampling.inputs.shift !== preset.shift
+  ) {
+    fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic workflow sampling shift does not match the fixed preset')
+  }
+  if (
+    !Array.isArray(cfgNorm?.inputs?.model)
+    || cfgNorm.inputs.model[0] !== '104'
+    || cfgNorm.inputs.model[1] !== 0
+    || cfgNorm.inputs.strength !== 1
+    || cfgNorm.inputs.pre_cfg !== false
+  ) {
+    fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic workflow CFGNorm does not match the fixed preset')
+  }
+  if (
+    !Array.isArray(sampler?.inputs?.model)
+    || sampler.inputs.model[0] !== expectedModel[0]
+    || sampler.inputs.model[1] !== expectedModel[1]
+    || sampler.inputs.steps !== preset.steps
+    || sampler.inputs.cfg !== preset.cfg
+    || sampler.inputs.sampler_name !== preset.sampler
+    || sampler.inputs.scheduler !== preset.scheduler
+    || sampler.inputs.denoise !== preset.denoise
+  ) {
+    fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic workflow sampling parameters do not match the fixed preset')
+  }
+  if (presetId === 'lightning4') {
+    const lora = workflow['119']
+    const expectedLora = ARTIFACTS.qwenLightning4Lora
+    if (
+      lora?.class_type !== 'LoraLoaderModelOnly'
+      || !Array.isArray(lora.inputs?.model)
+      || lora.inputs.model[0] !== '105'
+      || lora.inputs.model[1] !== 0
+      || lora.inputs.lora_name !== artifactFilename(expectedLora)
+      || lora.inputs.strength_model !== preset.loraStrength
+    ) {
+      fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic Lightning LoRA node does not match the fixed artifact or strength')
+    }
+  }
+}
+
+export function assertAllowedSemanticImageWorkflow(workflowId, workflow, presetId = 'base40') {
   if (!WORKFLOW_IDS.has(workflowId) || !workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
     fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic workflow must use a registered fixed template')
   }
-  const expected = expectedNodeTypes(workflowId)
+  const preset = getImageEditPreset(presetId)
+  const expected = expectedNodeTypes(workflowId, preset.id)
   const ids = new Set(Object.keys(workflow))
   if (ids.size !== Object.keys(expected).length) {
     fail('SEMANTIC_WORKFLOW_NOT_ALLOWED', 'Semantic workflow node count does not match the fixed template')
@@ -149,11 +213,13 @@ export function assertAllowedSemanticImageWorkflow(workflowId, workflow) {
       }
     }
   }
+  assertFixedSemanticImageWorkflowParameters(workflow, preset.id)
   return workflow
 }
 
 export function buildSemanticImageWorkflow({
   workflowId,
+  preset: requestedPreset = 'base40',
   sourceImageName,
   maskImageName,
   instruction,
@@ -164,6 +230,7 @@ export function buildSemanticImageWorkflow({
   if (!WORKFLOW_IDS.has(workflowId)) {
     fail('SEMANTIC_WORKFLOW_NOT_EXECUTABLE', `Unsupported semantic workflow: ${workflowId}`)
   }
+  const preset = getImageEditPreset(requestedPreset)
   const source = assertManagedReference(sourceImageName, 'Source image')
   const masked = MASKED_WORKFLOWS.has(workflowId)
   const mask = masked ? assertManagedReference(maskImageName, 'Mask image') : undefined
@@ -191,7 +258,7 @@ export function buildSemanticImageWorkflow({
     },
     '104': {
       class_type: 'ModelSamplingAuraFlow',
-      inputs: { model: ['103', 0], shift: 3.1 },
+      inputs: { model: ['103', 0], shift: preset.shift },
       _meta: { title: 'Qwen 2511 采样位移' },
     },
     '105': {
@@ -234,21 +301,32 @@ export function buildSemanticImageWorkflow({
       inputs: { pixels: ['102', 0], vae: ['107', 0] },
       _meta: { title: '编码来源图潜变量' },
     },
+    ...(preset.id === 'lightning4' ? {
+      '119': {
+        class_type: 'LoraLoaderModelOnly',
+        inputs: {
+          model: ['105', 0],
+          lora_name: artifactFilename(ARTIFACTS.qwenLightning4Lora),
+          strength_model: preset.loraStrength,
+        },
+        _meta: { title: 'Qwen 2511 Lightning 4 步 LoRA' },
+      },
+    } : {}),
     '113': {
       class_type: 'KSampler',
       inputs: {
-        model: ['105', 0],
+        model: [preset.id === 'lightning4' ? '119' : '105', 0],
         seed,
-        steps: 40,
-        cfg: 4,
-        sampler_name: 'euler',
-        scheduler: 'simple',
+        steps: preset.steps,
+        cfg: preset.cfg,
+        sampler_name: preset.sampler,
+        scheduler: preset.scheduler,
         positive: ['111', 0],
         negative: ['109', 0],
         latent_image: ['112', 0],
-        denoise: 1,
+        denoise: preset.denoise,
       },
-      _meta: { title: '质量模式 · 40 步' },
+      _meta: { title: preset.id === 'lightning4' ? '实验模式 · Lightning 4 步' : '质量模式 · 40 步' },
     },
     '114': {
       class_type: 'VAEDecode',
@@ -285,20 +363,30 @@ export function buildSemanticImageWorkflow({
       _meta: { title: '保存不可变语义派生图' },
     },
   }
-  assertAllowedSemanticImageWorkflow(workflowId, workflow)
+  assertAllowedSemanticImageWorkflow(workflowId, workflow, preset.id)
   return {
     workflow,
     metadata: {
-      version: QWEN_SEMANTIC_WORKFLOW_VERSION,
+      version: preset.version,
       promptVersion: QWEN_SEMANTIC_PROMPT_VERSION,
       workflowId,
+      preset: preset.id,
       model: QWEN_SEMANTIC_MODELS.diffusion,
       textEncoder: QWEN_SEMANTIC_MODELS.textEncoder,
       vae: QWEN_SEMANTIC_MODELS.vae,
-      steps: 40,
-      cfg: 4,
-      sampler: 'euler',
-      scheduler: 'simple',
+      steps: preset.steps,
+      cfg: preset.cfg,
+      sampler: preset.sampler,
+      scheduler: preset.scheduler,
+      denoise: preset.denoise,
+      shift: preset.shift,
+      lora: preset.loraArtifactId
+        ? {
+            artifactId: preset.loraArtifactId,
+            name: artifactFilename(ARTIFACTS.qwenLightning4Lora),
+            strength: preset.loraStrength,
+          }
+        : null,
       seed,
       masked,
       outputNodeId: '118',
