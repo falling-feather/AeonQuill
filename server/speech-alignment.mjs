@@ -158,6 +158,8 @@ async function runRunner(args, { input = '', signal, timeoutMs, ffmpegPath = nul
       HF_HUB_OFFLINE: '1',
       TRANSFORMERS_OFFLINE: '1',
       HF_DATASETS_OFFLINE: '1',
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
     })
     if (ffmpegPath) {
       childEnvironment.PATH = [dirname(ffmpegPath), ...String(childEnvironment.PATH || '').split(delimiter).filter(Boolean)].join(delimiter)

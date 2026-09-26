@@ -20,8 +20,8 @@ const PROJECT_ID = 'speech-alignment-ui-project'
 const DOCUMENT_ID = 'speech-alignment-ui-document'
 const KNOWN_TEXT = '灵感，不该散落在工具之间。'
 const AUDIO_PATH = resolve('videos', 'aeonquill-flagship-ad', 'assets', 'voice', 'frame-01.wav')
-const PYTHON_PATH = resolve('.runtime', 'tools', 'speech-alignment', 'venv', 'Scripts', 'python.exe')
-const MODEL_PATH = resolve('.runtime', 'models', 'speech-alignment', 'zh')
+const PYTHON_PATH = process.env.AEONQUILL_ALIGNMENT_PYTHON || resolve('.runtime', 'tools', 'speech-alignment', 'venv', 'Scripts', 'python.exe')
+const MODEL_PATH = process.env.AEONQUILL_ALIGNMENT_MODEL || resolve('.runtime', 'models', 'speech-alignment', 'zh')
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'D:/钮/特殊工具库/ffmpeg/bin/ffmpeg.exe'
 const FFPROBE_PATH = process.env.FFPROBE_PATH || 'D:/钮/特殊工具库/ffmpeg/bin/ffprobe.exe'
 const REPORT_PATH = resolve('.runtime', 'qa', 'speech-alignment-ui.json')
@@ -162,6 +162,19 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
   let failure = null
   let report = baseReport
   const pageErrors = []
+  const refreshRecovery = {
+    delayMs: 600,
+    workspaceBodyRequestAt: null,
+    workspaceBodyReleasedAt: null,
+    studioVisibleAt: null,
+    studioBeforeWorkspaceBody: null,
+    cardVisibleAt: null,
+    cardTextBeforeWorkspaceBody: null,
+    cardTextAfterWorkspaceBody: null,
+    uiAssetBeforeWorkspaceBody: null,
+    uiAssetAfterWorkspaceBody: null,
+  }
+  let delayWorkspaceBody = false
   try {
     const audioProbe = await probeAudio(FFPROBE_PATH, AUDIO_PATH)
     const primaryNow = Date.now() - 60_000
@@ -185,6 +198,7 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
     let production = createVideoProductionProjectForStory(story, { generationMode: 'fast', characterMode: 'quick', now: story.updatedAt + 2 })
     const cue = production.soundTimeline.audioCues.find(({ kind }) => kind === 'narration' || kind === 'dialogue')
     assert.ok(cue)
+    // Preserve an explicit cue edit, including text distinct from NFKC story input.
     production = command(production, 'sound.cue.patch', {
       cueId: cue.id,
       patch: { text: KNOWN_TEXT, startMs: 0, endMs: 5_000 },
@@ -204,6 +218,10 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
       report = { ...report, status: 'unavailable', unavailable: readiness.reason || 'WhisperX probe reported unavailable.' }
       console.log(`SPEECH_ALIGNMENT_UI_UNAVAILABLE: ${report.unavailable}`)
     } else {
+      await requestJson(bridge, '/api/workspace/catalog', {
+        method: 'PUT',
+        body: JSON.stringify({ catalog: fixtureCatalog, baseRevision: 0, source: 'speech-alignment-ui-qa' }),
+      })
       const dataUrl = `data:audio/wav;base64,${(await readFile(AUDIO_PATH)).toString('base64')}`
       const imported = await requestJson(bridge, '/api/library/assets', {
         method: 'POST',
@@ -225,10 +243,6 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
         },
       }, 2)
       const documentValue = JSON.stringify({ schemaVersion: 2, project: story, plan, production })
-      await requestJson(bridge, '/api/workspace/catalog', {
-        method: 'PUT',
-        body: JSON.stringify({ catalog: fixtureCatalog, baseRevision: 0, source: 'speech-alignment-ui-qa' }),
-      })
       await requestJson(bridge, `/api/workspace/documents/${encodeURIComponent(DOCUMENT_ID)}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -248,6 +262,22 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
       page.on('pageerror', (error) => pageErrors.push(`pageerror: ${error.message}`))
       page.on('console', (message) => { if (['error', 'warning'].includes(message.type())) pageErrors.push(`${message.type()}: ${message.text()}`) })
       await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      await page.route('**/api/workspace/documents/**', async (route) => {
+        const request = route.request()
+        const url = new URL(request.url())
+        const target = request.method() === 'GET'
+          && url.pathname === `/api/workspace/documents/${encodeURIComponent(DOCUMENT_ID)}`
+          && url.searchParams.get('projectId') === PROJECT_ID
+          && url.searchParams.get('modeId') === 'smart-video'
+        if (!delayWorkspaceBody || !target) {
+          await route.continue()
+          return
+        }
+        if (refreshRecovery.workspaceBodyRequestAt === null) refreshRecovery.workspaceBodyRequestAt = Date.now()
+        await delay(refreshRecovery.delayMs)
+        if (refreshRecovery.workspaceBodyReleasedAt === null) refreshRecovery.workspaceBodyReleasedAt = Date.now()
+        await route.continue()
+      })
       await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
       await page.locator('.aq-project-row-main').filter({ hasText: 'SPEECH-ALIGNMENT UI 验收' }).click()
       const studio = page.getByRole('region', { name: '多智能体制片工作室' })
@@ -325,12 +355,40 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
       assert.notEqual(appliedSubtitle.endMs, beforeSubtitle.endMs)
 
       const jobsBeforeRefresh = (await requestJson(bridge, '/api/jobs')).jobs.filter((job) => job.kind === 'speech-alignment' && job.request?.cueId === cue.id)
+      delayWorkspaceBody = true
+      const refreshedStudio = page.getByRole('region', { name: '多智能体制片工作室' })
       await page.reload({ waitUntil: 'domcontentloaded' })
-      await studio.waitFor({ state: 'visible', timeout: 20_000 })
-      await studio.getByRole('listitem').filter({ hasText: '声音字幕' }).click()
+      await refreshedStudio.waitFor({ state: 'visible', timeout: 20_000 })
+      refreshRecovery.studioVisibleAt = Date.now()
+      refreshRecovery.studioBeforeWorkspaceBody = refreshRecovery.workspaceBodyReleasedAt === null
+        || refreshRecovery.studioVisibleAt < refreshRecovery.workspaceBodyReleasedAt
+      assert.equal(refreshRecovery.studioBeforeWorkspaceBody, false, 'The editor must wait for the authoritative workspace body before mounting')
+      await refreshedStudio.getByRole('listitem').filter({ hasText: '声音字幕' }).click()
       const refreshedSoundTimeline = studio.getByRole('region', { name: '声音字幕时间线' })
       await refreshedSoundTimeline.getByRole('button', { name: '音频', exact: true }).click()
       const refreshedCard = refreshedSoundTimeline.locator(`[data-sound-cue="${cue.id}"]`)
+      await refreshedCard.waitFor({ state: 'visible', timeout: 20_000 })
+      refreshRecovery.cardVisibleAt = Date.now()
+      const cardTextAtRefresh = await refreshedCard.textContent()
+      const cardHasAssetAtRefresh = /sha256:/u.test(cardTextAtRefresh || '')
+      if (refreshRecovery.workspaceBodyReleasedAt === null || refreshRecovery.cardVisibleAt < refreshRecovery.workspaceBodyReleasedAt) {
+        refreshRecovery.cardTextBeforeWorkspaceBody = cardTextAtRefresh
+        refreshRecovery.uiAssetBeforeWorkspaceBody = cardHasAssetAtRefresh
+      }
+      const releaseDeadline = Date.now() + 5_000
+      while (refreshRecovery.workspaceBodyReleasedAt === null && Date.now() < releaseDeadline) await delay(25)
+      refreshRecovery.studioBeforeWorkspaceBody = refreshRecovery.studioVisibleAt !== null
+        && refreshRecovery.workspaceBodyReleasedAt !== null
+        && refreshRecovery.studioVisibleAt < refreshRecovery.workspaceBodyReleasedAt
+      if (refreshRecovery.workspaceBodyReleasedAt !== null) {
+        const settleWait = Math.max(0, refreshRecovery.workspaceBodyReleasedAt + 500 - Date.now())
+        if (settleWait) await delay(settleWait)
+      }
+      refreshRecovery.cardTextAfterWorkspaceBody = await refreshedCard.textContent()
+      refreshRecovery.uiAssetAfterWorkspaceBody = /sha256:/u.test(refreshRecovery.cardTextAfterWorkspaceBody || '')
+      console.log(`SPEECH_ALIGNMENT_UI_REFRESH_TIMING: ${JSON.stringify({
+        ...refreshRecovery,
+      })}`)
       await refreshedCard.getByRole('button', { name: '对齐片段', exact: true }).click()
       const refreshedAlignment = refreshedSoundTimeline.locator(`[data-alignment-cue="${cue.id}"]`)
       await refreshedAlignment.getByRole('button', { name: '调用本地对齐', exact: true }).click()
@@ -373,6 +431,7 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
             reusedCompletedJobAfterRefresh: true,
             jobsBeforeRefresh: jobsBeforeRefresh.map(({ id }) => id),
             jobsAfterRefresh: jobsAfterRefresh.map(({ id }) => id),
+            refreshRecovery,
             narrowOverflow: overflow,
             pageErrors,
           },
@@ -383,11 +442,11 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
   } catch (error) {
     failure = error
     if (error?.code === 'SPEECH_ALIGNMENT_UNAVAILABLE' || /WhisperX|speech alignment.*unavailable|dependencies or local model/iu.test(error?.message || '')) {
-      report = { ...report, status: 'unavailable', unavailable: error.message, machine: { ...report.machine, pageErrors } }
+      report = { ...report, status: 'unavailable', unavailable: error.message, machine: { ...report.machine, pageErrors, refreshRecovery } }
       console.log(`SPEECH_ALIGNMENT_UI_UNAVAILABLE: ${error.message}`)
       failure = null
     } else {
-      report = { ...report, status: 'failed', error: { name: error?.name, code: error?.code, message: error?.message, stack: error?.stack }, machine: { ...report.machine, pageErrors } }
+      report = { ...report, status: 'failed', error: { name: error?.name, code: error?.code, message: error?.message, stack: error?.stack }, machine: { ...report.machine, pageErrors, refreshRecovery } }
     }
   } finally {
     await browser?.close().catch(() => {})

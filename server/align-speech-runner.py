@@ -17,6 +17,7 @@ from pathlib import Path
 MAX_TEXT_LENGTH = 2_000
 MAX_LANGUAGE_LENGTH = 32
 MAX_WORDS = 8_192
+MAX_CPU_THREADS = 4
 REQUIRED_MODEL_FILES = (
     "config.json",
     "preprocessor_config.json",
@@ -122,7 +123,11 @@ def validate_ffmpeg(ffmpeg_path):
 
 def import_whisperx():
     try:
+        import torch
         import whisperx
+        # Small CPU alignment jobs suffer from model-loading thread contention.
+        # Bound this runner only; retain a lower explicitly configured limit.
+        torch.set_num_threads(min(MAX_CPU_THREADS, torch.get_num_threads()))
     except Exception as exc:  # noqa: BLE001 - dependency errors need one clear boundary
         fail("SPEECH_ALIGNMENT_UNAVAILABLE", f"WhisperX is unavailable: {exc}")
     return whisperx
