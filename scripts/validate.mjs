@@ -103,6 +103,7 @@ try {
     await run('safe storage lifecycle API', process.execPath, ['scripts/validate-storage-lifecycle-api.mjs'])
     await run('safe storage lifecycle browser vertical', process.execPath, ['scripts/validate-storage-lifecycle-ui.mjs'])
     await run('controlled custom workflow browser vertical', process.execPath, ['scripts/validate-custom-workflow-ui.mjs'])
+    await run('authoritative workspace recovery browser regression', process.execPath, ['scripts/validate-workspace-recovery-ui.mjs'])
     await run('isolated browser smoke', process.execPath, ['scripts/validate-browser.mjs'], {
       env: { MIAOHUI_QA_SKIP_BUILD: '1' },
     })

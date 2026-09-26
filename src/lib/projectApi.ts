@@ -171,7 +171,51 @@ export async function saveWorkspaceCatalog(catalog: ProjectCatalog, baseRevision
 
 const workspaceDocumentRevisions = new Map<string, number | null>()
 const workspaceDocumentWrites = new Map<string, Promise<WorkspaceModeDocument>>()
+const workspaceDocumentWriteAttempts = new Map<string, number>()
+const workspaceDocumentReadAttempts = new Map<string, number>()
+const workspaceDocumentDirty = new Map<string, boolean>()
 const workspaceCreativePlanCommits = new Map<string, { catalog: ProjectCatalog; revision: number }>()
+
+function workspaceDocumentAttempt(documentId: string) {
+  return workspaceDocumentWriteAttempts.get(documentId) ?? 0
+}
+
+function workspaceDocumentReadAttempt(documentId: string) {
+  return workspaceDocumentReadAttempts.get(documentId) ?? 0
+}
+
+function beginWorkspaceDocumentRead(documentId: string) {
+  const attempt = workspaceDocumentReadAttempt(documentId) + 1
+  workspaceDocumentReadAttempts.set(documentId, attempt)
+  return attempt
+}
+
+function markWorkspaceDocumentWriteQueued(documentId: string) {
+  const attempt = workspaceDocumentAttempt(documentId) + 1
+  workspaceDocumentWriteAttempts.set(documentId, attempt)
+  workspaceDocumentDirty.set(documentId, true)
+  return attempt
+}
+
+function markWorkspaceDocumentAuthoritative(documentId: string, revision: number | null) {
+  workspaceDocumentWriteAttempts.set(documentId, workspaceDocumentAttempt(documentId) + 1)
+  workspaceDocumentReadAttempts.set(documentId, workspaceDocumentReadAttempt(documentId) + 1)
+  workspaceDocumentRevisions.set(documentId, revision)
+  workspaceDocumentDirty.set(documentId, false)
+}
+
+function markWorkspaceDocumentWriteSucceeded(documentId: string, attempt: number, revision: number) {
+  const currentAttempt = workspaceDocumentAttempt(documentId)
+  const dirty = workspaceDocumentDirty.get(documentId) === true
+  if (attempt !== currentAttempt && !dirty) return
+  workspaceDocumentRevisions.set(documentId, revision)
+  if (attempt === currentAttempt) workspaceDocumentDirty.set(documentId, false)
+}
+
+async function settleWorkspaceDocumentWrites() {
+  const pending = [...workspaceDocumentWrites.values()]
+  if (pending.length) await Promise.allSettled(pending)
+}
 
 export async function initializeWorkspaceModeDocument(input: {
   catalog: ProjectCatalog
@@ -192,7 +236,7 @@ export async function initializeWorkspaceModeDocument(input: {
       }),
     },
   )
-  workspaceDocumentRevisions.set(payload.document.documentId, payload.document.revision)
+  markWorkspaceDocumentAuthoritative(payload.document.documentId, payload.document.revision)
   return payload
 }
 
@@ -201,11 +245,19 @@ export async function loadWorkspaceModeDocument(
   documentId: string,
   modeId: WorkspaceModeDocument['modeId'],
 ) {
+  const readAttempt = beginWorkspaceDocumentRead(documentId)
+  const writeAttempt = workspaceDocumentAttempt(documentId)
+  const cleanAtStart = workspaceDocumentDirty.get(documentId) !== true
   const query = new URLSearchParams({ projectId, modeId })
   const payload = await api<{ document: WorkspaceModeDocument | null }>(
     `/api/workspace/documents/${encodeURIComponent(documentId)}?${query.toString()}`,
   )
-  workspaceDocumentRevisions.set(documentId, payload.document?.revision ?? null)
+  if (cleanAtStart
+    && workspaceDocumentDirty.get(documentId) !== true
+    && workspaceDocumentAttempt(documentId) === writeAttempt
+    && workspaceDocumentReadAttempt(documentId) === readAttempt) {
+    workspaceDocumentRevisions.set(documentId, payload.document?.revision ?? null)
+  }
   return payload.document
 }
 
@@ -218,6 +270,7 @@ export function saveWorkspaceModeDocument(input: {
   reason?: string
   forceRecovery?: boolean
 }) {
+  const writeAttempt = markWorkspaceDocumentWriteQueued(input.documentId)
   const previous = workspaceDocumentWrites.get(input.documentId)
   const request = (previous ? previous.catch(() => undefined) : Promise.resolve())
     .then(async () => {
@@ -233,7 +286,7 @@ export function saveWorkspaceModeDocument(input: {
           body: JSON.stringify({ ...body, baseRevision }),
         },
       )
-      workspaceDocumentRevisions.set(documentId, payload.document.revision)
+      markWorkspaceDocumentWriteSucceeded(documentId, writeAttempt, payload.document.revision)
       return payload.document
     })
   workspaceDocumentWrites.set(input.documentId, request)
@@ -260,7 +313,7 @@ export async function commitWorkspaceCreativePlan(approvedPlan: ApprovedCreative
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ approvedPlan }),
   })
-  workspaceDocumentRevisions.set(payload.document.documentId, payload.document.revision)
+  markWorkspaceDocumentAuthoritative(payload.document.documentId, payload.document.revision)
   workspaceCreativePlanCommits.set(payload.document.documentId, {
     catalog: payload.catalog,
     revision: payload.document.revision,
@@ -308,14 +361,16 @@ export async function createWorkspaceRecoveryPoint(projectId: string, options: {
 }
 
 export async function restoreWorkspaceRecoveryPoint(recoveryPointId: string) {
+  await settleWorkspaceDocumentWrites()
   const payload = await api<{
     restored: WorkspaceCatalogRecord & {
       document: WorkspaceModeDocument | null
       restoredFrom: WorkspaceRecoveryPoint
     }
   }>(`/api/workspace/recovery-points/${encodeURIComponent(recoveryPointId)}/restore`, { method: 'POST' })
-  if (payload.restored.document) {
-    workspaceDocumentRevisions.set(payload.restored.document.documentId, payload.restored.document.revision)
+  const restoredDocumentId = payload.restored.document?.documentId ?? payload.restored.restoredFrom.documentId
+  if (restoredDocumentId) {
+    markWorkspaceDocumentAuthoritative(restoredDocumentId, payload.restored.document?.revision ?? null)
   }
   return payload
 }

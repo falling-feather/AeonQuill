@@ -429,7 +429,7 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor) {
       validSamples: inputLatencies.length,
       timeoutCount: inputLatencyTimeouts,
       missingTargetCount: inputLatencyMissingTargets,
-      totalAttempts: cycles + 1,
+      totalAttempts: inputLatencies.length + inputLatencyTimeouts + inputLatencyMissingTargets,
       inputPreflight: preflight,
       inputDiagnostics: inputLatencyDiagnostics,
       measurementQuality: inputLatencyTimeouts === 0 && inputLatencyMissingTargets === 0 ? 'passed' : 'failed',

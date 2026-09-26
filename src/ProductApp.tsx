@@ -127,6 +127,7 @@ type PixelDraftSnapshot = {
   status: 'empty' | 'ready' | 'error'
   document?: PixelDocument
   error?: string
+  backedByWorkspace?: boolean
 }
 
 type VideoSessionSnapshot = {
@@ -684,6 +685,7 @@ export default function ProductApp() {
   const catalogBridgeSavePromiseRef = useRef<Promise<void> | null>(null)
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
+  const unsavedPixelDraftsRef = useRef(new Map<string, PixelDraftSnapshot>())
   const packageInputRef = useRef<HTMLInputElement>(null)
   const packageBusyRef = useRef(false)
   const [workspaceDocumentResolvedKey, setWorkspaceDocumentResolvedKey] = useState<string | null>(null)
@@ -699,6 +701,12 @@ export default function ProductApp() {
   const activeWorkspaceProjectId = activeWorkspaceProject?.id
   const activeModeDocumentId = activeModeDocument?.id
   const activeModeDocumentMode = activeModeDocument?.modeId
+  const pixelRouteRef = useRef<string | undefined>(undefined)
+  pixelRouteRef.current = route.modeId === 'pixel' ? activeModeDocumentId ?? route.projectId : undefined
+  const readPixelRecovery = useCallback((documentId?: string): PixelDraftSnapshot => (
+    (documentId && unsavedPixelDraftsRef.current.get(documentId))
+      || readPixelDraft(pixelStorageKey(documentId), documentId)
+  ), [])
 
   useEffect(() => {
     bridgeReadyRef.current = runtimeProbe.bridgeReady
@@ -1080,7 +1088,10 @@ export default function ProductApp() {
       if (restored.document?.modeId === 'pixel') {
         const document = deserializePixelDocument(restored.document.value)
         const serialized = serializePixelDocument(document)
-        setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty', document })
+        unsavedPixelDraftsRef.current.delete(document.id)
+        setPixelDraft(isMeaningfulPixelDraft(document)
+          ? { status: 'ready', document, backedByWorkspace: true }
+          : { status: 'empty', document, backedByWorkspace: true })
         try { localStorage.setItem(pixelStorageKey(document.id), serialized) } catch { /* SQLite remains canonical */ }
       } else if (restored.document?.modeId === 'smart-video') {
         const { deserializeSmartVideoDocument } = await import('./lib/story/smartVideoDocument')
@@ -1312,6 +1323,15 @@ export default function ProductApp() {
       return
     }
     const loadingKey = `${activeWorkspaceProjectId}:${activeModeDocumentId}:${activeModeDocumentMode}`
+    const unsavedPixelDraft = activeModeDocumentMode === 'pixel'
+      ? unsavedPixelDraftsRef.current.get(activeModeDocumentId)
+      : undefined
+    if (unsavedPixelDraft) {
+      // Keep the write's original SQLite revision for conflict detection on retry.
+      setPixelDraft(unsavedPixelDraft)
+      setWorkspaceDocumentResolvedKey(loadingKey)
+      return
+    }
     let disposed = false
     setWorkspaceDocumentResolvedKey((current) => current === loadingKey ? current : null)
     void (async () => {
@@ -1334,10 +1354,12 @@ export default function ProductApp() {
           if (stored) {
             const document = deserializePixelDocument(stored.value)
             const serialized = serializePixelDocument(document)
-            setPixelDraft(isMeaningfulPixelDraft(document) ? { status: 'ready', document } : { status: 'empty', document })
+            setPixelDraft(isMeaningfulPixelDraft(document)
+              ? { status: 'ready', document, backedByWorkspace: true }
+              : { status: 'empty', document, backedByWorkspace: true })
             try { localStorage.setItem(pixelStorageKey(activeModeDocumentId), serialized) } catch { /* SQLite remains canonical */ }
           } else {
-            setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocumentId), activeModeDocumentId))
+            setPixelDraft(readPixelRecovery(activeModeDocumentId))
           }
           return
         }
@@ -1356,7 +1378,7 @@ export default function ProductApp() {
       .catch((error) => {
         if (disposed) return
         const fallback = activeModeDocumentMode === 'pixel'
-          ? readPixelDraft(pixelStorageKey(activeModeDocumentId), activeModeDocumentId)
+          ? readPixelRecovery(activeModeDocumentId)
           : readVideoSession(videoStorageKey(activeModeDocumentId), activeModeDocumentId)
         if (activeModeDocumentMode === 'pixel') setPixelDraft(fallback as PixelDraftSnapshot)
         else setVideoSession(fallback as VideoSessionSnapshot)
@@ -1379,6 +1401,7 @@ export default function ProductApp() {
     activeWorkspaceProjectId,
     clientStateReady,
     flushProjectCatalogBridgeSave,
+    readPixelRecovery,
     route.modeId,
     runtimeProbe.bridgeReady,
   ])
@@ -1500,8 +1523,17 @@ export default function ProductApp() {
 
   useEffect(() => {
     if (route.modeId !== 'pixel') return
-    setPixelDraft(readPixelDraft(pixelStorageKey(activeModeDocument?.id), activeModeDocument?.id))
-  }, [activeModeDocument?.id, route.modeId])
+    setPixelDraft((current) => (
+      current.document && current.document.id === activeModeDocument?.id
+        ? current
+        : readPixelRecovery(activeModeDocument?.id)
+    ))
+  }, [activeModeDocument?.id, readPixelRecovery, route.modeId])
+
+  useEffect(() => {
+    if (route.modeId === 'pixel') return
+    setPixelDraft((current) => current.backedByWorkspace ? { status: 'empty' } : current)
+  }, [route.modeId])
 
   useEffect(() => {
     if (route.modeId !== 'smart-video') return
@@ -1513,16 +1545,13 @@ export default function ProductApp() {
     projectCatalogRef.current = snapshot.catalog
     setProjectCatalog(snapshot.catalog)
     setProjectCatalogError(snapshot.error)
-    setPixelDraft(readPixelDraft(
-      activeModeDocument?.modeId === 'pixel' ? pixelStorageKey(activeModeDocument.id) : PIXEL_STORAGE_KEY,
-      activeModeDocument?.modeId === 'pixel' ? activeModeDocument.id : undefined,
-    ))
+    setPixelDraft(readPixelRecovery(activeModeDocument?.modeId === 'pixel' ? activeModeDocument.id : undefined))
     setVideoSession(readVideoSession(
       activeModeDocument?.modeId === 'smart-video' ? videoStorageKey(activeModeDocument.id) : SMART_VIDEO_SESSION_KEY,
       activeModeDocument?.modeId === 'smart-video' ? activeModeDocument.id : undefined,
     ))
     void refreshProject(preferences.balancedProjectId)
-  }, [activeModeDocument, preferences.balancedProjectId, refreshProject])
+  }, [activeModeDocument, preferences.balancedProjectId, readPixelRecovery, refreshProject])
 
   const openRuntimeSettings = useCallback(() => {
     void preloadProductDialog('settings').catch(() => undefined)
@@ -1682,7 +1711,7 @@ export default function ProductApp() {
     return undefined
   }, [projectCatalogError, recentProjects.length])
 
-  const queuePixelBridgeSave = useCallback((serialized: string) => {
+  const queuePixelBridgeSave = useCallback((serialized: string, document: PixelDocument) => {
     pixelBridgeSaveRef.current = serialized
     if (pixelBridgeSaveTimerRef.current !== undefined) window.clearTimeout(pixelBridgeSaveTimerRef.current)
     pixelBridgeSaveTimerRef.current = window.setTimeout(() => {
@@ -1692,10 +1721,13 @@ export default function ProductApp() {
       void saveClientState('pixel-document', value).then(() => {
         if (pixelBridgeSaveRef.current === value) pixelBridgeSaveRef.current = undefined
       }).catch(() => {
-        setPixelDraft((current) => current.document
+        if (pixelBridgeSaveRef.current !== value) return
+        setPixelDraft((current) => current.document === document
           ? { ...current, status: 'error', error: '像素草稿仍在当前页面，但本机持久化失败；刷新前请先导出。' }
           : current)
-        setModeNotice({ tone: 'error', message: '像素草稿未能写入本机用户数据；刷新前请先导出。' })
+        if (pixelRouteRef.current === document.id) {
+          setModeNotice({ tone: 'error', message: '像素草稿未能写入本机用户数据；刷新前请先导出。' })
+        }
       })
     }, 300)
   }, [])
@@ -1717,7 +1749,7 @@ export default function ProductApp() {
       const serialized = serializePixelDocument(next)
       if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
       try { localStorage.setItem(storageKey, serialized) } catch { /* surfaced after the first meaningful edit */ }
-      if (usesLegacyBridge) queuePixelBridgeSave(serialized)
+      if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
       setPixelDraft({ status: 'empty', document: next })
       if (agentCommit) commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
       return
@@ -1730,17 +1762,20 @@ export default function ProductApp() {
     } catch {
       browserStored = false
     }
-    if (usesLegacyBridge) queuePixelBridgeSave(serialized)
+    if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
     const durablyStored = browserStored || bridgeReadyRef.current
-    setPixelDraft(durablyStored
+    const snapshot: PixelDraftSnapshot = durablyStored
       ? { status: 'ready', document: next }
       : {
           status: 'error',
           document: next,
           error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
-        })
+        }
+    if (catalogDocumentId && !agentCommit) unsavedPixelDraftsRef.current.set(catalogDocumentId, snapshot)
+    setPixelDraft(agentCommit ? { ...snapshot, backedByWorkspace: true } : snapshot)
     if (catalogDocumentId && activeWorkspaceProjectId) {
       if (agentCommit) {
+        unsavedPixelDraftsRef.current.delete(catalogDocumentId)
         commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
       } else if (bridgeReadyRef.current) {
         void saveWorkspaceModeDocument({
@@ -1751,17 +1786,32 @@ export default function ProductApp() {
           value: serialized,
           reason: 'pixel-autosave',
         }).then(() => {
-          setPixelDraft({ status: 'ready', document: next })
+          if (unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next) {
+            unsavedPixelDraftsRef.current.delete(catalogDocumentId)
+          }
+          setPixelDraft((current) => {
+            if (current.document !== next) return current
+            return pixelRouteRef.current === catalogDocumentId
+              ? { status: 'ready', document: next, backedByWorkspace: true }
+              : { status: 'empty' }
+          })
         }).catch((error) => {
           const conflict = error instanceof ProjectApiError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT'
-          setPixelDraft({
+          const failed: PixelDraftSnapshot = {
             status: 'error',
             document: next,
             error: conflict
               ? '像素文档已在另一页面更新；当前内存草稿仍保留，未覆盖 SQLite 版本。'
               : '像素草稿仍在当前页面，但写入 SQLite 项目正文失败；刷新前请先导出。',
-          })
-          setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '像素项目正文保存失败' })
+          }
+          const isCurrent = unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next
+          if (isCurrent) {
+            unsavedPixelDraftsRef.current.set(catalogDocumentId, failed)
+          }
+          setPixelDraft((current) => current.document === next ? failed : current)
+          if (isCurrent && pixelRouteRef.current === catalogDocumentId) {
+            setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '像素项目正文保存失败' })
+          }
         })
       }
       try {
@@ -2019,6 +2069,16 @@ export default function ProductApp() {
       />
     </Suspense>
   ) : null
+
+  if (route.modeId !== 'home' && !clientStateReady) {
+    return (
+      <ModeGate
+        modeLabel={PRODUCT_MODE_LABELS[route.modeId]}
+        feedback={{ status: 'loading', title: '正在恢复项目', detail: '正在读取本机项目目录与保存状态。' }}
+        onBack={goHome}
+      />
+    )
+  }
 
   if (route.modeId === 'balanced') {
     const requestedProjectId = activeModeDocument?.id ?? route.projectId ?? preferences.balancedProjectId ?? DEFAULT_BALANCED_PROJECT_ID
