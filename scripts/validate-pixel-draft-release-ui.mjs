@@ -103,6 +103,8 @@ async function waitForWorkspaceRevision(bridge, expectedRevision, timeoutMs = 15
 const edgePath = await findEdgePath()
 let bridge
 let browser
+let diagnosticPage
+const documentRequests = []
 let failure = null
 let report = {
   schemaVersion: 1,
@@ -154,6 +156,15 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: edgePath, args: ['--disable-gpu', '--enable-precise-memory-info'] })
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   const page = await context.newPage()
+  diagnosticPage = page
+  page.on('response', (response) => {
+    if (response.request().method() === 'PUT' && response.url().includes('/api/workspace/documents/')) {
+      documentRequests.push({ at: Date.now(), status: response.status(), url: response.url() })
+    }
+  })
+  page.on('requestfailed', (request) => {
+    if (request.url().includes('/api/workspace/documents/')) documentRequests.push({ at: Date.now(), error: request.failure()?.errorText })
+  })
   await page.addInitScript(() => {
     const NativeWorker = globalThis.Worker
     const telemetry = { created: 0, terminated: 0 }
@@ -291,7 +302,12 @@ try {
   }
 } catch (error) {
   failure = error
-  report = { ...report, status: 'failed', error: { name: error?.name, message: error?.message, stack: error?.stack } }
+  const pageState = await diagnosticPage?.evaluate(() => ({
+    revision: document.querySelector('.aq-pixel-document-title small')?.textContent,
+    status: document.querySelector('.aq-pixel-status')?.textContent,
+    notices: [...document.querySelectorAll('[role="alert"], [role="status"]')].map((node) => node.textContent?.slice(0, 250)),
+  })).catch(() => null)
+  report = { ...report, status: 'failed', pageState, documentRequests, error: { name: error?.name, message: error?.message, stack: error?.stack } }
 } finally {
   await browser?.close().catch(() => {})
   await bridge?.stop({ keepRuntime: false }).catch(() => {})

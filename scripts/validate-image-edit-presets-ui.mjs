@@ -10,7 +10,9 @@ import { startIsolatedBridge } from './qa-runtime.mjs'
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const reportDirectory = join(projectRoot, '.runtime', 'qa')
 await mkdir(reportDirectory, { recursive: true })
-const bridge = await startIsolatedBridge('image-edit-presets-ui')
+const bridge = await startIsolatedBridge('image-edit-presets-ui', {
+  executablePath: process.env.AEONQUILL_QA_BRIDGE_EXECUTABLE,
+})
 const browser = await chromium.launch({ headless: true, ...(process.platform === 'win32' ? { channel: 'msedge' } : {}) })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 const issues = []
@@ -121,6 +123,7 @@ try {
 } finally {
   await writeFile(join(reportDirectory, 'image-edit-presets-ui.json'), `${JSON.stringify({
     status: failure ? 'failed' : 'passed', generatedAt: new Date().toISOString(),
+    bridgeExecutable: process.env.AEONQUILL_QA_BRIDGE_EXECUTABLE || process.execPath,
     scope: 'UI request contract with controlled capability fixture; no model inference or quality acceptance',
     requests: requests.map(({ workflowId, params }) => ({ workflowId, params })),
     checks: ['default-omits-preset', 'missing-dependency-disabled', 'on-demand-runtime-selection', 'selected-preset-request', 'no-silent-fallback', 'qwen-only-selector', 'desktop-and-390px'],

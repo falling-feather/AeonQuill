@@ -152,7 +152,7 @@ function delay(durationMs) {
 async function captureInteractionState(page, persistenceRequests, cycle, phase) {
   const ui = await page.evaluate(({ cycle: currentCycle, phase: currentPhase }) => {
     const buttonState = (name) => {
-      const button = [...document.querySelectorAll('button')].find((entry) => entry.textContent?.trim() === name)
+      const button = [...document.querySelectorAll('button')].find((entry) => entry.getAttribute('aria-label') === name)
       return {
         exists: Boolean(button),
         disabled: button?.disabled ?? null,
@@ -246,12 +246,6 @@ async function waitForPixelRevisionAdvance(page, previousText, deadline) {
 
 async function clickPixelHistoryButton(page, name, deadline) {
   const button = page.getByRole('button', { name, exact: true })
-  await button.waitFor({ state: 'visible', timeout: remainingControlMs(deadline) })
-  await page.waitForFunction((buttonName) => [...document.querySelectorAll('button')].some((entry) => (
-    entry.textContent?.trim() === buttonName
-      && !entry.disabled
-      && entry.getClientRects().length > 0
-  )), name, { timeout: remainingControlMs(deadline) })
   await button.click({ timeout: remainingControlMs(deadline) })
 }
 

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "status": "local-engineering-passed",
+  "generatedAt": "2026-09-26T04:59:42.901Z",
+  "source": {
+    "cleanCommit": "045ba256b6506ba181d348ebdc60c74016409824",
+    "functionalTrack": "V0.7.88",
+    "productVersion": "0.7.1"
+  },
+  "install": {
+    "installedAt": "2026-09-26T04:36:13.9944126Z",
+    "directory": "D:/AEONQUILL/App",
+    "binaries": [
+      {
+        "filename": "aeonquill-desktop.exe",
+        "bytes": 13170688,
+        "sha256": "ac18820a040f27f44f45164e2a26a19ae119218112e6eabca36cbb0eca5c80e0"
+      },
+      {
+        "filename": "aeonquill-bridge.exe",
+        "bytes": 61001263,
+        "sha256": "f213513b684e8bb5c8d47eb8d21c90a6bf1b35a5cacc79f4420ad9adfaacdfdc"
+      }
+    ]
+  },
+  "sidecar": {
+    "status": "passed",
+    "systemNodeRequired": false,
+    "readyMs": 521,
+    "exitCode": 0,
+    "portClosed": true,
+    "parentControl": "stdio"
+  },
+  "native": {
+    "status": "passed",
+    "timeline": {
+      "tauriReadyMs": 17,
+      "bridgeSpawnedMs": 48,
+      "bridgeReadyMs": 582,
+      "windowLoadedMs": 1577,
+      "rendererProbedMs": 1664,
+      "windowCloseRequestedMs": 2265,
+      "shutdownFinishedMs": 2590
+    },
+    "rendererProbe": {
+      "tauriGlobalType": "undefined",
+      "processType": "undefined",
+      "requireType": "undefined",
+      "documentReadyState": "complete"
+    },
+    "shutdown": {
+      "requested": true,
+      "exited": true,
+      "exitCode": 0,
+      "forced": false,
+      "portClosed": true
+    }
+  },
+  "singleInstance": {
+    "status": "passed",
+    "attempts": 4,
+    "desktopCount": 1,
+    "bridgeCount": 1,
+    "secondaryExitCodes": [
+      0,
+      0,
+      0
+    ]
+  },
+  "userData": {
+    "status": "passed",
+    "protectedFiles": 77,
+    "changedFiles": 0
+  },
+  "validation": {
+    "unitTests": 438,
+    "baselineChecks": 145,
+    "p7Phases": 6,
+    "baselineResumption": {
+      "generatedAt": "2026-09-26T04:18:53.502Z",
+      "error": "isolated local API exited with 1",
+      "passedCheckCount": 132
+    },
+    "packagedPresetUi": "passed",
+    "finalQuickChecks": 122,
+    "finalOriginalTransportDraftRecovery": "passed"
+  },
+  "audio": {
+    "lastRealPackagedPass": "V0.7.86",
+    "machineStatus": "passed",
+    "humanStatus": "pending",
+    "implementationUnchangedThroughCandidate": true
+  },
+  "limitations": [
+    "No installer/public signing or cross-machine acceptance is claimed.",
+    "Large pixel interaction stress and perceptual model/audio quality remain separate open gates."
+  ],
+  "cleanup": {
+    "retainedBuildClone": ".runtime/tmp/rel020-build-20260923",
+    "status": "blocked-by-automatic-approval",
+    "registeredWorktrees": 1,
+    "reason": "blocked by policy",
+    "dependencyJunctionsRetained": 3
+  }
+}

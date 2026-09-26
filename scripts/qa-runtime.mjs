@@ -85,7 +85,7 @@ export async function startIsolatedBridge(label = 'qa', options = {}) {
   let stopped = false
 
   const spawnBridge = () => {
-    child = spawn(process.execPath, ['server/index.mjs'], {
+    child = spawn(options.executablePath || process.execPath, options.executablePath ? [] : ['server/index.mjs'], {
       cwd: projectRoot,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

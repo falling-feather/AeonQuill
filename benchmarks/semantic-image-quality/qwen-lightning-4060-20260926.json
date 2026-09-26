@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "status": "machine-executed-human-review-pending",
+  "generatedAt": "2026-09-26T05:09:53.078Z",
+  "hardware": {
+    "gpu": "RTX 4060 Laptop 8GB",
+    "systemRamGb": 32
+  },
+  "lightningSourceCommit": "045ba256b6506ba181d348ebdc60c74016409824",
+  "source": {
+    "kind": "H3-generated adult close-up; not a camera photograph",
+    "path": "qwen-4060-20260926/source.png",
+    "sha256": "6ae88cd89adbcf27310de874e7e97ba7e16ff3851058efaab0b0a4913513cb3b",
+    "sourceVideoSha256": "7fa0d701d6320f5f69d5c4151c199e9044609c5a2226912ceae35807ce0d7e1d"
+  },
+  "mask": {
+    "path": "qwen-4060-20260926/mask.png",
+    "sha256": "be8eb3d51cfb9b51da70902b7ba4636561e553f1d4c80cd4d54c74c5922f8308",
+    "channel": "luma",
+    "rectangle": {
+      "x": 36,
+      "y": 270,
+      "width": 220,
+      "height": 80
+    }
+  },
+  "models": {
+    "diffusion": {
+      "filename": "qwen_image_edit_2511_int8_convrot.safetensors",
+      "bytes": 20499083824,
+      "sha256": "11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829"
+    },
+    "textEncoder": {
+      "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "bytes": 9384670680,
+      "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4"
+    },
+    "vae": {
+      "filename": "qwen_image_vae.safetensors",
+      "bytes": 253806246,
+      "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+    },
+    "lightning4": {
+      "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "bytes": 849608296,
+      "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f"
+    }
+  },
+  "nodeInventory": {
+    "sha256": "6471212ebd38fb24319c934adadd768de9d3fd3dfa7ce5714b4628c7bacbaaa2",
+    "count": 833
+  },
+  "runs": [
+    {
+      "preset": "base40",
+      "status": "completed",
+      "jobId": "image-14b98978-40af-4999-b86d-77f6c47f46fb",
+      "inputParameters": {
+        "instruction": "将选区内的衣服颜色改为深红色，保持纹理、褶皱、人物、脸部、背景和光照不变。",
+        "seed": 20260926,
+        "maskChannel": "luma"
+      },
+      "workflowMetadata": {
+        "version": "qwen-image-edit-2511-int8-v1",
+        "promptVersion": "aeonquill-semantic-prompt-v1",
+        "workflowId": "region-edit",
+        "model": "qwen_image_edit_2511_int8_convrot.safetensors",
+        "textEncoder": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "vae": "qwen_image_vae.safetensors",
+        "steps": 40,
+        "cfg": 4,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "seed": 20260926,
+        "masked": true,
+        "outputNodeId": "118",
+        "instructionHash": "bc3fe89be1685860be6885c1615b971dda285e8ba5996338cae1bbb5d9ddf6a8"
+      },
+      "elapsedMs": 1171920,
+      "peakVramMiB": 7340,
+      "vramSampleIntervalMs": 5000,
+      "cacheState": "separate baseline run",
+      "output": {
+        "path": "qwen-4060-20260926/region-base40.png",
+        "sha256": "bcf57ce48210d67adfc8b69584dcd08c26a531741ee5833a1973fc07e54ec338",
+        "bytes": 116464,
+        "media": {
+          "codec_name": "png",
+          "codec_type": "video",
+          "width": 608,
+          "height": 352,
+          "pix_fmt": "rgb24"
+        }
+      },
+      "outsideMask": {
+        "status": "ok",
+        "source": [
+          608,
+          352
+        ],
+        "output": [
+          608,
+          352
+        ],
+        "mask": [
+          608,
+          352
+        ],
+        "outsidePixelCount": 196416,
+        "maskedPixelCount": 17600,
+        "outsideMaskMae": 0,
+        "outsideMaskMax": 0,
+        "outsideMaskChangedFraction": 0
+      }
+    },
+    {
+      "preset": "lightning4",
+      "status": "completed",
+      "jobId": "image-956a2f0d-8778-48ff-94dc-4cb3c8c477e1",
+      "comfyPromptId": "e27d5070-6de8-49b9-8750-0c5b34aa277b",
+      "inputParameters": {
+        "instruction": "将选区内的衣服颜色改为深红色，保持纹理、褶皱、人物、脸部、背景和光照不变。",
+        "seed": 20260926,
+        "maskChannel": "luma",
+        "preset": "lightning4"
+      },
+      "workflowMetadata": {
+        "version": "qwen-image-edit-2511-int8-lightning4-v1",
+        "promptVersion": "aeonquill-semantic-prompt-v1",
+        "workflowId": "region-edit",
+        "preset": "lightning4",
+        "model": "qwen_image_edit_2511_int8_convrot.safetensors",
+        "textEncoder": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "vae": "qwen_image_vae.safetensors",
+        "steps": 4,
+        "cfg": 1,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "denoise": 1,
+        "shift": 3.1,
+        "lora": {
+          "artifactId": "qwen-image-edit-2511-lightning4-bf16-v1",
+          "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "strength": 1
+        },
+        "seed": 20260926,
+        "masked": true,
+        "outputNodeId": "118",
+        "instructionHash": "bc3fe89be1685860be6885c1615b971dda285e8ba5996338cae1bbb5d9ddf6a8",
+        "verifiedArtifacts": [
+          {
+            "id": "qwen-image-edit-2511-int8-convrot",
+            "sha256": "11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829",
+            "bytes": 20499083824
+          },
+          {
+            "id": "qwen-image-qwen25vl-7b-fp8",
+            "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+            "bytes": 9384670680
+          },
+          {
+            "id": "qwen-image-vae",
+            "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+            "bytes": 253806246
+          },
+          {
+            "id": "qwen-image-edit-2511-lightning4-bf16-v1",
+            "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+            "bytes": 849608296
+          }
+        ]
+      },
+      "elapsedMs": 102031,
+      "peakVramMiB": 7798,
+      "vramSampleIntervalMs": 5000,
+      "cacheState": "first Qwen job in a freshly started runtime; file/hash cache conditions differ from baseline",
+      "output": {
+        "path": "qwen-4060-20260926/region-lightning4.png",
+        "sha256": "1184c3abb8e71416ac05a49e5c5e83ff6c13da7954b0f583cedbf0ddd8dd06ad",
+        "bytes": 115934,
+        "media": {
+          "codec_name": "png",
+          "codec_type": "video",
+          "width": 608,
+          "height": 352,
+          "pix_fmt": "rgb24"
+        }
+      },
+      "outsideMask": {
+        "status": "ok",
+        "source": [
+          608,
+          352
+        ],
+        "output": [
+          608,
+          352
+        ],
+        "mask": [
+          608,
+          352
+        ],
+        "outsidePixelCount": 196416,
+        "maskedPixelCount": 17600,
+        "outsideMaskMae": 0,
+        "outsideMaskMax": 0,
+        "outsideMaskChangedFraction": 0
+      }
+    },
+    {
+      "preset": "lightning4",
+      "status": "completed",
+      "jobId": "image-d28b089f-ab6e-4912-b288-7b444bd4f247",
+      "comfyPromptId": "0c540873-37e1-4cf9-a2b1-8b48a9e0d7f6",
+      "inputParameters": {
+        "instruction": "将人物衣服调整为深红色，并让窗边光照稍微更暖，保持人物身份、姿态、背景和构图不变。",
+        "identityStrength": 0.8,
+        "seed": 20260926,
+        "preset": "lightning4"
+      },
+      "workflowMetadata": {
+        "version": "qwen-image-edit-2511-int8-lightning4-v1",
+        "promptVersion": "aeonquill-semantic-prompt-v1",
+        "workflowId": "portrait-adjust",
+        "preset": "lightning4",
+        "model": "qwen_image_edit_2511_int8_convrot.safetensors",
+        "textEncoder": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "vae": "qwen_image_vae.safetensors",
+        "steps": 4,
+        "cfg": 1,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "denoise": 1,
+        "shift": 3.1,
+        "lora": {
+          "artifactId": "qwen-image-edit-2511-lightning4-bf16-v1",
+          "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "strength": 1
+        },
+        "seed": 20260926,
+        "masked": false,
+        "outputNodeId": "118",
+        "identityStrength": 0.8,
+        "instructionHash": "057b12e99435a91d84f43c7369e9b6173e013cace65b9d68f28f17ca564f694b",
+        "verifiedArtifacts": [
+          {
+            "id": "qwen-image-edit-2511-int8-convrot",
+            "sha256": "11b5af5ac601821d73930c84846c9a158e67177356daf927ce1c8d10f3963829",
+            "bytes": 20499083824
+          },
+          {
+            "id": "qwen-image-qwen25vl-7b-fp8",
+            "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+            "bytes": 9384670680
+          },
+          {
+            "id": "qwen-image-vae",
+            "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+            "bytes": 253806246
+          },
+          {
+            "id": "qwen-image-edit-2511-lightning4-bf16-v1",
+            "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+            "bytes": 849608296
+          }
+        ]
+      },
+      "elapsedMs": 58990,
+      "peakVramMiB": 7318,
+      "vramSampleIntervalMs": 5000,
+      "cacheState": "warm follow-up after region job",
+      "output": {
+        "path": "qwen-4060-20260926/portrait-lightning4.png",
+        "sha256": "c6aea29d45d58e6ec1651b0067bf34b7c3988b4da197a730f8ef8afc0856fb30",
+        "bytes": 815764,
+        "media": {
+          "codec_name": "png",
+          "codec_type": "video",
+          "width": 1328,
+          "height": 800,
+          "pix_fmt": "rgb24"
+        }
+      }
+    }
+  ],
+  "observedRegionSpeedup": 11.486,
+  "assistantVisualReview": {
+    "status": "reviewed-by-assistant",
+    "observations": [
+      "Both regional candidates change the selected clothing toward red, while the fixed rectangular mask leaves an obvious rectangular transition.",
+      "The portrait candidate changes the clothing and warm light; facial details and the changed output dimensions require human review."
+    ]
+  },
+  "humanReview": {
+    "status": "pending",
+    "baselinePortrait": "cancelled previously; no completed 40-step portrait comparison"
+  },
+  "limitations": [
+    "One region sample per preset is not a P50/P95 benchmark or a universal speedup claim.",
+    "Outside-mask equality follows fixed compositing and does not establish intrinsic identity preservation.",
+    "Fast region sampled 7798MiB on an 8GB GPU; this is a narrow memory margin.",
+    "Broader materials, SAM/rembg comparisons and human perceptual review remain open."
+  ]
+}

@@ -135,7 +135,10 @@ const baseReport = {
   documentId: DOCUMENT_ID,
   input: { audioPath: AUDIO_PATH, knownText: KNOWN_TEXT },
   configuration: { pythonPath: PYTHON_PATH, modelPath: MODEL_PATH, ffmpegPath: FFMPEG_PATH, ffprobePath: FFPROBE_PATH, edgePath },
-  machine: { pathChecks: { audioAvailable, pythonAvailable, modelAvailable, ffmpegAvailable, ffprobeAvailable, edgeAvailable: Boolean(edgePath) } },
+  machine: {
+    bridgeExecutable: process.env.AEONQUILL_QA_BRIDGE_EXECUTABLE || process.execPath,
+    pathChecks: { audioAvailable, pythonAvailable, modelAvailable, ffmpegAvailable, ffprobeAvailable, edgeAvailable: Boolean(edgePath) },
+  },
   manual: {
     status: 'manual-required',
     checks: [
@@ -205,6 +208,7 @@ if (!audioAvailable || !pythonAvailable || !modelAvailable || !ffmpegAvailable |
     }, 1)
 
     bridge = await startIsolatedBridge('speech-alignment-ui', {
+      executablePath: process.env.AEONQUILL_QA_BRIDGE_EXECUTABLE,
       environment: {
         AEONQUILL_ALIGNMENT_PYTHON: PYTHON_PATH,
         AEONQUILL_ALIGNMENT_MODEL: MODEL_PATH,
