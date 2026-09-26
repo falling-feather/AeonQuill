@@ -10,6 +10,19 @@ const COMMON_MODEL_FILES = Object.freeze({
   loraName: 'minimax_h3_turbo_v4_step600_ema.safetensors',
 })
 
+export const H3_WEIGHT_ARTIFACT_IDS = Object.freeze({
+  textEncoder: 'h3-qwen3vl-nvfp4',
+  videoVae: 'h3-video-vae',
+  audioVae: 'h3-audio-vae',
+  fp8Base: 'h3-fl2va-fp8',
+  int8Base: 'h3-fl2va-int8-convrot',
+  turboLora: 'h3-turbo-lora-v4',
+})
+
+export const VIDEO_WEIGHT_ARTIFACT_ROLES = Object.freeze([
+  'base', 'text-encoder', 'video-vae', 'audio-vae', 'acceleration-lora',
+])
+
 export const VIDEO_MODEL_PROFILES = Object.freeze({
   fp8Scaled4060: Object.freeze({
     id: 'fp8Scaled4060',
@@ -23,6 +36,13 @@ export const VIDEO_MODEL_PROFILES = Object.freeze({
     ...COMMON_MODEL_FILES,
     runtimeGate: Object.freeze({ minComfy: '0.30.0' }),
     runtime: Object.freeze({ comfy: '0.30.2', torch: '2.8.0+cu129', cuda: '12.9' }),
+    artifactIds: Object.freeze({
+      base: H3_WEIGHT_ARTIFACT_IDS.fp8Base,
+      textEncoder: H3_WEIGHT_ARTIFACT_IDS.textEncoder,
+      videoVae: H3_WEIGHT_ARTIFACT_IDS.videoVae,
+      audioVae: H3_WEIGHT_ARTIFACT_IDS.audioVae,
+      accelerationLora: H3_WEIGHT_ARTIFACT_IDS.turboLora,
+    }),
   }),
   int8ConvrotCu130: Object.freeze({
     id: 'int8ConvrotCu130',
@@ -36,6 +56,13 @@ export const VIDEO_MODEL_PROFILES = Object.freeze({
     ...COMMON_MODEL_FILES,
     runtimeGate: Object.freeze({ minComfy: '0.31.0', torchCudaFloor: 130 }),
     runtime: Object.freeze({ comfy: '0.31.0+', torch: 'cu130+', cuda: '13.0+' }),
+    artifactIds: Object.freeze({
+      base: H3_WEIGHT_ARTIFACT_IDS.int8Base,
+      textEncoder: H3_WEIGHT_ARTIFACT_IDS.textEncoder,
+      videoVae: H3_WEIGHT_ARTIFACT_IDS.videoVae,
+      audioVae: H3_WEIGHT_ARTIFACT_IDS.audioVae,
+      accelerationLora: H3_WEIGHT_ARTIFACT_IDS.turboLora,
+    }),
   }),
 })
 

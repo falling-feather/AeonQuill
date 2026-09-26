@@ -4,6 +4,7 @@ import { extname, resolve, sep } from 'node:path'
 import { MAX_ASSET_BYTES } from './project-store.mjs'
 import { redactSensitiveText, sanitizePublicPayload } from './security.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION } from './workflow-center.mjs'
+import { assertWorkflowWeightSetCompatible, validateWorkflowWeightSet } from '../src/lib/workflowRecipes.mjs'
 import {
   WORKFLOW_CONTROL_FIELDS,
   validateWorkflowControlValue,
@@ -54,7 +55,7 @@ function assertProject(projectId, workspaceStore) {
 export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflowCenter, projectStore } = {}) {
   const allowed = new Set([
     'customWorkflowId', 'projectId', 'title', 'prompt', 'negativePrompt', 'sourceLibraryItemId',
-    'lastFrameLibraryItemId', 'workflowHash', 'mappingHash', 'sourceContentHash', 'lastFrameContentHash', ...Object.keys(WORKFLOW_CONTROL_FIELDS),
+    'lastFrameLibraryItemId', 'workflowHash', 'mappingHash', 'sourceContentHash', 'lastFrameContentHash', 'weightSet', ...Object.keys(WORKFLOW_CONTROL_FIELDS),
   ])
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw customError('CUSTOM_WORKFLOW_JOB_INVALID', '自定义工作流任务必须是对象')
@@ -63,6 +64,8 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
   if (unknown.length) throw customError('CUSTOM_WORKFLOW_JOB_UNKNOWN_FIELD', '自定义工作流任务含未知字段', 400, { unknown })
   const project = assertProject(body.projectId, workspaceStore)
   const summary = workflowCenter.customExecutionSummary(body.customWorkflowId)
+  const weightSet = validateWorkflowWeightSet(summary.weightSet ?? null)
+  if (body.weightSet !== undefined) assertWorkflowWeightSetCompatible(body.weightSet, weightSet)
   assertExpectedHash(body.workflowHash, summary.hash)
   assertExpectedHash(body.mappingHash, summary.mappingHash)
   if (!summary.enabled) throw customError('CUSTOM_WORKFLOW_NOT_ENABLED', '自定义工作流尚未启用', 409)
@@ -77,6 +80,7 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
     prompt,
     workflowHash: summary.hash,
     mappingHash: summary.mappingHash,
+    ...(weightSet ? { weightSet } : {}),
   }
   const roleFields = {
     negativePrompt: 'negativePrompt',
@@ -312,10 +316,17 @@ export class CustomWorkflowExecutor {
       const summary = this.workflowCenter.customExecutionSummary(job.request.customWorkflowId)
       assertExpectedHash(job.request.workflowHash, summary.hash)
       assertExpectedHash(job.request.mappingHash, summary.mappingHash)
+      assertWorkflowWeightSetCompatible(job.request.weightSet ?? null, summary.weightSet ?? null)
       await this.runtimeManager.ensureReady({ reason: `custom-workflow:${jobId}` })
       const runtime = await this.inspectRuntime(true)
       if (!runtime.connected) throw customError('CUSTOM_WORKFLOW_RUNTIME_UNAVAILABLE', runtime.message || 'ComfyUI 无法连接', 409)
       const objectInfo = await this.comfy.objectInfo()
+      let verifiedWeightSet = null
+      if (job.request.weightSet) {
+        await this.store.update(jobId, { progress: 5, detail: '校验固定模型与加速 LoRA 的文件身份' })
+        verifiedWeightSet = await this.workflowCenter.verifyWeightSet(job.request.weightSet, { signal })
+        assertExecutionActive(this.store, jobId, signal)
+      }
       const values = {
         prompt: job.request.prompt,
         ...(job.request.negativePrompt !== undefined ? { negativePrompt: job.request.negativePrompt } : {}),
@@ -336,6 +347,10 @@ export class CustomWorkflowExecutor {
         registeredNodeTypes: objectInfo,
         executionId: job.id,
       })
+      if (verifiedWeightSet) {
+        prepared.metadata.weightSet = verifiedWeightSet
+        prepared.metadata.weightsVerified = true
+      }
       await this.store.update(jobId, {
         workflowVersion: CUSTOM_WORKFLOW_EXECUTION_VERSION,
         workflowMetadata: prepared.metadata,
@@ -381,6 +396,7 @@ export class CustomWorkflowExecutor {
           mappingHash: prepared.metadata.mappingHash,
           outputNodeId: prepared.metadata.outputNodeId,
           parameterRoles: prepared.metadata.parameterRoles,
+          ...(verifiedWeightSet ? { weightSet: verifiedWeightSet } : {}),
         },
       })
       const storedAsset = this.projectStore.getAsset(libraryAsset.version.assetId)

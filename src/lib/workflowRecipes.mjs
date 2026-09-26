@@ -1,20 +1,54 @@
 import { WORKFLOW_CONTROL_FIELDS, validateWorkflowControlValue } from './workflowControls.mjs'
-export const WORKFLOW_RECIPE_SCHEMA_VERSION = 1
-const INPUT_FIELDS = ['name', 'workflowId', 'workflowHash', 'mappingHash', 'parameters']
+export const WORKFLOW_RECIPE_SCHEMA_VERSION = 2
+const LEGACY_INPUT_FIELDS = ['name', 'workflowId', 'workflowHash', 'mappingHash', 'parameters']
+const INPUT_FIELDS = [...LEGACY_INPUT_FIELDS, 'weightSet']
 const RECORD_FIELDS = ['id', ...INPUT_FIELDS, 'createdAt', 'updatedAt']
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
 const HASH = /^[a-f0-9]{64}$/u
 
 function fail(code, message, status = 400) { throw Object.assign(new Error(message), { code, status }) }
-function record(value, keys, label) {
+function record(value, keys, label, required = keys, code = 'INVALID_WORKFLOW_RECIPE') {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some((key) => !keys.includes(key))
-    || keys.some((key) => !Object.hasOwn(value, key))) {
-    fail('INVALID_WORKFLOW_RECIPE', `${label}字段无效`)
+    || required.some((key) => !Object.hasOwn(value, key))) {
+    fail(code, `${label}字段无效`)
   }
 }
+
+export function validateWorkflowWeightSet(input) {
+  if (input === null) return null
+  const keys = ['schemaVersion', 'registryVersion', 'family', 'profileId', 'samplingMode', 'artifacts']
+  const code = 'INVALID_WORKFLOW_WEIGHT_SET'
+  record(input, keys, '固定权重', keys, code)
+  if (input.schemaVersion !== 1 || input.family !== 'minimax-h3'
+    || typeof input.registryVersion !== 'string'
+    || !/^aeonquill-h3-registry-v[1-9][0-9]*$/u.test(input.registryVersion)
+    || !['fp8Scaled4060', 'int8ConvrotCu130'].includes(input.profileId)
+    || !['base', 'turbo'].includes(input.samplingMode)) fail(code, '固定权重家族或版本无效')
+  const roles = ['base', 'text-encoder', 'video-vae', 'audio-vae', ...(input.samplingMode === 'turbo' ? ['acceleration-lora'] : [])]
+  if (!Array.isArray(input.artifacts) || input.artifacts.length !== roles.length) fail(code, '固定权重集合不完整')
+  const byRole = new Map()
+  for (const artifact of input.artifacts) {
+    record(artifact, ['role', 'id', 'sha256'], '权重身份', undefined, code)
+    if (!roles.includes(artifact.role) || byRole.has(artifact.role)
+      || typeof artifact.id !== 'string' || !ID.test(artifact.id)
+      || typeof artifact.sha256 !== 'string' || !HASH.test(artifact.sha256)) fail(code, '权重角色、ID 或 SHA-256 无效')
+    byRole.set(artifact.role, { role: artifact.role, id: artifact.id, sha256: artifact.sha256 })
+  }
+  return {
+    schemaVersion: 1, registryVersion: input.registryVersion, family: input.family,
+    profileId: input.profileId, samplingMode: input.samplingMode, artifacts: roles.map((role) => byRole.get(role)),
+  }
+}
+
+export function assertWorkflowWeightSetCompatible(actual, expected) {
+  if (JSON.stringify(validateWorkflowWeightSet(actual)) !== JSON.stringify(validateWorkflowWeightSet(expected))) {
+    fail('WORKFLOW_RECIPE_WEIGHT_STALE', '登记权重或兼容组合已变化，请核对工作流后重新保存配方', 409)
+  }
+}
+
 function normalizeInput(input) {
-  record(input, INPUT_FIELDS, '配方')
+  record(input, INPUT_FIELDS, '配方', LEGACY_INPUT_FIELDS)
   const name = typeof input.name === 'string' ? input.name.trim() : ''
   if (!name || name.length > 80 || /\p{Cc}/u.test(name)) fail('INVALID_WORKFLOW_RECIPE', '配方名称需要 1–80 个可见字符')
   if (typeof input.workflowId !== 'string' || typeof input.workflowHash !== 'string' || typeof input.mappingHash !== 'string'
@@ -31,7 +65,7 @@ function normalizeInput(input) {
     try { parameters[key] = validateWorkflowControlValue(key, value) }
     catch (error) { fail('RECIPE_PARAMETER_RANGE', error.message) }
   }
-  return { name, workflowId: input.workflowId, workflowHash: input.workflowHash, mappingHash: input.mappingHash, parameters }
+  return { name, workflowId: input.workflowId, workflowHash: input.workflowHash, mappingHash: input.mappingHash, parameters, weightSet: validateWorkflowWeightSet(input.weightSet ?? null) }
 }
 
 export function assertWorkflowRecipeCompatible(recipe, workflow) {
@@ -40,6 +74,7 @@ export function assertWorkflowRecipeCompatible(recipe, workflow) {
     fail('WORKFLOW_RECIPE_STALE', '工作流或参数映射已变更，请检查参数后另存新配方', 409)
   }
   if (!workflow.enabled) fail('WORKFLOW_RECIPE_DISABLED', '请先启用配方对应的工作流', 409)
+  assertWorkflowWeightSetCompatible(recipe.weightSet ?? null, workflow.weightSet ?? null)
   for (const key of Object.keys(recipe.parameters)) {
     if (!workflow.mappings?.[key]) fail('RECIPE_PARAMETER_NOT_MAPPED', `当前工作流没有 ${key} 参数映射`)
   }
@@ -47,7 +82,10 @@ export function assertWorkflowRecipeCompatible(recipe, workflow) {
 }
 
 export function validateWorkflowRecipeInput(input, workflow) {
-  return assertWorkflowRecipeCompatible(normalizeInput(input), workflow)
+  const normalized = normalizeInput(input)
+  if (normalized.weightSet !== null) assertWorkflowWeightSetCompatible(normalized.weightSet, workflow?.weightSet ?? null)
+  normalized.weightSet = validateWorkflowWeightSet(workflow?.weightSet ?? null)
+  return assertWorkflowRecipeCompatible(normalized, workflow)
 }
 
 export function validateWorkflowRecipeRecord(input) {
@@ -59,4 +97,13 @@ export function validateWorkflowRecipeRecord(input) {
     fail('INVALID_WORKFLOW_RECIPE', '配方记录身份或时间无效')
   }
   return { id: input.id, ...value, createdAt: input.createdAt, updatedAt: input.updatedAt }
+}
+
+export function migrateWorkflowRecipeRecord(input, schemaVersion) {
+  if (schemaVersion === 1) {
+    record(input, ['id', ...LEGACY_INPUT_FIELDS, 'createdAt', 'updatedAt'], '旧配方记录')
+    return validateWorkflowRecipeRecord({ ...input, weightSet: null })
+  }
+  if (schemaVersion !== WORKFLOW_RECIPE_SCHEMA_VERSION) fail('INVALID_WORKFLOW_RECIPE', '配方版本无效')
+  return validateWorkflowRecipeRecord(input)
 }

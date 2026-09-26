@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { assertWorkflowRecipeCompatible, validateWorkflowRecipeInput, validateWorkflowRecipeRecord, WORKFLOW_RECIPE_SCHEMA_VERSION } from '../src/lib/workflowRecipes.mjs'
+import { assertWorkflowRecipeCompatible, validateWorkflowRecipeInput, validateWorkflowRecipeRecord, migrateWorkflowRecipeRecord, WORKFLOW_RECIPE_SCHEMA_VERSION } from '../src/lib/workflowRecipes.mjs'
 
 const MAX_RECIPES = 200
 const MAX_BYTES = 512 * 1024
@@ -25,9 +25,9 @@ export class WorkflowRecipeStore {
       if ((await stat(this.path)).size > MAX_BYTES) throw new Error('oversized recipe store')
       const saved = JSON.parse(await readFile(this.path, 'utf8'))
       if (!saved || Object.keys(saved).sort().join(',') !== 'recipes,revision,schemaVersion'
-        || saved.schemaVersion !== WORKFLOW_RECIPE_SCHEMA_VERSION || !Number.isSafeInteger(saved.revision) || saved.revision < 0
+        || ![1, WORKFLOW_RECIPE_SCHEMA_VERSION].includes(saved.schemaVersion) || !Number.isSafeInteger(saved.revision) || saved.revision < 0
         || !Array.isArray(saved.recipes) || saved.recipes.length > MAX_RECIPES) throw new Error('invalid recipe store')
-      const recipes = saved.recipes.map(validateWorkflowRecipeRecord)
+      const recipes = saved.recipes.map((recipe) => migrateWorkflowRecipeRecord(recipe, saved.schemaVersion))
       if (new Set(recipes.map(({ id }) => id)).size !== recipes.length) throw new Error('duplicate recipe')
       this.state = { schemaVersion: WORKFLOW_RECIPE_SCHEMA_VERSION, revision: saved.revision, recipes }
     } catch (error) {
@@ -42,7 +42,7 @@ export class WorkflowRecipeStore {
   }
 
   list() {
-    const statuses = { WORKFLOW_RECIPE_STALE: 'stale', WORKFLOW_RECIPE_DISABLED: 'disabled', WORKFLOW_RECIPE_MISSING: 'missing' }
+    const statuses = { WORKFLOW_RECIPE_STALE: 'stale', WORKFLOW_RECIPE_WEIGHT_STALE: 'stale', WORKFLOW_RECIPE_DISABLED: 'disabled', WORKFLOW_RECIPE_MISSING: 'missing' }
     return {
       revision: this.state.revision,
       recipes: this.state.recipes.map((value) => {

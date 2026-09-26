@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
@@ -18,7 +18,20 @@ async function requestJson(bridge, pathname, options = {}, expected = 200) {
   return payload
 }
 
+const h3Workflow = JSON.parse(await readFile(new URL('../server/workflows/minimax-h3-t2v.json', import.meta.url), 'utf8'))
+const h3ObjectInfo = {}
+for (const node of Object.values(h3Workflow)) {
+  const required = h3ObjectInfo[node.class_type]?.input.required ?? {}
+  for (const [key, value] of Object.entries(node.inputs)) {
+    if (typeof value === 'string' && value.endsWith('.safetensors')) {
+      const values = required[key]?.[0] ?? []
+      required[key] = [[...new Set([...values, value])], {}]
+    } else required[key] = [typeof value === 'number' ? 'INT' : typeof value === 'boolean' ? 'BOOLEAN' : 'STRING', {}]
+  }
+  h3ObjectInfo[node.class_type] = { input: { required } }
+}
 const comfy = await startFakeComfyRuntime({ objectInfo: {
+  ...h3ObjectInfo,
   CLIPTextEncode: { input: { required: { text: ['STRING', {}] } } },
   SaveImage: { input: { required: {} } },
   EmptyLatentImage: { input: { required: { width: ['INT', { min: 64, max: 8192 }], height: ['INT', { min: 64, max: 8192 }], batch_size: ['INT', {}] } } },
@@ -128,7 +141,38 @@ try {
   assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({ path: join(artifactDirectory, 'custom-workflow-run-mobile.png'), fullPage: true })
   assert.deepEqual(issues, [])
-  console.log('✓ Workflow task cards, recipe save/reload/apply and two immutable candidates passed in desktop and narrow layouts')
+
+  // Real app/API round-trip; the Comfy node catalog is a fixture. This does not
+  // execute H3 or claim physical model verification or generation quality.
+  const h3Imported = await requestJson(bridge, '/api/workflow-center/custom', {
+    method: 'POST', body: JSON.stringify({ title: 'UI H3 固定权重', workflow: h3Workflow,
+      mappings: { prompt: { nodeId: '6', inputName: 'prompt' }, output: { nodeId: '15' } } }),
+  }, 201)
+  await requestJson(bridge, `/api/workflow-center/custom/${h3Imported.customWorkflow.id}/enabled`, {
+    method: 'POST', body: JSON.stringify({ enabled: true }),
+  })
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '打开工作流中心', exact: true }).first().click()
+  await dialog.getByRole('button', { name: /UI H3 固定权重/u }).click()
+  const weights = runner.getByLabel('固定模型配方', { exact: true })
+  await weights.locator('summary').click()
+  assert.equal(await weights.locator('li').count(), 5)
+  await weights.getByText(/Turbo 加速 LoRA/u).waitFor({ state: 'visible' })
+  await runner.getByLabel('配方名称', { exact: true }).fill('H3 加速登记配方')
+  await runner.getByRole('button', { name: '保存配方', exact: true }).click()
+  await dialog.getByText(/配方已保存/u).waitFor({ state: 'visible' })
+  const saved = (await requestJson(bridge, '/api/workflow-center/recipes')).recipes.find(({ name }) => name === 'H3 加速登记配方')
+  assert.deepEqual(saved.weightSet, h3Imported.customWorkflow.weightSet)
+  assert.equal(saved.weightSet.artifacts.at(-1).role, 'acceleration-lora')
+  await page.screenshot({ path: join(artifactDirectory, 'workflow-fixed-weights-desktop.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await weights.scrollIntoViewIfNeeded()
+  assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
+  await page.screenshot({ path: join(artifactDirectory, 'workflow-fixed-weights-mobile.png'), fullPage: true })
+  assert.equal(comfy.prompts.size, 2, 'Registering a weight recipe must not generate media')
+  assert.deepEqual(issues, [])
+  console.log('✓ Workflow recipes/candidates and fixed H3 weight identity passed in desktop and narrow layouts; model quality is not assessed')
 } catch (error) {
   failure = error
   await page.screenshot({ path: join(artifactDirectory, 'custom-workflow-ui-failure.png'), fullPage: true }).catch(() => undefined)

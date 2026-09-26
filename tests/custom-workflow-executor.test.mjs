@@ -27,6 +27,11 @@ const workflow = {
   2: { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'original-prefix' } },
 }
 const mappings = { prompt: { nodeId: '1', inputName: 'text' }, output: { nodeId: '2' } }
+const weightSet = {
+  schemaVersion: 1, registryVersion: 'aeonquill-h3-registry-v2', family: 'minimax-h3',
+  profileId: 'fp8Scaled4060', samplingMode: 'base',
+  artifacts: ['base', 'text-encoder', 'video-vae', 'audio-vae'].map((role, index) => ({ role, id: `test-${index}`, sha256: String(index + 1).repeat(64) })),
+}
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'aeonquill-custom-executor-'))
@@ -82,6 +87,77 @@ test('reviewed workflow identities cannot silently change before queueing', asyn
   assert.match(validated.request.workflowHash, /^[a-f0-9]{64}$/u)
   assert.equal(validated.request.workflowHash, target.imported.hash)
   assert.equal(validated.request.mappingHash, target.imported.mappingHash)
+})
+
+test('queue pins registered weight identity and rejects a mismatching client snapshot', async (t) => {
+  const target = await fixture(t)
+  const original = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => ({ ...original(id), weightSet })
+  const body = executionJob('weight-request', target.imported.id).request
+  const validated = validateCustomWorkflowJobRequest(body, target)
+  assert.deepEqual(validated.request.weightSet, weightSet)
+  assert.notEqual(validated.request.weightSet, weightSet)
+  const changed = structuredClone(weightSet)
+  changed.artifacts[0].sha256 = 'e'.repeat(64)
+  assert.throws(() => validateCustomWorkflowJobRequest({ ...body, weightSet: changed }, target), { code: 'WORKFLOW_RECIPE_WEIGHT_STALE' })
+})
+
+test('failed physical weight verification prevents queueing a fixed-model job', async (t) => {
+  const target = await fixture(t)
+  const original = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => ({ ...original(id), weightSet })
+  let verified = 0
+  target.workflowCenter.verifyWeightSet = async (actual) => {
+    assert.deepEqual(actual, weightSet)
+    verified += 1
+    throw Object.assign(new Error('model contents changed'), { code: 'WORKFLOW_MODEL_HASH_MISMATCH' })
+  }
+  const job = executionJob('weight-verification', target.imported.id)
+  job.request.weightSet = structuredClone(weightSet)
+  await target.store.add(job)
+  const comfy = fakeComfy({ outputs: { 2: { images: [{ filename: 'result.png', subfolder: '', type: 'output' }] } } })
+  const executor = new CustomWorkflowExecutor({
+    ...target, comfy, runtimeManager: { async ensureReady() {} },
+    inspectRuntime: async () => ({ connected: true }), managedComfyInputRoot: target.inputRoot,
+  })
+  await executor.run(job.id, { signal: new AbortController().signal })
+  assert.equal(verified, 1)
+  assert.equal(comfy.capture.queuedWorkflow, null)
+  assert.equal(comfy.capture.uploads.length, 0)
+  assert.equal(target.store.get(job.id).status, 'failed')
+  assert.equal(target.store.get(job.id).error.code, 'WORKFLOW_MODEL_HASH_MISMATCH')
+})
+
+test('verified weights reach job metadata and asset provenance without accepting a changed queued identity', async (t) => {
+  const target = await fixture(t)
+  const original = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => ({ ...original(id), weightSet })
+  let verified = 0
+  target.workflowCenter.verifyWeightSet = async (actual) => { verified += 1; return structuredClone(actual) }
+  const comfy = fakeComfy({ outputs: { 2: { images: [{ filename: 'result.png', subfolder: '', type: 'output' }] } } })
+  const executor = new CustomWorkflowExecutor({
+    ...target, comfy, runtimeManager: { async ensureReady() {} },
+    inspectRuntime: async () => ({ connected: true }), managedComfyInputRoot: target.inputRoot,
+  })
+  const job = executionJob('verified-weight-result', target.imported.id)
+  job.request.weightSet = structuredClone(weightSet)
+  await target.store.add(job)
+  await executor.run(job.id, { signal: new AbortController().signal })
+  const completed = target.store.get(job.id)
+  assert.equal(completed.status, 'completed')
+  assert.deepEqual(completed.workflowMetadata.weightSet, weightSet)
+  assert.deepEqual(completed.outputVersion.provenance.weightSet, weightSet)
+  assert.equal(completed.workflowMetadata.weightsVerified, true)
+  assert.equal(verified, 1)
+  const stale = executionJob('stale-weight-request', target.imported.id)
+  stale.request.weightSet = structuredClone(weightSet)
+  stale.request.weightSet.artifacts[0].sha256 = 'e'.repeat(64)
+  await target.store.add(stale)
+  comfy.capture.queuedWorkflow = null
+  await executor.run(stale.id, { signal: new AbortController().signal })
+  assert.equal(comfy.capture.queuedWorkflow, null)
+  assert.equal(verified, 1)
+  assert.equal(target.store.get(stale.id).error.code, 'WORKFLOW_RECIPE_WEIGHT_STALE')
 })
 
 function fakeComfy(history) {

@@ -24,6 +24,16 @@ import {
   WORKFLOW_CONTROL_FIELDS,
   validateWorkflowControlValue,
 } from '../src/lib/workflowControls.mjs'
+import {
+  assertWorkflowWeightSetCompatible,
+  validateWorkflowWeightSet,
+} from '../src/lib/workflowRecipes.mjs'
+import {
+  H3_WEIGHT_ARTIFACT_IDS,
+  VIDEO_MODEL_PROFILES,
+  VIDEO_WEIGHT_ARTIFACT_ROLES,
+  VIDEO_WORKFLOW_REGISTRY_VERSION,
+} from './video-workflow-registry.mjs'
 
 export const WORKFLOW_CENTER_VERSION = 'aeonquill-workflow-center-v2'
 export const WORKFLOW_CENTER_STATE_VERSION = 1
@@ -45,6 +55,8 @@ const EXECUTION_NODE = /(?:python|script|shell|command|powershell|terminal|exec|
 const DYNAMIC_INPUT_DENYLIST = /(?:^|_)(?:api|authorization|device|directory|file|filename|folder|format|key|model|path|prefix|secret|token|url|vae|ckpt|lora|clip|unet|controlnet)(?:_|$)/iu
 const CUSTOM_OUTPUT_NODE = /^(?:SaveImage|SaveVideo|PreviewImage)$/u
 const CUSTOM_IMAGE_INPUT_NODE = 'LoadImage'
+const VIDEO_WEIGHT_SAMPLING_MODES = new Set(['base', 'turbo'])
+const H3_SIGNAL_NODE_TYPES = new Set(['MiniMaxH3ImageToVideo', 'MiniMaxH3TurboLoRA', 'MiniMaxH3TurboSampler'])
 const CUSTOM_MAPPING_ROLES = Object.freeze([
   'prompt', 'negativePrompt', 'sourceImage', 'lastFrame', ...Object.keys(WORKFLOW_CONTROL_FIELDS), 'output',
 ])
@@ -465,9 +477,13 @@ async function pathStats(pathname) {
   }
 }
 
-async function sha256File(pathname) {
+async function sha256File(pathname, signal) {
   const hash = createHash('sha256')
-  for await (const chunk of createReadStream(pathname)) hash.update(chunk)
+  for await (const chunk of createReadStream(pathname)) {
+    throwIfWeightVerificationAborted(signal)
+    hash.update(chunk)
+  }
+  throwIfWeightVerificationAborted(signal)
   return hash.digest('hex')
 }
 
@@ -680,6 +696,44 @@ function scanInputValue(value, context, path = 'inputs', depth = 0) {
     if (SECRET_INPUT.test(key)) context.findings.push({ severity: 'error', code: 'CUSTOM_WORKFLOW_SECRET_FIELD', message: `${path}.${key} 可能包含密钥` })
     scanInputValue(entry, context, `${path}.${key}`, depth + 1)
   }
+}
+
+function throwIfWeightVerificationAborted(signal) {
+  if (signal?.aborted) {
+    throw workflowError('固定权重复检已取消', 'WORKFLOW_WEIGHT_VERIFY_CANCELLED', 409)
+  }
+}
+
+function artifactReferenceAliases(artifact) {
+  const normalized = String(artifact?.relativePath || '').replace(/\\/gu, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts[0] !== 'models' || parts.length < 3) return new Set()
+  return new Set([parts.slice(2).join('/')])
+}
+
+function registeredArtifactMatchesValue(artifact, value) {
+  return typeof value === 'string' && artifactReferenceAliases(artifact).has(value.replace(/\\/gu, '/'))
+}
+
+function collectModelReferences(workflow) {
+  const references = []
+  const visit = (value, nodeId, nodeType, inputName, depth = 0) => {
+    if (depth > 8 || value === null || value === undefined) return
+    if (typeof value === 'string') {
+      if (MODEL_EXTENSION.test(value)) references.push({ nodeId, nodeType, inputName, value })
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry, nodeId, nodeType, inputName, depth + 1)
+      return
+    }
+    if (typeof value !== 'object') return
+    for (const [key, entry] of Object.entries(value)) visit(entry, nodeId, nodeType, key, depth + 1)
+  }
+  for (const [nodeId, node] of Object.entries(workflow || {})) {
+    for (const [inputName, value] of Object.entries(node?.inputs || {})) visit(value, nodeId, node?.class_type, inputName)
+  }
+  return references
 }
 
 function mappingCandidates(workflow) {
@@ -1005,6 +1059,234 @@ export class WorkflowCenterService {
     })
   }
 
+  _registeredArtifact(artifactId) {
+    const matches = this.packs.flatMap((pack) => pack.artifacts || []).filter(({ id }) => id === artifactId)
+    if (!matches.length) throw workflowError(`固定权重未在登记表中找到：${artifactId}`, 'WORKFLOW_WEIGHT_ARTIFACT_UNREGISTERED', 409, { artifactId })
+    const [first] = matches
+    if (matches.some((artifact) => artifact.sha256 !== first.sha256 || artifact.relativePath !== first.relativePath || artifact.bytes !== first.bytes)) {
+      throw workflowError(`固定权重登记存在冲突：${artifactId}`, 'WORKFLOW_WEIGHT_ARTIFACT_CONFLICT', 409, { artifactId })
+    }
+    if (first.kind !== 'model' || typeof first.relativePath !== 'string' || !/^[a-f0-9]{64}$/u.test(first.sha256 || '')) {
+      throw workflowError(`固定权重登记不完整：${artifactId}`, 'WORKFLOW_WEIGHT_ARTIFACT_INVALID', 409, { artifactId })
+    }
+    return first
+  }
+
+  _weightArtifact(role, artifactId) {
+    const artifact = this._registeredArtifact(artifactId)
+    return { role, id: artifact.id, sha256: artifact.sha256 }
+  }
+
+  getVideoWeightSet(profileId, samplingMode) {
+    if (typeof profileId !== 'string' || !Object.hasOwn(VIDEO_MODEL_PROFILES, profileId)) {
+      throw workflowError('固定 H3 模型 profile 未登记', 'VIDEO_WEIGHT_PROFILE_INVALID')
+    }
+    if (!VIDEO_WEIGHT_SAMPLING_MODES.has(samplingMode)) {
+      throw workflowError('固定 H3 采样模式无效', 'VIDEO_WEIGHT_SAMPLING_MODE_INVALID')
+    }
+    const profile = VIDEO_MODEL_PROFILES[profileId]
+    const ids = profile.artifactIds
+    if (!ids || ids.base !== H3_WEIGHT_ARTIFACT_IDS.fp8Base && ids.base !== H3_WEIGHT_ARTIFACT_IDS.int8Base) {
+      throw workflowError(`H3 profile 缺少已登记底模：${profileId}`, 'WORKFLOW_WEIGHT_PROFILE_INVALID', 409, { profileId })
+    }
+    const artifacts = [
+      this._weightArtifact('base', ids.base),
+      this._weightArtifact('text-encoder', ids.textEncoder),
+      this._weightArtifact('video-vae', ids.videoVae),
+      this._weightArtifact('audio-vae', ids.audioVae),
+      ...(samplingMode === 'turbo' ? [this._weightArtifact('acceleration-lora', ids.accelerationLora)] : []),
+    ]
+    return validateWorkflowWeightSet({
+      schemaVersion: 1,
+      registryVersion: VIDEO_WORKFLOW_REGISTRY_VERSION,
+      family: 'minimax-h3',
+      profileId,
+      samplingMode,
+      artifacts,
+    })
+  }
+
+  _customWeightSetForWorkflow(workflow) {
+    const entries = Object.entries(workflow || {})
+    const nodeTypes = new Set(entries.map(([, node]) => node?.class_type).filter((value) => typeof value === 'string'))
+    const references = collectModelReferences(workflow)
+    const knownArtifacts = this.packs.flatMap((pack) => pack.artifacts || []).filter((artifact) => artifact.kind === 'model')
+    const h3ArtifactIds = new Set(Object.values(VIDEO_MODEL_PROFILES).flatMap((profile) => Object.values(profile.artifactIds || {})))
+    const h3Signal = [...nodeTypes].some((nodeType) => H3_SIGNAL_NODE_TYPES.has(nodeType))
+      || references.some(({ value }) => knownArtifacts.some((artifact) => h3ArtifactIds.has(artifact.id) && registeredArtifactMatchesValue(artifact, value)))
+    if (!h3Signal) return null
+
+    const fail = (message, details) => {
+      throw workflowError(message, 'CUSTOM_WORKFLOW_WEIGHT_INCOMPATIBLE', 409, details)
+    }
+    const unetNodes = entries.filter(([, node]) => node?.class_type === 'UNETLoader')
+    if (unetNodes.length !== 1 || typeof unetNodes[0][1]?.inputs?.unet_name !== 'string') {
+      fail('H3 工作流必须有且只有一个登记的 UNETLoader.unet_name')
+    }
+    const baseValue = unetNodes[0][1].inputs.unet_name
+    const profile = Object.values(VIDEO_MODEL_PROFILES).find((candidate) => {
+      let artifact
+      try {
+        artifact = this._registeredArtifact(candidate.artifactIds?.base)
+      } catch (error) {
+        if (error.code === 'WORKFLOW_WEIGHT_ARTIFACT_UNREGISTERED') return false
+        throw error
+      }
+      return registeredArtifactMatchesValue(artifact, baseValue)
+    })
+    if (!profile) fail('H3 底模未匹配到已登记 profile', { input: baseValue })
+    const baseNodeId = unetNodes[0][0]
+    const expectedByRole = new Map([
+      ['base', this._registeredArtifact(profile.artifactIds.base)],
+      ['text-encoder', this._registeredArtifact(profile.artifactIds.textEncoder)],
+      ['video-vae', this._registeredArtifact(profile.artifactIds.videoVae)],
+      ['audio-vae', this._registeredArtifact(profile.artifactIds.audioVae)],
+    ])
+    const rolePorts = new Map([
+      ['base', ['UNETLoader', 'unet_name']],
+      ['text-encoder', ['CLIPLoader', 'clip_name']],
+      ['video-vae', ['VAELoader', 'vae_name']],
+      ['audio-vae', ['VAELoader', 'vae_name']],
+    ])
+    const matchedRoles = new Set()
+    for (const [role, artifact] of expectedByRole) {
+      const [nodeType, inputName] = rolePorts.get(role)
+      if (references.some((reference) => reference.nodeType === nodeType && reference.inputName === inputName && registeredArtifactMatchesValue(artifact, reference.value))) {
+        matchedRoles.add(role)
+      } else {
+        fail(`H3 工作流缺少登记的 ${role} 加载端口`, { role, artifactId: artifact.id })
+      }
+    }
+
+    const turboNodes = entries.filter(([, node]) => node?.class_type === 'MiniMaxH3TurboLoRA')
+    if (turboNodes.length > 1) fail('H3 Turbo 工作流只能有一个加速 LoRA 节点')
+    const samplingMode = turboNodes.length ? 'turbo' : 'base'
+    if (!samplingMode || !VIDEO_WEIGHT_SAMPLING_MODES.has(samplingMode)) fail('H3 工作流采样模式无效')
+    if (turboNodes.length) {
+      const [turboNodeId, turboNode] = turboNodes[0]
+      const turboArtifact = this._registeredArtifact(profile.artifactIds.accelerationLora)
+      if (!registeredArtifactMatchesValue(turboArtifact, turboNode.inputs?.lora_name)) {
+        fail('H3 Turbo 加速 LoRA 未匹配到登记权重', { input: turboNode.inputs?.lora_name })
+      }
+      if (!Array.isArray(turboNode.inputs?.model) || turboNode.inputs.model[0] !== baseNodeId || turboNode.inputs.model[1] !== 0) {
+        fail('H3 Turbo 加速 LoRA 必须直接链接登记的底模输出', { turboNodeId, baseNodeId })
+      }
+      const consumed = entries.some(([, node]) => Object.values(node?.inputs || {}).some((value) => Array.isArray(value) && value[0] === turboNodeId && value[1] === 0))
+      if (!consumed) fail('H3 Turbo 加速 LoRA 未连接到采样链', { turboNodeId })
+      expectedByRole.set('acceleration-lora', turboArtifact)
+      matchedRoles.add('acceleration-lora')
+    }
+    const singleNode = (classType) => {
+      const matches = entries.filter(([, node]) => node?.class_type === classType)
+      if (matches.length !== 1) fail(`H3 固定工作流必须有且只有一个 ${classType} 节点`)
+      return matches[0]
+    }
+    const [guiderNodeId, guiderNode] = singleNode('BasicGuider')
+    const [schedulerNodeId, schedulerNode] = singleNode('BasicScheduler')
+    const [samplerNodeId, samplerNode] = singleNode('SamplerCustomAdvanced')
+    const modelLinkTarget = turboNodes.length ? turboNodes[0][0] : baseNodeId
+    if (!Array.isArray(guiderNode.inputs?.model) || guiderNode.inputs.model[0] !== modelLinkTarget || guiderNode.inputs.model[1] !== 0) {
+      fail('H3 BasicGuider 未连接固定底模或 Turbo 加速输出', { guiderNodeId, modelLinkTarget })
+    }
+    if (!Array.isArray(schedulerNode.inputs?.model) || schedulerNode.inputs.model[0] !== modelLinkTarget || schedulerNode.inputs.model[1] !== 0) {
+      fail('H3 BasicScheduler 未连接固定底模或 Turbo 加速输出', { schedulerNodeId, modelLinkTarget })
+    }
+    if (!Array.isArray(samplerNode.inputs?.guider) || samplerNode.inputs.guider[0] !== guiderNodeId || samplerNode.inputs.guider[1] !== 0
+      || !Array.isArray(samplerNode.inputs?.sigmas) || samplerNode.inputs.sigmas[0] !== schedulerNodeId || samplerNode.inputs.sigmas[1] !== 0) {
+      fail('H3 采样器未连接固定 Guider/Scheduler 链', { samplerNodeId, guiderNodeId, schedulerNodeId })
+    }
+    const samplerClass = turboNodes.length ? 'MiniMaxH3TurboSampler' : 'KSamplerSelect'
+    const samplerEntries = entries.filter(([, node]) => node?.class_type === samplerClass)
+    if (samplerEntries.length !== 1 || !Array.isArray(samplerNode.inputs?.sampler)
+      || samplerNode.inputs.sampler[0] !== samplerEntries[0][0] || samplerNode.inputs.sampler[1] !== 0) {
+      fail(`H3 采样器未连接登记的 ${samplerClass}`, { samplerNodeId, samplerClass })
+    }
+    const expectedIds = new Set([...expectedByRole.values()].map(({ id }) => id))
+    for (const reference of references) {
+      const matches = knownArtifacts.filter((artifact) => registeredArtifactMatchesValue(artifact, reference.value))
+      if (!matches.length || !expectedIds.has(matches[0].id)) {
+        fail('H3 工作流含未登记或不兼容的模型加载路径', reference)
+      }
+      const role = [...expectedByRole].find(([, artifact]) => artifact.id === matches[0].id)?.[0]
+      const [expectedNodeType, expectedInputName] = rolePorts.get(role) || (role === 'acceleration-lora' ? ['MiniMaxH3TurboLoRA', 'lora_name'] : [])
+      if (reference.nodeType !== expectedNodeType || reference.inputName !== expectedInputName) {
+        fail('H3 登记权重连接到了错误的加载节点或端口', { reference, role })
+      }
+    }
+    if (matchedRoles.size !== expectedByRole.size) fail('H3 工作流固定权重集合不完整')
+    return this.getVideoWeightSet(profile.id, samplingMode)
+  }
+
+  getCustomWeightSet(customId) {
+    return this._customWeightSetForWorkflow(this.#custom(customId).workflow)
+  }
+
+  async verifyWeightSet(weightSet, { signal } = {}) {
+    throwIfWeightVerificationAborted(signal)
+    let normalized
+    try {
+      normalized = validateWorkflowWeightSet(weightSet)
+    } catch (error) {
+      throw workflowError(error.message, 'WORKFLOW_WEIGHT_SET_INVALID', 400)
+    }
+    if (!normalized) throw workflowError('固定权重身份不能为空', 'WORKFLOW_WEIGHT_SET_INVALID', 400)
+    const expected = this.getVideoWeightSet(normalized.profileId, normalized.samplingMode)
+    try {
+      assertWorkflowWeightSetCompatible(normalized, expected)
+    } catch (error) {
+      throw workflowError('固定权重登记与当前权威集合不一致', 'WORKFLOW_WEIGHT_SET_MISMATCH', 409, { expected, actual: normalized })
+    }
+    const registry = await this.runtimeRegistry()
+    throwIfWeightVerificationAborted(signal)
+    if (!registry.configured) throw workflowError('请先配置 ComfyUI 运行时', 'WORKFLOW_RUNTIME_UNCONFIGURED', 409)
+    const verified = []
+    for (const identity of expected.artifacts) {
+      throwIfWeightVerificationAborted(signal)
+      const artifact = this._registeredArtifact(identity.id)
+      const candidates = [...new Map(registeredArtifactCandidates(artifact, registry).map((candidate) => [
+        process.platform === 'win32' ? resolve(candidate.targetPath).toLocaleLowerCase('en-US') : resolve(candidate.targetPath),
+        candidate,
+      ])).values()]
+      let existingCount = 0
+      for (const candidate of candidates) {
+        throwIfWeightVerificationAborted(signal)
+        const file = await pathStats(candidate.targetPath)
+        if (!file) continue
+        existingCount += 1
+        if (!file.isFile()) {
+          throw workflowError(`${artifact.label} 不是可用文件`, 'WORKFLOW_WEIGHT_KIND_MISMATCH', 409, { artifactId: artifact.id })
+        }
+        if (artifact.bytes && file.size !== artifact.bytes) {
+          throw workflowError(`${artifact.label} 文件大小与登记值不一致`, 'WORKFLOW_WEIGHT_SIZE_MISMATCH', 409, { artifactId: artifact.id })
+        }
+        if (this._verifiedArtifact(artifact, candidate, file)) {
+          continue
+        }
+        const digest = await sha256File(candidate.targetPath, signal)
+        const afterHash = await pathStats(candidate.targetPath)
+        if (!afterHash?.isFile() || afterHash.size !== file.size || afterHash.mtimeMs !== file.mtimeMs || afterHash.ctimeMs !== file.ctimeMs) {
+          throw workflowError(`${artifact.label} 在哈希检查期间发生变化`, 'WORKFLOW_WEIGHT_CHANGED_DURING_VERIFY', 409, { artifactId: artifact.id })
+        }
+        if (digest !== artifact.sha256) {
+          throw workflowError(`${artifact.label} SHA-256 与登记值不一致`, 'WORKFLOW_WEIGHT_HASH_MISMATCH', 409, { artifactId: artifact.id })
+        }
+        this.state.verifiedArtifacts[artifactVerificationKey(artifact, candidate.targetPath)] = {
+          sha256: digest,
+          bytes: file.size,
+          mtimeMs: file.mtimeMs,
+          ctimeMs: file.ctimeMs,
+          verifiedAt: Date.now(),
+        }
+      }
+      if (!existingCount) {
+        throw workflowError(`${artifact.label} 尚未安装`, 'WORKFLOW_WEIGHT_MISSING', 409, { artifactId: artifact.id })
+      }
+      verified.push(identity)
+    }
+    await this.#save()
+    return clone(expected)
+  }
+
   _artifactLocation(candidate) {
     if (!candidate) return null
     return {
@@ -1026,7 +1308,8 @@ export class WorkflowCenterService {
     return Boolean(
       verification?.sha256 === artifact.sha256
       && verification?.bytes === file.size
-      && verification?.mtimeMs === file.mtimeMs,
+      && verification?.mtimeMs === file.mtimeMs
+      && verification?.ctimeMs === file.ctimeMs,
     )
   }
 
@@ -1231,6 +1514,7 @@ export class WorkflowCenterService {
         sha256: existingHash,
         bytes: targetStats.size,
         mtimeMs: targetStats.mtimeMs,
+        ctimeMs: targetStats.ctimeMs,
         verifiedAt: Date.now(),
       }
       return artifact.bytes || targetStats.size
@@ -1278,6 +1562,7 @@ export class WorkflowCenterService {
       sha256: digest,
       bytes: installed.size,
       mtimeMs: installed.mtimeMs,
+      ctimeMs: installed.ctimeMs,
       verifiedAt: Date.now(),
     }
     return received
@@ -1299,6 +1584,7 @@ export class WorkflowCenterService {
       sha256: digest,
       bytes: file.size,
       mtimeMs: file.mtimeMs,
+      ctimeMs: file.ctimeMs,
       verifiedAt: Date.now(),
     }
     await this.#save()
@@ -1387,6 +1673,7 @@ export class WorkflowCenterService {
           sha256: digest,
           bytes: file.size,
           mtimeMs: file.mtimeMs,
+          ctimeMs: file.ctimeMs,
           verifiedAt: Date.now(),
         }
       }
@@ -1413,6 +1700,17 @@ export class WorkflowCenterService {
   inspectCustom({ workflow, mappings, registeredNodeTypes }) {
     const result = inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes })
     const { workflow: _workflow, ...summary } = result
+    try {
+      summary.weightSet = this._customWeightSetForWorkflow(result.workflow)
+    } catch (error) {
+      summary.weightSet = null
+      summary.findings = [...summary.findings, {
+        severity: 'error',
+        code: error.code || 'CUSTOM_WORKFLOW_WEIGHT_INCOMPATIBLE',
+        message: error.message,
+      }]
+      summary.canImport = false
+    }
     return summary
   }
 
@@ -1420,6 +1718,7 @@ export class WorkflowCenterService {
     if (typeof title !== 'string' || !title.trim() || title.trim().length > 120) throw workflowError('自定义工作流名称必须为 1–120 字符', 'CUSTOM_WORKFLOW_TITLE')
     const inspection = inspectCustomWorkflow({ workflow, mappings, registeredNodeTypes })
     if (!inspection.canImport) throw workflowError('自定义工作流未通过安全检查', 'CUSTOM_WORKFLOW_REJECTED', 409, { findings: inspection.findings })
+    const weightSet = this._customWeightSetForWorkflow(inspection.workflow)
     const now = Date.now()
     const existing = this.state.customWorkflows.find(({ hash }) => hash === inspection.hash)
     if (existing) return clone({ ...existing, workflow: undefined })
@@ -1437,6 +1736,7 @@ export class WorkflowCenterService {
       source: 'user-api-json',
       createdAt: now,
       updatedAt: now,
+      weightSet,
       workflow: inspection.workflow,
     }
     this.state.customWorkflows.push(entry)
@@ -1453,6 +1753,10 @@ export class WorkflowCenterService {
       if (!inspection.canImport || inspection.hash !== entry.hash || mappingHash !== entry.mappingHash) {
         throw workflowError('工作流版本、映射或运行时依赖已变化，必须重新导入', 'CUSTOM_WORKFLOW_RECHECK_REQUIRED', 409, { findings: inspection.findings })
       }
+      const weightSet = this._customWeightSetForWorkflow(inspection.workflow)
+      if (JSON.stringify(weightSet) !== JSON.stringify(entry.weightSet ?? null)) {
+        throw workflowError('工作流固定权重身份已经变化，必须重新导入', 'CUSTOM_WORKFLOW_WEIGHT_RECHECK_REQUIRED', 409, { weightSet })
+      }
     }
     entry.enabled = Boolean(enabled)
     entry.updatedAt = Date.now()
@@ -1467,7 +1771,14 @@ export class WorkflowCenterService {
     const outputMediaKind = /Video/u.test(outputType) ? 'video'
       : /Audio/u.test(outputType) ? 'audio'
         : /^(?:SaveImage|SaveAnimated)/u.test(outputType) ? 'image' : 'unknown'
-    return clone({ ...summary, outputMediaKind })
+    let weightSet = null
+    let weightError = null
+    try {
+      weightSet = this._customWeightSetForWorkflow(workflow)
+    } catch (error) {
+      weightError = { code: error.code || 'CUSTOM_WORKFLOW_WEIGHT_INCOMPATIBLE', message: error.message }
+    }
+    return clone({ ...summary, outputMediaKind, weightSet, ...(weightError ? { weightError } : {}) })
   }
 
   prepareCustomExecution(customId, { values, registeredNodeTypes, executionId } = {}) {
@@ -1486,6 +1797,10 @@ export class WorkflowCenterService {
       throw workflowError('工作流、映射、节点或模型已经变化，本次执行已拒绝', 'CUSTOM_WORKFLOW_RECHECK_REQUIRED', 409, {
         findings: inspection.findings,
       })
+    }
+    const weightSet = this._customWeightSetForWorkflow(entry.workflow)
+    if (JSON.stringify(weightSet) !== JSON.stringify(entry.weightSet ?? null)) {
+      throw workflowError('工作流固定权重身份已经变化，本次执行已拒绝', 'CUSTOM_WORKFLOW_WEIGHT_RECHECK_REQUIRED', 409, { weightSet })
     }
     const normalizedValues = normalizeExecutionValues(values, entry.mappings)
     const prepared = clone(entry.workflow)
@@ -1510,6 +1825,7 @@ export class WorkflowCenterService {
         outputNodeType: outputNode.class_type,
         parameterRoles: Object.keys(normalizedValues).sort(),
         nodeCount: entry.nodeCount,
+        weightSet,
       },
     }
   }

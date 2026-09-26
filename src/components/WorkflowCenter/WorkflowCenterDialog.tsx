@@ -51,7 +51,7 @@ import {
 } from '../../lib/workflowCenterApi'
 import { listLibraryAssets, type LibraryAsset } from '../../lib/libraryApi'
 import type { ProcessingJob } from '../../types'
-import { validateWorkflowRecipeInput, type WorkflowRecipeSummary, type WorkflowParameterKey } from '../../lib/workflowRecipes.mjs'
+import { validateWorkflowRecipeInput, type WorkflowRecipeSummary, type WorkflowParameterKey, type WorkflowWeightSet } from '../../lib/workflowRecipes.mjs'
 import { WORKFLOW_CONTROL_FIELDS } from '../../lib/workflowControls.mjs'
 import { WorkflowCandidateTray } from './WorkflowCandidateTray'
 import './workflow-center.css'
@@ -72,6 +72,20 @@ const PARAMETER_LABELS = Object.fromEntries(Object.entries(WORKFLOW_CONTROL_FIEL
 
 function numericParameters(values: Record<string, string>) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim() !== '').map(([key, value]) => [key, Number(value)]))
+}
+
+const WEIGHT_ROLE_LABELS: Record<WorkflowWeightSet['artifacts'][number]['role'], string> = {
+  base: '底模', 'text-encoder': '文本编码器', 'video-vae': '视频 VAE', 'audio-vae': '音频 VAE', 'acceleration-lora': '加速 LoRA',
+}
+
+function FixedWeightsSummary({ weightSet }: { weightSet?: WorkflowWeightSet | null }) {
+  if (!weightSet) return null
+  return <details className="aq-workflow-weights" aria-label="固定模型配方">
+    <summary>H3 · {weightSet.profileId === 'fp8Scaled4060' ? 'FP8' : 'INT8 ConvRot'} · {weightSet.samplingMode === 'turbo' ? 'Turbo 加速 LoRA' : 'Base 精修'}</summary>
+    <p>配方绑定以下登记权重，运行前校验实际文件。</p>
+    <ul>{weightSet.artifacts.map((artifact) => <li key={artifact.role}>{WEIGHT_ROLE_LABELS[artifact.role]} · <code title={artifact.sha256}>{artifact.sha256.slice(0, 12)}</code></li>)}</ul>
+    <small>登记版本：{weightSet.registryVersion}</small>
+  </details>
 }
 
 const STATUS_LABELS: Record<WorkflowPack['status'], string> = {
@@ -461,6 +475,9 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
       const numericValues = numericParameters(customRunNumbers)
       const job = await createCustomWorkflowJob({
         customWorkflowId: selectedCustom.id,
+        workflowHash: selectedCustom.hash,
+        mappingHash: selectedCustom.mappingHash,
+        weightSet: selectedCustom.weightSet ?? null,
         projectId: customRunProjectId,
         title: customRunTitle,
         prompt: customRunPrompt,
@@ -651,7 +668,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
               <footer><button type="button" onClick={() => { setCategory('image'); setTab('builtin') }}>查看图像能力</button><button type="button" onClick={() => { setCategory('video'); setTab('builtin') }}>查看视频能力</button></footer>
             </section> : null}
             {tab === 'recipes' ? <section className="aq-workflow-recipes" aria-label="已保存配方"><header><h3>我的配方</h3><p>保存工作流与参数，下次套用到新的素材。</p></header>
-              <div className="aq-workflow-task-grid">{recipes.map((recipe) => <article key={recipe.id} className="aq-workflow-recipe-card"><h4>{recipe.name}</h4><p>{catalog?.customWorkflows.find(({ id }) => id === recipe.workflowId)?.title ?? '工作流已移除'}</p><small>{Object.entries(recipe.parameters).map(([key, value]) => `${PARAMETER_LABELS[key as WorkflowParameterKey]} ${value}`).join(' · ') || '使用工作流默认参数'}</small>{recipe.reason ? <p role="status">{recipe.reason}</p> : null}<footer><button type="button" className="is-primary" onClick={() => void applyRecipe(recipe.id)} disabled={Boolean(busy) || recipe.availability !== 'ready'}>应用配方</button><button type="button" aria-label={`删除配方 ${recipe.name}`} onClick={() => void run(`remove-recipe:${recipe.id}`, () => removeWorkflowRecipe(recipe.id), '配方已删除。')} disabled={Boolean(busy)}><Trash2 size={14} /></button></footer></article>)}</div>
+              <div className="aq-workflow-task-grid">{recipes.map((recipe) => <article key={recipe.id} className="aq-workflow-recipe-card"><h4>{recipe.name}</h4><p>{catalog?.customWorkflows.find(({ id }) => id === recipe.workflowId)?.title ?? '工作流已移除'}</p><small>{Object.entries(recipe.parameters).map(([key, value]) => `${PARAMETER_LABELS[key as WorkflowParameterKey]} ${value}`).join(' · ') || '使用工作流默认参数'}</small><FixedWeightsSummary weightSet={recipe.weightSet} />{recipe.reason ? <p role="status">{recipe.reason}</p> : null}<footer><button type="button" className="is-primary" onClick={() => void applyRecipe(recipe.id)} disabled={Boolean(busy) || recipe.availability !== 'ready'}>应用配方</button><button type="button" aria-label={`删除配方 ${recipe.name}`} onClick={() => void run(`remove-recipe:${recipe.id}`, () => removeWorkflowRecipe(recipe.id), '配方已删除。')} disabled={Boolean(busy)}><Trash2 size={14} /></button></footer></article>)}</div>
               {!recipes.length ? <p className="aq-workflow-center__empty">运行面板中的“保存配方”可以保存当前参数。</p> : null}
             </section> : null}
             {tab === 'custom' ? <>
@@ -737,6 +754,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
                     <label key={role}><span>{CUSTOM_NUMERIC_FIELDS[role].label}</span><input type="number" step={CUSTOM_NUMERIC_FIELDS[role].step} min={CUSTOM_NUMERIC_FIELDS[role].min} max={CUSTOM_NUMERIC_FIELDS[role].max} value={customRunNumbers[role] ?? ''} onChange={(event) => setCustomRunNumbers((current) => ({ ...current, [role]: event.target.value }))} placeholder="沿用 JSON 原值" /></label>
                   ))}
                 </div>
+                <FixedWeightsSummary weightSet={selectedCustom.weightSet} />
                 <div className="aq-workflow-recipe-save"><label>配方名称<input aria-label="配方名称" value={recipeName} maxLength={80} onChange={(event) => setRecipeName(event.target.value)} /></label><button type="button" onClick={() => void saveCurrentRecipe()} disabled={Boolean(busy) || !recipeName.trim()}>保存配方</button><small>保存工作流与数值参数，素材和描述由每次任务提供。</small></div>
                 {customRunJob ? (
                   <div className={`aq-custom-runner__job is-${customRunJob.status}`}>

@@ -13,6 +13,13 @@ const workflow = {
 }
 const input = (name = '我的配方') => ({ name, workflowId: workflow.id, workflowHash: workflow.hash, mappingHash: workflow.mappingHash, parameters: { seed: 12, steps: 8 } })
 const hasCode = (code) => (error) => error.code === code
+const weightSet = {
+  schemaVersion: 1, registryVersion: 'aeonquill-h3-registry-v2', family: 'minimax-h3',
+  profileId: 'fp8Scaled4060', samplingMode: 'turbo',
+  artifacts: ['base', 'text-encoder', 'video-vae', 'audio-vae', 'acceleration-lora'].map((role, index) => ({
+    role, id: `artifact-${index}`, sha256: String(index + 1).repeat(64),
+  })),
+}
 
 async function isolated(callback) {
   const parent = fileURLToPath(new URL('../.runtime/test-temp/', import.meta.url))
@@ -89,6 +96,41 @@ test('corrupt recipe files fail closed without replacing the original evidence',
   const store = new WorkflowRecipeStore(root, { getWorkflow: () => workflow })
   await assert.rejects(store.open(), hasCode('WORKFLOW_RECIPE_STORE_CORRUPT'))
   assert.equal(await readFile(path, 'utf8'), '{bad')
+}))
+
+test('new recipes pin authoritative registered weights and reject forged or changed bindings', () => {
+  const fixed = { ...workflow, weightSet }
+  const recipe = validateWorkflowRecipeInput(input(), fixed)
+  assert.deepEqual(recipe.weightSet, weightSet)
+  assert.notEqual(recipe.weightSet, weightSet)
+  const changed = structuredClone(weightSet)
+  changed.artifacts[4].sha256 = 'f'.repeat(64)
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), weightSet: changed }, fixed), hasCode('WORKFLOW_RECIPE_WEIGHT_STALE'))
+  assert.throws(() => assertWorkflowRecipeCompatible(recipe, { ...fixed, weightSet: changed }), hasCode('WORKFLOW_RECIPE_WEIGHT_STALE'))
+  assert.throws(() => assertWorkflowRecipeCompatible(recipe, workflow), hasCode('WORKFLOW_RECIPE_WEIGHT_STALE'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), weightSet: { ...weightSet, family: 'sdxl' } }, fixed), hasCode('INVALID_WORKFLOW_WEIGHT_SET'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), weightSet: { ...weightSet, artifacts: [...weightSet.artifacts, weightSet.artifacts[0]] } }, fixed), hasCode('INVALID_WORKFLOW_WEIGHT_SET'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), weightSet: { ...weightSet, path: 'D:/arbitrary' } }, fixed), hasCode('INVALID_WORKFLOW_WEIGHT_SET'))
+})
+
+test('v1 records migrate explicitly without inventing historical weight evidence', () => isolated(async (root) => {
+  const legacy = { id: 'legacy-recipe', ...input(), createdAt: 1, updatedAt: 1 }
+  const serialized = JSON.stringify({ schemaVersion: 1, revision: 7, recipes: [legacy] })
+  await writeFile(join(root, 'recipes.json'), serialized, 'utf8')
+  const store = new WorkflowRecipeStore(root, { getWorkflow: () => ({ ...workflow, weightSet }) })
+  await store.open()
+  assert.equal(store.get(legacy.id).weightSet, null)
+  assert.equal(store.list().revision, 7)
+  assert.equal(store.list().recipes[0].availability, 'stale')
+  assert.equal(await readFile(join(root, 'recipes.json'), 'utf8'), serialized)
+  await store.create(input('绑定当前权重'))
+  const saved = JSON.parse(await readFile(join(root, 'recipes.json'), 'utf8'))
+  assert.equal(saved.schemaVersion, 2)
+  assert.equal(saved.recipes[0].weightSet, null)
+  assert.deepEqual(saved.recipes[1].weightSet, weightSet)
+  const reopened = new WorkflowRecipeStore(root, { getWorkflow: () => ({ ...workflow, weightSet }) })
+  await reopened.open()
+  assert.deepEqual(reopened.resolve(saved.recipes[1].id).parameters, legacy.parameters)
 }))
 
 test('failed atomic persistence does not publish a recipe or increment the in-memory revision', () => isolated(async (root) => {

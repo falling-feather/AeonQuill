@@ -1410,3 +1410,8 @@
   .aq-workflow-candidates__selectors, .aq-workflow-candidates__media { grid-template-columns: 1fr; }
   .aq-workflow-task-card, .aq-workflow-recipe-card { padding: 15px; }
 }
+
+.aq-workflow-weights { padding: 10px 12px; border: 1px solid #e3e1ee; border-radius: 10px; font-size: 12px; }
+.aq-workflow-weights summary { cursor: pointer; font-weight: 600; }
+.aq-workflow-weights p, .aq-workflow-weights ul { margin: 8px 0; }
+.aq-workflow-weights ul { padding-left: 18px; }

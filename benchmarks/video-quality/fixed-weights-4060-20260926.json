@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "kind": "fixed-weight-custom-h3-live",
+  "startedAt": "2026-09-26T01:39:04.115Z",
+  "sourceCase": "t2v-close-up-adult",
+  "quality": "human-review-required",
+  "status": "passed",
+  "jobId": "custom-run-06275e56-e0f3-4af8-b759-15531ff0a53f",
+  "weightSet": {
+    "schemaVersion": 1,
+    "registryVersion": "aeonquill-h3-registry-v2",
+    "family": "minimax-h3",
+    "profileId": "int8ConvrotCu130",
+    "samplingMode": "turbo",
+    "artifacts": [
+      {
+        "role": "base",
+        "id": "h3-fl2va-int8-convrot",
+        "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      },
+      {
+        "role": "text-encoder",
+        "id": "h3-qwen3vl-nvfp4",
+        "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+      },
+      {
+        "role": "video-vae",
+        "id": "h3-video-vae",
+        "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+      },
+      {
+        "role": "audio-vae",
+        "id": "h3-audio-vae",
+        "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+      },
+      {
+        "role": "acceleration-lora",
+        "id": "h3-turbo-lora-v4",
+        "sha256": "5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3"
+      }
+    ]
+  },
+  "workflowHash": "e3f49be33fb4566d37ae142f2c8b6e7e77ce196f627bedea8d3ba3bcc7952343",
+  "mappingHash": "b658f14a47f66167922836ea674ce57d02a5778339afc1657fc05b676968db44",
+  "outputSha256": "89effecb828df16803fc1676f74c78eb7d64fe37f1ea550e405ee90d85799af8",
+  "outputBytes": 202909,
+  "media": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "width": 608,
+        "height": 352,
+        "r_frame_rate": "24/1",
+        "nb_frames": "124"
+      },
+      {
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "r_frame_rate": "0/0",
+        "nb_frames": "163"
+      }
+    ],
+    "format": {
+      "duration": "5.167000"
+    }
+  },
+  "elapsedMs": 144251,
+  "peakVramMiB": 7284,
+  "outputRelativePath": ".runtime/benchmarks/video-quality/20260926/fixed-weights-h3.mp4",
+  "gpuSampleIntervalMs": 5000,
+  "sameDecodedFramesAsBaseline": true,
+  "decodedFramesSha256": "df323913fa025517a4302e604304597a5598f11954f180651bb9b9e40fc5bab8",
+  "verificationReport": ".runtime/qa/fixed-weights-real.json"
+}

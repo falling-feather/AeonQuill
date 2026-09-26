@@ -1,3 +1,5 @@
+import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
+
 export type ElementKind =
   | 'poster'
   | 'pixel'
@@ -447,6 +449,7 @@ export type CustomWorkflowJobRequest = {
   mappingHash?: string
   sourceContentHash?: string
   lastFrameContentHash?: string
+  weightSet?: WorkflowWeightSet | null
   projectId: string
   title: string
   prompt: string

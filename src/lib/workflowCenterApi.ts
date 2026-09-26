@@ -1,6 +1,6 @@
 import { ensureLocalSession } from './videoApi'
 import type { CustomWorkflowJobRequest, ProcessingJob } from '../types'
-import type { WorkflowRecipe, WorkflowRecipeCatalog, WorkflowRecipeInput } from './workflowRecipes.mjs'
+import type { WorkflowRecipe, WorkflowRecipeCatalog, WorkflowRecipeInput, WorkflowWeightSet } from './workflowRecipes.mjs'
 import type { WorkflowControlRole } from './workflowControls.mjs'
 
 export type WorkflowArtifactStatus = {
@@ -119,6 +119,7 @@ export type CustomWorkflowSummary = {
   nodeCount: number
   nodeTypes: string[]
   models: string[]
+  weightSet?: WorkflowWeightSet | null
   mappings: CustomWorkflowMappings
   mappingHash: string
   enabled: boolean
