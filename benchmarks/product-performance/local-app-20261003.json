@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "status": "local-engineering-passed-with-large-pixel-stress-open",
+  "generatedAt": "2026-10-02T19:12:36.8168624Z",
+  "source": {
+    "cleanCommit": "c1a64d01932f1f1a36d305b22850f2daba10b5d2",
+    "functionalTrack": "V0.7.90",
+    "productVersion": "0.7.1"
+  },
+  "install": {
+    "directory": "D:/AEONQUILL/App",
+    "binaries": [
+      {
+        "filename": "aeonquill-desktop.exe",
+        "bytes": 13181440,
+        "sha256": "ace0be5755932bc6704173f472fd609630e670d0f41d3449070791b0c0030d33"
+      },
+      {
+        "filename": "aeonquill-bridge.exe",
+        "bytes": 61013200,
+        "sha256": "9d1c00cc264674aa5ab0ccd9990477091e8e248293515f491ce9646aca59bd00"
+      }
+    ]
+  },
+  "sidecar": {
+    "status": "passed",
+    "systemNodeRequired": false,
+    "readyMs": 540,
+    "exitCode": 0,
+    "portClosed": true,
+    "parentControl": "stdio"
+  },
+  "native": {
+    "status": "passed",
+    "timeline": {
+      "tauriReadyMs": 16,
+      "bridgeSpawnedMs": 89,
+      "bridgeReadyMs": 624,
+      "windowLoadedMs": 1638,
+      "rendererProbedMs": 1744,
+      "windowCloseRequestedMs": 2345,
+      "shutdownFinishedMs": 2643
+    },
+    "rendererProbe": {
+      "tauriGlobalType": "undefined",
+      "processType": "undefined",
+      "requireType": "undefined",
+      "documentReadyState": "complete"
+    },
+    "shutdown": {
+      "requested": true,
+      "exited": true,
+      "exitCode": 0,
+      "forced": false,
+      "portClosed": true
+    }
+  },
+  "singleInstance": {
+    "status": "passed",
+    "launchAttempts": 4,
+    "desktopCount": 1,
+    "bridgeCount": 1,
+    "secondaryExitCodes": [
+      0,
+      0,
+      0
+    ]
+  },
+  "userData": {
+    "status": "passed",
+    "protectedFiles": 77,
+    "changedFiles": 0,
+    "beforeSnapshotSha256": "d2c529a9866a4cb6b6a678eb6babc820aae2e78599d1032b916eb3d9856d88e1"
+  },
+  "validation": {
+    "unitTests": 473,
+    "baselineChecks": 148,
+    "p7Phases": 6,
+    "installedPixelUi": "passed",
+    "pixelUiBridge": "self-contained-sidecar",
+    "consoleIssues": 0
+  },
+  "pixelQuality": {
+    "machineReport": "benchmarks/pixel-quality/pixel-first-round-quality.json",
+    "machineStatus": "passed",
+    "assistantVisualReview": "reviewed",
+    "humanReview": "pending"
+  },
+  "largePixelStress": {
+    "status": "failed-before-soak",
+    "requestedMinutes": 30,
+    "completedMinutes": 0,
+    "attempts": 2,
+    "controlBudgetMs": 3000,
+    "failure": "Preflight undo locator action exceeded the unchanged 3-second control budget.",
+    "attemptDurationMs": [
+      56604,
+      56786
+    ],
+    "secondRunPolicy": "No parallel build or validation was running.",
+    "nextTask": "PERF-004"
+  },
+  "pause": {
+    "requestedBy": "user",
+    "date": "2026-10-03",
+    "resumePolicy": "Only after the user explicitly resumes development."
+  },
+  "limitations": [
+    "No new installer, public signing or cross-machine acceptance is claimed.",
+    "Large pixel sustained interaction and human perceptual quality remain separate open gates."
+  ],
+  "documentValidation": {
+    "repositoryStructureAndLinks": "passed",
+    "archiveErrors": 0,
+    "archiveCandidates": 0,
+    "skillStructureDateFindings": 2,
+    "reason": "Resume dates are unknown; the planning protocol forbids inventing dates to satisfy the mechanical validator."
+  },
+  "cleanup": {
+    "removedOrdinaryFiles": 27,
+    "releasedBytes": 254635417,
+    "retainedBuildCheckout": "The previously policy-blocked temporary checkout was reused; no alternate deletion path was attempted."
+  }
+}
