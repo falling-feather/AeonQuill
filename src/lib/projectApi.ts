@@ -261,6 +261,8 @@ export async function loadWorkspaceModeDocument(
   return payload.document
 }
 
+const LARGE_WORKSPACE_BODY_CHARS = 1024 * 1024
+
 export function saveWorkspaceModeDocument(input: {
   projectId: string
   documentId: string
@@ -278,12 +280,18 @@ export function saveWorkspaceModeDocument(input: {
         ? workspaceDocumentRevisions.get(input.documentId) ?? null
         : null
       const { documentId, ...body } = input
+      const serializedBody = JSON.stringify({ ...body, baseRevision })
+      // Encoding once keeps large uploads out of fetch's synchronous string
+      // conversion; HTTP still receives the same UTF-8 JSON body.
+      const requestBody = serializedBody.length >= LARGE_WORKSPACE_BODY_CHARS
+        ? new TextEncoder().encode(serializedBody)
+        : serializedBody
       const payload = await api<{ document: WorkspaceModeDocument }>(
         `/api/workspace/documents/${encodeURIComponent(documentId)}`,
         {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ...body, baseRevision }),
+          body: requestBody,
         },
       )
       markWorkspaceDocumentWriteSucceeded(documentId, writeAttempt, payload.document.revision)

@@ -1,0 +1,496 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.qa.pixel-first-round-quality",
+  "status": "passed",
+  "manualReview": "pending",
+  "assistantVisualReview": {
+    "status": "reviewed",
+    "reviewer": "root",
+    "reviewedAt": "2026-10-03",
+    "scope": "Four inputs and twelve enlarged preset outputs in comparison.html",
+    "observations": [
+      "Dominant background median-cut correction removes the earlier beige background collapse and restores the illustration hat, skin and clothing colors.",
+      "Native hard edges remain intact in the hard-edge fixture; preserve mode retains semi-transparent outlines and gradients.",
+      "Area sampling produces smoother small illustration edges; nearest sampling retains sharper pixel contours. No universal best preset is selected."
+    ],
+    "limitations": "Assistant visual inspection of one repository illustration and three synthetic fixtures does not replace human blind review or a broader material benchmark."
+  },
+  "qualityClaim": "Deterministic algorithm benchmark only; no human visual quality conclusion.",
+  "algorithm": {
+    "converter": "src/lib/pixel/pixelConversion.mjs::convertRgbaToPixelDocument",
+    "renderer": "src/lib/pixel/pixelCore.mjs::renderPixelFrameRgba",
+    "pngEncoder": "Microsoft Edge Canvas toDataURL(image/png)",
+    "paletteSplitBoundary": "corrected: sorted.length - 1"
+  },
+  "environment": {
+    "node": "v24.20.0",
+    "platform": "win32-10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+    "totalMemoryBytes": 33844576256,
+    "edgePath": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+  },
+  "inputs": [
+    {
+      "id": "hard-edge",
+      "label": "Native 16×16 hard-edge pattern",
+      "source": "Generated in benchmark script",
+      "input": {
+        "dimensions": {
+          "width": 16,
+          "height": 16
+        },
+        "rgbaBytes": 1024,
+        "rgbaSha256": "4706ef9bb918e410cb77b5c688a4cfef20bdbd3d8e709efe4ded46b918736a9c",
+        "transparentPixels": 0,
+        "semiTransparentPixels": 0
+      },
+      "variants": [
+        {
+          "preset": "pixel-art",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "4706ef9bb918e410cb77b5c688a4cfef20bdbd3d8e709efe4ded46b918736a9c",
+            "pngBytes": 172,
+            "pngSha256": "dcd0eb6f6e2c802006679c32b5109537799ce94753cb8cfcb4ced63a64f0ea36",
+            "paletteSize": 5,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/hard-edge-pixel-art-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.5492000000012922,
+            "renderMedian": 0.10580000000118162,
+            "combinedMedian": 0.6592999999993481,
+            "pngEncode": 8.47149999999965
+          }
+        },
+        {
+          "preset": "illustration",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "4706ef9bb918e410cb77b5c688a4cfef20bdbd3d8e709efe4ded46b918736a9c",
+            "pngBytes": 172,
+            "pngSha256": "dcd0eb6f6e2c802006679c32b5109537799ce94753cb8cfcb4ced63a64f0ea36",
+            "paletteSize": 5,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/hard-edge-illustration-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.34609999999884167,
+            "renderMedian": 0.08120000000053551,
+            "combinedMedian": 0.40689999999813153,
+            "pngEncode": 7.741599999997561
+          }
+        },
+        {
+          "preset": "soft-alpha",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "4706ef9bb918e410cb77b5c688a4cfef20bdbd3d8e709efe4ded46b918736a9c",
+            "pngBytes": 172,
+            "pngSha256": "dcd0eb6f6e2c802006679c32b5109537799ce94753cb8cfcb4ced63a64f0ea36",
+            "paletteSize": 5,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/hard-edge-soft-alpha-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.3724000000001979,
+            "renderMedian": 0.06299999999828287,
+            "combinedMedian": 0.4573999999993248,
+            "pngEncode": 7.021100000001752
+          }
+        }
+      ]
+    },
+    {
+      "id": "fine-outline",
+      "label": "Transparent fine line and outline",
+      "source": "Generated in benchmark script",
+      "input": {
+        "dimensions": {
+          "width": 16,
+          "height": 16
+        },
+        "rgbaBytes": 1024,
+        "rgbaSha256": "8c17ae29157b7191c628dc136293f082410b9c8b5ba270c0c639c94454a7e1f1",
+        "transparentPixels": 188,
+        "semiTransparentPixels": 18
+      },
+      "variants": [
+        {
+          "preset": "pixel-art",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "70b81a676f62c148d7cf8cdfe78aec3e48ec059932de6e16e00545276b688ef4",
+            "pngBytes": 239,
+            "pngSha256": "bee7532528c95c141da8a049d4fb80b7e340c263be83c1f1c92147beaecc0496",
+            "paletteSize": 1,
+            "transparentPixels": 188,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/fine-outline-pixel-art-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.14800000000104774,
+            "renderMedian": 0.03359999999884167,
+            "combinedMedian": 0.22399999999834108,
+            "pngEncode": 5.965199999998731
+          }
+        },
+        {
+          "preset": "illustration",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "70b81a676f62c148d7cf8cdfe78aec3e48ec059932de6e16e00545276b688ef4",
+            "pngBytes": 239,
+            "pngSha256": "bee7532528c95c141da8a049d4fb80b7e340c263be83c1f1c92147beaecc0496",
+            "paletteSize": 1,
+            "transparentPixels": 188,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/fine-outline-illustration-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.1632000000026892,
+            "renderMedian": 0.02809999999954016,
+            "combinedMedian": 0.19369999999980791,
+            "pngEncode": 6.997299999999086
+          }
+        },
+        {
+          "preset": "soft-alpha",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "8c17ae29157b7191c628dc136293f082410b9c8b5ba270c0c639c94454a7e1f1",
+            "pngBytes": 274,
+            "pngSha256": "7fe4c8470e56f69221cf97eb97a64b5c971dad7078f41b25ba6a961ab074aba9",
+            "paletteSize": 2,
+            "transparentPixels": 188,
+            "semiTransparentPixels": 18,
+            "path": "benchmarks/pixel-quality/fine-outline-soft-alpha-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.20190000000002328,
+            "renderMedian": 0.02690000000075088,
+            "combinedMedian": 0.2298000000009779,
+            "pngEncode": 5.899300000000949
+          }
+        }
+      ]
+    },
+    {
+      "id": "alpha-gradient",
+      "label": "Semi-transparent gradient",
+      "source": "Generated in benchmark script",
+      "input": {
+        "dimensions": {
+          "width": 16,
+          "height": 16
+        },
+        "rgbaBytes": 1024,
+        "rgbaSha256": "4434cd808fa9c174640ec0bf8631e1a9cddc2609a92f5c652b6260381290d125",
+        "transparentPixels": 1,
+        "semiTransparentPixels": 254
+      },
+      "variants": [
+        {
+          "preset": "pixel-art",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "e557d1e54121c295dd82414082cc37aac9fdfee2b6fc9f7a14b0bfedb5ce536a",
+            "pngBytes": 225,
+            "pngSha256": "99881f25b2b75881c546ffc525a1034963784fe5a843780b7483d08bb390b85f",
+            "paletteSize": 16,
+            "transparentPixels": 3,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/alpha-gradient-pixel-art-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 1.2520000000004075,
+            "renderMedian": 0.09499999999752617,
+            "combinedMedian": 1.3487999999997555,
+            "pngEncode": 7.994199999997363
+          }
+        },
+        {
+          "preset": "illustration",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "69da9ab0c2a99dfbc428d911a5b097c6b2548dd6b297183b1e0756b9329cf2cc",
+            "pngBytes": 320,
+            "pngSha256": "84f234dd234bd4be46fcba73614377e90be4f6a6796b690e94a07c64d9816135",
+            "paletteSize": 16,
+            "transparentPixels": 3,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/alpha-gradient-illustration-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 0.7177999999985332,
+            "renderMedian": 0.08150000000023283,
+            "combinedMedian": 0.7828999999983353,
+            "pngEncode": 12.267700000000332
+          }
+        },
+        {
+          "preset": "soft-alpha",
+          "options": {
+            "targetWidth": 16,
+            "targetHeight": 16,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 16,
+              "height": 16
+            },
+            "rgbaBytes": 1024,
+            "rgbaSha256": "5df2a09b83781553fc51496bd73b8947795a9719b71a6931bfdd9409bea56cfb",
+            "pngBytes": 414,
+            "pngSha256": "38f1aa3368745ff28515df17bd60d768f1773187e1c0ef53cf88c4c77f68c5e7",
+            "paletteSize": 16,
+            "transparentPixels": 1,
+            "semiTransparentPixels": 255,
+            "path": "benchmarks/pixel-quality/alpha-gradient-soft-alpha-16x16.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 1.3168000000005122,
+            "renderMedian": 0.09499999999752617,
+            "combinedMedian": 1.4601999999977124,
+            "pngEncode": 7.815299999998388
+          }
+        }
+      ]
+    },
+    {
+      "id": "summer-character",
+      "label": "Repository real illustration",
+      "sourcePath": "src/assets/sample-summer-character.png",
+      "input": {
+        "dimensions": {
+          "width": 1254,
+          "height": 1254
+        },
+        "rgbaBytes": 6290064,
+        "rgbaSha256": "d85cfaa610bdb6a5377d70d72b26d4ac87d3b102ef0a04f1b8d2ee0d3096d4d1",
+        "transparentPixels": 0,
+        "semiTransparentPixels": 0
+      },
+      "variants": [
+        {
+          "preset": "pixel-art",
+          "options": {
+            "targetWidth": 32,
+            "targetHeight": 32,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 32,
+              "height": 32
+            },
+            "rgbaBytes": 4096,
+            "rgbaSha256": "98fc03bbbee215df4f3215005aa64162827157bfde0c6d9e8187cd715ae447c5",
+            "pngBytes": 1496,
+            "pngSha256": "251eb779ea562a4506e5eeda754cfd7fc7820c02f8e5daacd7bbc0ccf7ab1b88",
+            "paletteSize": 16,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/summer-character-pixel-art-32x32.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 12.238400000002002,
+            "renderMedian": 0.13700000000244472,
+            "combinedMedian": 12.40350000000035,
+            "pngEncode": 19.767800000001444
+          }
+        },
+        {
+          "preset": "illustration",
+          "options": {
+            "targetWidth": 32,
+            "targetHeight": 32,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 32,
+              "height": 32
+            },
+            "rgbaBytes": 4096,
+            "rgbaSha256": "e0575fb0c44c2a4c2a7409463a8e73fd9a4e7a2699550a602b8e37f442a26faa",
+            "pngBytes": 993,
+            "pngSha256": "46a79b6af2ea04e8401853471db43ce38a53701cd6d229cdac308cb403899e8b",
+            "paletteSize": 16,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/summer-character-illustration-32x32.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 160.95470000000205,
+            "renderMedian": 0.14170000000012806,
+            "combinedMedian": 161.07779999999912,
+            "pngEncode": 18.543900000000576
+          }
+        },
+        {
+          "preset": "soft-alpha",
+          "options": {
+            "targetWidth": 32,
+            "targetHeight": 32,
+            "colorCount": 16,
+            "fit": "contain",
+            "dither": "none"
+          },
+          "deterministic": true,
+          "sourceUnchanged": true,
+          "output": {
+            "dimensions": {
+              "width": 32,
+              "height": 32
+            },
+            "rgbaBytes": 4096,
+            "rgbaSha256": "e0575fb0c44c2a4c2a7409463a8e73fd9a4e7a2699550a602b8e37f442a26faa",
+            "pngBytes": 993,
+            "pngSha256": "46a79b6af2ea04e8401853471db43ce38a53701cd6d229cdac308cb403899e8b",
+            "paletteSize": 16,
+            "transparentPixels": 0,
+            "semiTransparentPixels": 0,
+            "path": "benchmarks/pixel-quality/summer-character-soft-alpha-32x32.png"
+          },
+          "timingsMs": {
+            "conversionMedian": 168.26989999999932,
+            "renderMedian": 0.18029999999998836,
+            "combinedMedian": 168.4402000000009,
+            "pngEncode": 25.30580000000191
+          }
+        }
+      ]
+    }
+  ],
+  "page": {
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  "comparison": {
+    "html": "benchmarks/pixel-quality/comparison.html",
+    "screenshot": ".runtime/qa/pixel-first-round-quality-comparison.png",
+    "desktopHorizontalOverflow": false,
+    "mobileHorizontalOverflow": false
+  }
+}

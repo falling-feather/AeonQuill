@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   PixelComputationError,
+  createPixelComputationSnapshot,
   runPixelComputation,
 } from '../src/lib/pixel/pixelComputation.mjs'
 import { PixelComputationClient } from '../src/lib/pixel/pixelComputationClient.mjs'
@@ -10,7 +11,11 @@ import {
   renderPixelFrameRgba,
   renderSpriteSheetRgba,
 } from '../src/lib/pixel/pixelCore.mjs'
-import { createPixelExportBundle } from '../src/lib/pixel/pixelConversion.mjs'
+import {
+  PIXEL_CONVERSION_PRESETS,
+  convertRgbaToPixelDocument,
+  createPixelExportBundle,
+} from '../src/lib/pixel/pixelConversion.mjs'
 import {
   createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
@@ -316,4 +321,199 @@ test('PixelComputationClient cancels an in-flight synchronous fallback and ignor
   assert.equal(error.name, 'AbortError')
   assert.equal(client.active, null)
   client.dispose()
+})
+
+test('createPixelComputationSnapshot projects one frame without changing rendered pixels or source metadata', () => {
+  const source = makeDocument()
+  const before = structuredClone(source)
+  const snapshot = createPixelComputationSnapshot(source, 'frame', {
+    frameId: 'frame-2',
+    includeHiddenLayers: false,
+    paletteCycleElapsedMs: 20,
+  })
+
+  assert.notStrictEqual(snapshot, source)
+  assert.deepEqual(snapshot.frames.map((frame) => frame.id), ['frame-2'])
+  assert.equal(snapshot.activeFrameId, 'frame-2')
+  assert.deepEqual(snapshot.animationTags, [])
+  assert.deepEqual(snapshot.animationEvents, [])
+  assert.deepEqual(snapshot.terrainMaps, [])
+  assert.deepEqual(
+    Array.from(renderPixelFrameRgba(snapshot, 'frame-2', { paletteCycleElapsedMs: 20 })),
+    Array.from(renderPixelFrameRgba(source, 'frame-2', { paletteCycleElapsedMs: 20 })),
+  )
+  assert.deepEqual(source, before)
+})
+
+test('createPixelComputationSnapshot preserves requested multi-frame order and run output', () => {
+  const source = makeDocument()
+  const frameIds = ['frame-2', 'frame-1']
+  const snapshot = createPixelComputationSnapshot(source, 'frames', { frameIds })
+  const original = runPixelComputation(request(source, 'frames', { frameIds }))
+  const projected = runPixelComputation(request(snapshot, 'frames', { frameIds }))
+
+  assert.deepEqual(snapshot.frames.map((frame) => frame.id), frameIds)
+  assert.equal(snapshot.activeFrameId, 'frame-2')
+  assert.deepEqual(
+    projected.result.frames.map(({ frameId, pixels }) => ({ frameId, pixels: Array.from(pixels) })),
+    original.result.frames.map(({ frameId, pixels }) => ({ frameId, pixels: Array.from(pixels) })),
+  )
+  assert.throws(
+    () => createPixelComputationSnapshot(source, 'frames', { frameIds: ['frame-1', 'frame-1'] }),
+    (error) => error instanceof PixelComputationError && error.code === 'INVALID_FRAME_IDS',
+  )
+  assert.throws(
+    () => createPixelComputationSnapshot(source, 'frames', { frameIds: ['unknown-frame'] }),
+    (error) => error instanceof PixelComputationError && error.code === 'INVALID_FRAME_IDS',
+  )
+})
+
+test('createPixelComputationSnapshot uses shared null cels for coverage while preserving gameplay and terrain object references', () => {
+  const base = makeTerrainDocument()
+  const { kind: _kind, schemaVersion: _schemaVersion, ...input } = base
+  input.terrainMaps = [{
+    ...input.terrainMaps[0],
+    objectLayers: [{
+      id: 'props',
+      name: 'Props',
+      visible: true,
+      locked: false,
+      objects: [{
+        id: 'tree',
+        name: 'Tree',
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        frameId: 'frame-1',
+        collisionId: null,
+        properties: { blocking: true },
+      }],
+    }],
+  }]
+  const source = createPixelDocument(input)
+  const before = structuredClone(source)
+  const snapshot = createPixelComputationSnapshot(source, 'coverage', { mapId: 'yard' })
+
+  assert.equal(snapshot.frames.length, source.frames.length)
+  assert.deepEqual(snapshot.frames.map((frame) => frame.gameplay), source.frames.map((frame) => frame.gameplay))
+  assert.equal(snapshot.frames[0].cels.ink, snapshot.frames[1].cels.ink)
+  assert(snapshot.frames.every((frame) => frame.cels.ink.every((colorId) => colorId === null)))
+  assert.deepEqual(snapshot.terrainMaps, source.terrainMaps)
+  assert.equal(snapshot.terrainMaps[0].objectLayers[0].objects[0].frameId, 'frame-1')
+
+  const projectedCoverage = runPixelComputation(request(snapshot, 'coverage', { mapId: 'yard' }))
+  const originalCoverage = runPixelComputation(request(source, 'coverage', { mapId: 'yard' }))
+  assert.deepEqual(projectedCoverage.result, originalCoverage.result)
+  assert.equal(projectedCoverage.result.missingCount, 1)
+  assert.deepEqual(source, before)
+})
+
+test('createPixelComputationSnapshot returns the original document for non-rendering operations', () => {
+  const source = makeTerrainDocument()
+  assert.strictEqual(createPixelComputationSnapshot(source, 'sprite-sheet', { columns: 2 }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'terrain-map', { terrainMapId: 'yard' }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'terrain-preview', { terrainId: 'grass' }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'game-export', { columns: 2, mapWidth: 2, mapHeight: 1 }), source)
+})
+
+test('image-convert delegates the exact converter result and projects only a 1x1 task identity', () => {
+  const document = makeDocument()
+  const source = {
+    width: 2,
+    height: 2,
+    data: [255, 0, 0, 64, 0, 255, 0, 128, 0, 0, 255, 192, 255, 255, 255, 255],
+  }
+  const options = {
+    ...PIXEL_CONVERSION_PRESETS['soft-alpha'].settings,
+    targetWidth: 2,
+    targetHeight: 2,
+    colorCount: 4,
+    fit: 'stretch',
+    documentId: 'converted-image',
+    documentName: 'Converted image',
+  }
+  const sourceBefore = JSON.stringify(source)
+  const expected = convertRgbaToPixelDocument(source, options)
+  const actual = runPixelComputation({ ...request(document, 'image-convert', options), source })
+  const snapshot = createPixelComputationSnapshot(document, 'image-convert', options)
+
+  assert.deepEqual(actual.result, expected)
+  assert.equal(snapshot.id, document.id)
+  assert.equal(snapshot.revision, document.revision)
+  assert.equal(snapshot.name, document.name)
+  assert.equal(snapshot.width, 1)
+  assert.equal(snapshot.height, 1)
+  assert.deepEqual(snapshot.frames[0].cels[snapshot.activeLayerId], [null])
+  assert.deepEqual(source, JSON.parse(sourceBefore))
+})
+
+test('image-convert enforces its source boundary and reuses strict conversion option validation', () => {
+  const document = makeDocument()
+  const source = { width: 1, height: 1, data: [1, 2, 3, 255] }
+  assert.throws(
+    () => runPixelComputation(request(document, 'image-convert', {})),
+    (error) => error instanceof PixelComputationError && error.code === 'MISSING_SOURCE',
+  )
+  assert.throws(
+    () => runPixelComputation({ ...request(document, 'frame', { frameId: 'frame-1' }), source }),
+    (error) => error instanceof PixelComputationError && error.code === 'SOURCE_NOT_ALLOWED',
+  )
+  assert.throws(
+    () => runPixelComputation({ ...request(document, 'image-convert', { extra: true }), source }),
+    (error) => error.code === 'UNKNOWN_FIELD',
+  )
+  assert.throws(
+    () => runPixelComputation({ ...request(document, 'image-convert', { targetWidth: 0 }), source }),
+    (error) => error.code === 'INVALID_INTEGER',
+  )
+  assert.throws(
+    () => runPixelComputation({ ...request(document, 'image-convert', {}), source: { width: 1, height: 1, data: [1, 2, 3] } }),
+    (error) => error.code === 'INVALID_RGBA',
+  )
+})
+
+test('image-convert rejects the conservative RGBA and workspace budget before normalizing a large source', () => {
+  const document = makeDocument()
+  const normalSource = { width: 1024, height: 1024, data: new Uint8ClampedArray(1024 * 1024 * 4) }
+  assert.doesNotThrow(() => runPixelComputation({
+    ...request(document, 'image-convert', { targetWidth: 32, targetHeight: 32 }),
+    source: normalSource,
+  }))
+  assert.throws(
+    () => runPixelComputation({
+      ...request(document, 'image-convert', { targetWidth: 32, targetHeight: 32, budgetBytes: 1024 }),
+      source: normalSource,
+    }),
+    (error) => error instanceof PixelComputationError
+      && error.code === 'PIXEL_COMPUTATION_BUDGET'
+      && error.details?.estimatedBytes > error.details?.budgetBytes,
+  )
+  const largeSource = { width: 4096, height: 4096, data: new Uint8Array(4096 * 4096 * 4) }
+  assert.throws(
+    () => runPixelComputation({ ...request(document, 'image-convert', { targetWidth: 32, targetHeight: 32 }), source: largeSource }),
+    (error) => error instanceof PixelComputationError && error.code === 'PIXEL_COMPUTATION_BUDGET',
+  )
+})
+
+test('image-convert rejects long fixed palette ids before a 2048x2048 to 512x512 algorithm allocation', () => {
+  const document = makeDocument()
+  const source = { width: 2048, height: 2048, data: new Uint8Array(2048 * 2048 * 4) }
+  const palette = [{ id: 'p'.repeat(64), name: 'Long palette id', color: '#000000FF' }]
+  assert.throws(
+    () => runPixelComputation({
+      ...request(document, 'image-convert', {
+        targetWidth: 512,
+        targetHeight: 512,
+        colorCount: 1,
+        palette,
+        fit: 'stretch',
+        budgetBytes: 64 * 1024 * 1024,
+      }),
+      source,
+    }),
+    (error) => error instanceof PixelComputationError
+      && error.code === 'PIXEL_COMPUTATION_BUDGET'
+      && error.details?.estimatedBytes > error.details?.budgetBytes,
+  )
 })

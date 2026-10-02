@@ -63,7 +63,6 @@ import {
   PIXEL_TERRAIN_GRID_PRESETS,
   PIXEL_TILE_NEIGHBORS,
   applyPixelCommand,
-  convertRgbaToPixelDocument,
   createBlankPixelArray,
   createDefaultPixelFrameGameplay,
   createPixelExportBundle,
@@ -79,6 +78,7 @@ import {
   createSelectionPatch,
   createSmartPixelCleanupPatch,
   expandPixelBrush,
+  pixelPerfectStroke,
   floodFillPixels,
   inspectPixelTerrainCoverage,
   migratePixelDocument,
@@ -100,6 +100,9 @@ import {
   type PixelCollisionType,
   type PixelConversionReport,
   type PixelDitherMode,
+  type PixelResampleMode,
+  type PixelColorMatchMode,
+  type PixelAlphaMode,
   type PixelDocument,
   type PixelFitMode,
   type PixelFrameGameplay,
@@ -114,7 +117,9 @@ import {
   type PixelTerrainObjectLayer,
   type RgbaImage,
   type SpriteSheetMetadata,
+  PIXEL_CONVERSION_PRESETS,
 } from '../../lib/pixel/index'
+import { applyPixelHistoryEntry, createPixelDocumentHistoryEntry, type PixelHistoryEntry } from '../../lib/pixel/pixelHistory.mjs'
 import type { LibraryAssetInsertion } from '../../lib/libraryApi'
 import { AgentPlanComposer } from '../../components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from '../../components/AgentPlanReviewDialog'
@@ -145,7 +150,8 @@ import {
   readPixelProjectFile,
 } from './pixelBrowser'
 import { PixelComputationClient } from '../../lib/pixel/pixelComputationClient.mjs'
-import type { PixelComputationFramesResult, PixelComputationOperation, PixelComputationRequest } from '../../lib/pixel/pixelComputation.mjs'
+import { createPixelComputationSnapshot } from '../../lib/pixel/pixelComputation.mjs'
+import type { PixelComputationConversionResult, PixelComputationFramesResult, PixelComputationOperation, PixelComputationRequest } from '../../lib/pixel/pixelComputation.mjs'
 import './pixel-mode.css'
 
 type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
@@ -195,11 +201,12 @@ const PIXEL_TERRAIN_LAYER_SELECTION = '__terrain-layer__'
 
 type HistoryState = {
   document: PixelDocument
-  undo: PixelCommand[]
-  redo: PixelCommand[]
+  undo: PixelHistoryEntry[]
+  redo: PixelHistoryEntry[]
 }
 
 type PixelStrokeContext = {
+  documentId: string
   baseRevision: number
   frameId: string
   layerId: string
@@ -210,6 +217,7 @@ type PixelStrokeContext = {
   brushSize: number
   mirrorHorizontal: boolean
   mirrorVertical: boolean
+  pixelPerfect: boolean
 }
 
 type TerrainPreviewRender = {
@@ -260,6 +268,26 @@ type PixelImportSettings = {
   fit: PixelFitMode
   paletteMode: 'generated' | 'current'
   alphaThreshold: number
+  resample: PixelResampleMode
+  colorMatch: PixelColorMatchMode
+  alphaMode: PixelAlphaMode
+}
+
+type PixelConversionCandidate = {
+  document: PixelDocument
+  report: PixelConversionReport
+  source: ImportedSource
+  settings: PixelImportSettings
+  baseDocumentId: string
+  baseRevision: number
+}
+
+type PixelConversionJob = {
+  controller: AbortController
+  source: ImportedSource
+  settings: PixelImportSettings
+  documentId: string
+  revision: number
 }
 
 type ImportedSource = RgbaImage & {
@@ -381,6 +409,10 @@ function putRgbaOnCanvas(
   target.restore()
 }
 
+function getPixelCanvasContext(canvas: HTMLCanvasElement) {
+  return canvas.getContext('2d', { willReadFrequently: true })
+}
+
 function sourceDocumentName(filename: string) {
   const withoutExtension = filename.replace(/\.(png|webp)$/i, '').trim()
   return withoutExtension.slice(0, 120) || 'Imported pixel art'
@@ -389,6 +421,17 @@ function sourceDocumentName(filename: string) {
 function readablePixelError(error: unknown, fallback: string) {
   if (error instanceof PixelContractError || error instanceof PixelBrowserError) return error.message
   return error instanceof Error ? error.message : fallback
+}
+
+function paintStrokePreview(context: CanvasRenderingContext2D, stroke: PixelStrokeContext, points: Iterable<PixelPoint>) {
+  context.save()
+  context.globalAlpha = stroke.layerOpacity
+  context.fillStyle = stroke.previewColor
+  for (const point of points) {
+    if (stroke.tool === 'pencil') context.fillRect(point.x, point.y, 1, 1)
+    else context.clearRect(point.x, point.y, 1, 1)
+  }
+  context.restore()
 }
 
 function terrainPreviewColor(terrainId: string) {
@@ -423,6 +466,7 @@ export function PixelModeWorkbench({
   const [brushSize, setBrushSize] = useState(1)
   const [mirrorHorizontal, setMirrorHorizontal] = useState(false)
   const [mirrorVertical, setMirrorVertical] = useState(false)
+  const [pixelPerfect, setPixelPerfect] = useState(true)
   const [gridVisible, setGridVisible] = useState(true)
   const [gameOverlayVisible, setGameOverlayVisible] = useState(true)
   const [zoom, setZoom] = useState(1)
@@ -449,7 +493,20 @@ export function PixelModeWorkbench({
     fit: 'contain',
     paletteMode: 'generated',
     alphaThreshold: 16,
+    resample: 'nearest',
+    colorMatch: 'rgb',
+    alphaMode: 'threshold',
   })
+  const importSettingsRef = useRef(importSettings)
+  importSettingsRef.current = importSettings
+  const [conversionCandidate, setConversionCandidate] = useState<PixelConversionCandidate | null>(null)
+  const conversionJobRef = useRef<PixelConversionJob | null>(null)
+  const sourcePreviewRef = useRef<HTMLCanvasElement>(null)
+  const conversionPreviewRef = useRef<HTMLCanvasElement>(null)
+  const conversionPresetId = Object.values(PIXEL_CONVERSION_PRESETS).find(({ settings }) => (
+    settings.resample === importSettings.resample && settings.colorMatch === importSettings.colorMatch
+      && settings.alphaMode === importSettings.alphaMode && settings.dither === importSettings.dither
+  ))?.id ?? 'custom'
   const [importSourceSummary, setImportSourceSummary] = useState<{ name: string; width: number; height: number } | null>(null)
   const [lastConversion, setLastConversion] = useState<PixelConversionReport | null>(null)
   const [isImporting, setIsImporting] = useState(false)
@@ -500,6 +557,8 @@ export function PixelModeWorkbench({
   const paintingRef = useRef(false)
   const strokeContextRef = useRef<PixelStrokeContext | null>(null)
   const strokePointsRef = useRef(new Map<string, { x: number; y: number }>())
+  const strokePathRef = useRef<PixelPoint[]>([])
+  const strokeBaseImageRef = useRef<ImageData | null>(null)
   const lastStrokePointRef = useRef<PixelPoint | null>(null)
   const dragContextRef = useRef<PixelDragContext | null>(null)
   const commandSequenceRef = useRef(1)
@@ -510,6 +569,7 @@ export function PixelModeWorkbench({
     terrainMap: PixelComputationClient
     coverage: PixelComputationClient
     export: PixelComputationClient
+    conversion: PixelComputationClient
   } | null>(null)
   const spriteCycleSchedulerRef = useRef<{ revision: number | null; pending: number | null; running: boolean; lastRequestedElapsedMs: number }>({
     revision: null,
@@ -524,6 +584,7 @@ export function PixelModeWorkbench({
       terrainMap: new PixelComputationClient(),
       coverage: new PixelComputationClient(),
       export: new PixelComputationClient(),
+      conversion: new PixelComputationClient(),
     }
   }
   const document = history.document
@@ -534,6 +595,15 @@ export function PixelModeWorkbench({
   const usePixelComputationWorker = pixelComputationCellEstimate >= 262_144 || pixelComputationOutputEstimate >= 4 * 1024 * 1024
 
   const replaceHistory = useCallback((next: HistoryState) => {
+    const previous = historyRef.current.document
+    if (previous.width !== next.document.width || previous.height !== next.document.height) {
+      setSelection(null)
+      setDragDraft(null)
+      dragContextRef.current = null
+    }
+    setActiveColorId((id) => next.document.palette.some((color) => color.id === id) ? id : next.document.palette[0].id)
+    setActiveAnimationTagId((id) => next.document.animationTags.some((tag) => tag.id === id) ? id : next.document.animationTags[0]?.id ?? null)
+    setActivePaletteCycleId((id) => next.document.paletteCycles.some((cycle) => cycle.id === id) ? id : next.document.paletteCycles[0]?.id ?? null)
     historyRef.current = next
     setHistory(next)
   }, [])
@@ -545,19 +615,31 @@ export function PixelModeWorkbench({
   }, [])
 
   const requestPixelComputation = useCallback((
-    clientKey: 'render' | 'terrainPreview' | 'terrainMap' | 'coverage' | 'export',
+    clientKey: 'render' | 'terrainPreview' | 'terrainMap' | 'coverage' | 'export' | 'conversion',
     operation: PixelComputationOperation,
     options: Record<string, unknown>,
     signal?: AbortSignal,
+    source?: RgbaImage,
   ) => {
     const current = historyRef.current.document
+    let computationDocument: PixelDocument
+    try {
+      computationDocument = createPixelComputationSnapshot(current, operation, options)
+    } catch (error) {
+      const message = readablePixelError(error, '像素计算无法准备')
+      computationFailuresRef.current.set(clientKey, message)
+      setPixelComputationError(message)
+      setPixelComputationState(pendingComputationsRef.current.size ? 'running' : 'error')
+      return Promise.reject(error)
+    }
     const request: PixelComputationRequest = {
       requestId: `pixel-computation-${current.revision}-${commandSequenceRef.current++}`,
       documentId: current.id,
       revision: current.revision,
       operation,
-      document: current,
+      document: computationDocument,
       options,
+      ...(source ? { source } : {}),
     }
     const client = computationClientsRef.current?.[clientKey]
     if (!client) return Promise.reject(new Error('像素计算客户端不可用'))
@@ -592,6 +674,8 @@ export function PixelModeWorkbench({
     computationClientsRef.current?.terrainMap.cancel()
     computationClientsRef.current?.coverage.cancel()
     computationClientsRef.current?.export.cancel()
+    computationClientsRef.current?.conversion.cancel()
+    conversionJobRef.current?.controller.abort()
     pendingComputationsRef.current.clear()
     computationFailuresRef.current.clear()
     setPixelComputationError(null)
@@ -600,11 +684,15 @@ export function PixelModeWorkbench({
   }, [])
 
   useEffect(() => () => {
+    const conversionJob = conversionJobRef.current
+    conversionJobRef.current = null
+    conversionJob?.controller.abort()
     computationClientsRef.current?.render.dispose()
     computationClientsRef.current?.terrainPreview.dispose()
     computationClientsRef.current?.terrainMap.dispose()
     computationClientsRef.current?.coverage.dispose()
     computationClientsRef.current?.export.dispose()
+    computationClientsRef.current?.conversion.dispose()
   }, [])
 
   const apply = useCallback((type: PixelCommandType, payload: Record<string, unknown>) => {
@@ -635,11 +723,7 @@ export function PixelModeWorkbench({
     const inverse = current.undo.at(-1)
     if (!inverse) return
     try {
-      const result = applyPixelCommand(current.document, {
-        ...inverse,
-        id: `pixel-ui-undo-${commandSequenceRef.current++}`,
-        baseRevision: current.document.revision,
-      })
+      const result = applyPixelHistoryEntry(current.document, inverse, `pixel-ui-undo-${commandSequenceRef.current++}`)
       replaceHistory({
         document: result.document,
         undo: current.undo.slice(0, -1),
@@ -657,11 +741,7 @@ export function PixelModeWorkbench({
     const command = current.redo.at(-1)
     if (!command) return
     try {
-      const result = applyPixelCommand(current.document, {
-        ...command,
-        id: `pixel-ui-redo-${commandSequenceRef.current++}`,
-        baseRevision: current.document.revision,
-      })
+      const result = applyPixelHistoryEntry(current.document, command, `pixel-ui-redo-${commandSequenceRef.current++}`)
       replaceHistory({
         document: result.document,
         undo: [...current.undo, result.inverse],
@@ -673,9 +753,10 @@ export function PixelModeWorkbench({
     }
   }, [replaceHistory, stopPlayback])
 
-  const installDocument = useCallback((nextDocument: PixelDocument, message: string) => {
+  const installDocument = useCallback((nextDocument: PixelDocument, message: string, undoEntry?: PixelHistoryEntry) => {
     stopPlayback()
-    replaceHistory({ document: nextDocument, undo: [], redo: [] })
+    replaceHistory({ document: nextDocument, undo: undoEntry ? [...historyRef.current.undo, undoEntry] : [], redo: [] })
+    setConversionCandidate(null)
     setActiveColorId(nextDocument.palette[0].id)
     setActiveAnimationTagId(nextDocument.animationTags[0]?.id ?? null)
     setActivePaletteCycleId(nextDocument.paletteCycles[0]?.id ?? null)
@@ -743,6 +824,10 @@ export function PixelModeWorkbench({
   }, [patchActiveFrameGameplay])
 
   const loadImageSource = useCallback(async (file: File) => {
+    const previousConversion = conversionJobRef.current
+    conversionJobRef.current = null
+    previousConversion?.controller.abort()
+    setConversionCandidate(null)
     setIsImporting(true)
     setStatus('正在解码 PNG / WebP…')
     try {
@@ -765,28 +850,94 @@ export function PixelModeWorkbench({
       return
     }
     setIsImporting(true)
-    setStatus('正在执行确定性缩放、量化与抖动…')
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    setConversionCandidate(null)
+    setStatus('正在生成像素转换候选…')
+    const controller = new AbortController()
+    conversionJobRef.current?.controller.abort()
+    const baseDocument = historyRef.current.document
+    const job: PixelConversionJob = {
+      controller, source, settings: importSettings,
+      documentId: baseDocument.id, revision: baseDocument.revision,
+    }
+    conversionJobRef.current = job
     try {
       const { paletteMode, ...conversionSettings } = importSettings
       const { sourceName, ...rgbaSource } = source
-      const result = convertRgbaToPixelDocument(rgbaSource, {
+      const result = await requestPixelComputation('conversion', 'image-convert', {
         ...conversionSettings,
-        palette: paletteMode === 'current' ? historyRef.current.document.palette : undefined,
-        documentId: `import-${commandSequenceRef.current++}`,
+        ...(paletteMode === 'current' ? { palette: baseDocument.palette } : {}),
+        documentId: baseDocument.id,
         documentName: sourceDocumentName(sourceName),
-      })
-      installDocument(
-        result.document,
-        `转换完成：${result.report.targetWidth} × ${result.report.targetHeight} · ${result.report.paletteSize} 色 · ${result.report.dither}`,
-      )
+      }, controller.signal, rgbaSource) as PixelComputationConversionResult
+      if (conversionJobRef.current !== job || controller.signal.aborted) return
+      if (importedSourceRef.current !== source || importSettingsRef.current !== importSettings) {
+        setStatus('源图或转换参数已变化，请重新生成预览')
+        return
+      }
+      setConversionCandidate({ ...result, source, settings: importSettings, baseDocumentId: baseDocument.id, baseRevision: baseDocument.revision })
       setLastConversion(result.report)
+      setStatus(`转换候选已生成：${result.report.targetWidth} × ${result.report.targetHeight} · ${result.report.paletteSize} 色，请检查预览后应用`)
     } catch (error) {
-      setStatus(readablePixelError(error, '像素转换失败'))
+      if (conversionJobRef.current === job) setStatus(error instanceof Error && error.name === 'AbortError' ? '像素转换已取消' : readablePixelError(error, '像素转换失败'))
     } finally {
-      setIsImporting(false)
+      if (conversionJobRef.current === job) {
+        conversionJobRef.current = null
+        setIsImporting(false)
+      }
     }
-  }, [importSettings, installDocument])
+  }, [importSettings, requestPixelComputation])
+
+  const applyConversionCandidate = useCallback(() => {
+    const candidate = conversionCandidate
+    if (!candidate) return
+    const current = historyRef.current.document
+    if (current.id !== candidate.baseDocumentId || current.revision !== candidate.baseRevision
+      || importedSourceRef.current !== candidate.source || importSettingsRef.current !== candidate.settings) {
+      setConversionCandidate(null)
+      setStatus('文档、源图或参数已变化，请重新生成转换预览')
+      return
+    }
+    try {
+      const next = migratePixelDocument({ ...candidate.document, id: current.id, revision: current.revision + 1 })
+      installDocument(next, `转换结果已应用 · ${next.width} × ${next.height} · 可一次撤销`, createPixelDocumentHistoryEntry(current))
+    } catch (error) {
+      setStatus(readablePixelError(error, '转换结果无法应用'))
+    }
+  }, [conversionCandidate, installDocument])
+
+  useEffect(() => {
+    const job = conversionJobRef.current
+    if (job && (job.documentId !== document.id || job.revision !== document.revision
+      || job.settings !== importSettings || job.source !== importedSourceRef.current)) {
+      conversionJobRef.current = null
+      job.controller.abort()
+      setIsImporting(false)
+      setStatus('文档、源图或参数已变化，已取消旧转换')
+    }
+    if (conversionCandidate && (conversionCandidate.baseDocumentId !== document.id
+      || conversionCandidate.baseRevision !== document.revision || conversionCandidate.settings !== importSettings
+      || conversionCandidate.source !== importedSourceRef.current)) {
+      setConversionCandidate(null)
+    }
+  }, [conversionCandidate, document.id, document.revision, importSettings, importSourceSummary])
+
+  useEffect(() => {
+    const source = importedSourceRef.current
+    const originalCanvas = sourcePreviewRef.current
+    if (source && originalCanvas) {
+      originalCanvas.width = source.width
+      originalCanvas.height = source.height
+      originalCanvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(source.data), source.width, source.height), 0, 0)
+    }
+    const resultCanvas = conversionPreviewRef.current
+    if (conversionCandidate && resultCanvas) {
+      const converted = conversionCandidate.document
+      resultCanvas.width = converted.width
+      resultCanvas.height = converted.height
+      const pixels = renderPixelFrameRgba(converted, converted.activeFrameId)
+      resultCanvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(pixels), converted.width, converted.height), 0, 0)
+    }
+  }, [conversionCandidate, importSourceSummary])
 
   const loadProject = useCallback(async (file: File) => {
     setIsImporting(true)
@@ -905,7 +1056,7 @@ export function PixelModeWorkbench({
   useEffect(() => {
     setLargeVisibleFrames(null)
     const canvas = canvasRef.current
-    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+    if (canvas) getPixelCanvasContext(canvas)?.clearRect(0, 0, canvas.width, canvas.height)
   }, [document.id])
 
   useEffect(() => {
@@ -959,7 +1110,7 @@ export function PixelModeWorkbench({
     if (!canvas) return
     if (canvas.width !== document.width) canvas.width = document.width
     if (canvas.height !== document.height) canvas.height = document.height
-    const context = canvas.getContext('2d')
+    const context = getPixelCanvasContext(canvas)
     if (!context) return
     context.imageSmoothingEnabled = false
 
@@ -1017,6 +1168,11 @@ export function PixelModeWorkbench({
         context.restore()
       }
     }
+    const stroke = strokeContextRef.current
+    if (paintingRef.current && stroke?.documentId === document.id && stroke.baseRevision === document.revision) {
+      strokeBaseImageRef.current = context.getImageData(0, 0, canvas.width, canvas.height)
+      paintStrokePreview(context, stroke, strokePointsRef.current.values())
+    }
   }, [displayedFrameId, document, gameOverlayVisible, isPlaying, largeVisibleFrames, paletteCycleElapsedMs, strokePreviewRevision, usePixelComputationWorker])
 
   const pixelAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1044,7 +1200,7 @@ export function PixelModeWorkbench({
             const canvas = window.document.createElement('canvas')
             canvas.width = bitmap.width
             canvas.height = bitmap.height
-            const context = canvas.getContext('2d')
+            const context = getPixelCanvasContext(canvas)
             if (!context) throw new Error('浏览器无法规范化资源库图像')
             context.drawImage(bitmap, 0, 0)
             blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
@@ -1067,6 +1223,17 @@ export function PixelModeWorkbench({
     return () => { disposed = true }
   }, [libraryAsset, loadImageSource, onLibraryAssetConsumed])
 
+  const releaseStrokeDraft = useCallback(() => {
+    const draft = { stroke: strokeContextRef.current, points: [...strokePointsRef.current.values()], image: strokeBaseImageRef.current }
+    paintingRef.current = false
+    strokeContextRef.current = null
+    lastStrokePointRef.current = null
+    strokePointsRef.current.clear()
+    strokePathRef.current = []
+    strokeBaseImageRef.current = null
+    return draft
+  }, [])
+
   const stageStrokeAtPointer = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const stroke = strokeContextRef.current
     const point = pixelAtPointer(event)
@@ -1075,29 +1242,40 @@ export function PixelModeWorkbench({
     const line = lastStrokePointRef.current
       ? rasterPixelLine(lastStrokePointRef.current, point, event.currentTarget.width, event.currentTarget.height)
       : [point]
+    if (stroke.pixelPerfect) {
+      strokePathRef.current.push(...(lastStrokePointRef.current ? line.slice(1) : line))
+    }
     lastStrokePointRef.current = point
-    const expanded = expandPixelBrush(line, event.currentTarget.width, event.currentTarget.height, {
-      size: stroke.brushSize,
-      mirrorHorizontal: stroke.mirrorHorizontal,
-      mirrorVertical: stroke.mirrorVertical,
-    })
-    const context = canvas.getContext('2d')
+    let expanded: PixelPoint[]
+    try {
+      const path = stroke.pixelPerfect ? pixelPerfectStroke(strokePathRef.current, canvas.width, canvas.height) : line
+      expanded = expandPixelBrush(path, canvas.width, canvas.height, {
+        size: stroke.brushSize,
+        mirrorHorizontal: stroke.mirrorHorizontal,
+        mirrorVertical: stroke.mirrorVertical,
+      })
+    } catch (error) {
+      const draft = releaseStrokeDraft()
+      if (draft.image) getPixelCanvasContext(canvas)?.putImageData(draft.image, 0, 0)
+      setStrokePreviewRevision((revision) => revision + 1)
+      setStatus(readablePixelError(error, '笔触超出处理范围，请分成多笔绘制'))
+      return
+    }
+    const context = getPixelCanvasContext(canvas)
     if (!context) return
-    context.save()
+    if (stroke.pixelPerfect) {
+      if (strokeBaseImageRef.current) context.putImageData(strokeBaseImageRef.current, 0, 0)
+      strokePointsRef.current.clear()
+    }
+    const additions = []
     for (const pixel of expanded) {
       const pixelKey = `${pixel.x}:${pixel.y}`
       if (strokePointsRef.current.has(pixelKey)) continue
       strokePointsRef.current.set(pixelKey, pixel)
-      if (stroke.tool === 'pencil') {
-        context.globalAlpha = stroke.layerOpacity
-        context.fillStyle = stroke.previewColor
-        context.fillRect(pixel.x, pixel.y, 1, 1)
-      } else {
-        context.clearRect(pixel.x, pixel.y, 1, 1)
-      }
+      additions.push(pixel)
     }
-    context.restore()
-  }, [pixelAtPointer])
+    paintStrokePreview(context, stroke, additions)
+  }, [pixelAtPointer, releaseStrokeDraft])
 
   const beginCanvasGesture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     stopPlayback()
@@ -1189,6 +1367,7 @@ export function PixelModeWorkbench({
     }
 
     strokeContextRef.current = {
+      documentId: current.id,
       baseRevision: current.revision,
       frameId: current.activeFrameId,
       layerId: current.activeLayerId,
@@ -1199,13 +1378,16 @@ export function PixelModeWorkbench({
       brushSize,
       mirrorHorizontal,
       mirrorVertical,
+      pixelPerfect: pixelPerfect && brushSize === 1 && tool === 'pencil',
     }
     strokePointsRef.current.clear()
+    strokePathRef.current = []
+    strokeBaseImageRef.current = getPixelCanvasContext(event.currentTarget)?.getImageData(0, 0, event.currentTarget.width, event.currentTarget.height) ?? null
     lastStrokePointRef.current = null
     paintingRef.current = true
     event.currentTarget.setPointerCapture(event.pointerId)
     stageStrokeAtPointer(event)
-  }, [activeColorId, apply, brushSize, mirrorHorizontal, mirrorVertical, pixelAtPointer, stageStrokeAtPointer, stopPlayback, tool])
+  }, [activeColorId, apply, brushSize, mirrorHorizontal, mirrorVertical, pixelPerfect, pixelAtPointer, stageStrokeAtPointer, stopPlayback, tool])
 
   const updateCanvasGesture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (paintingRef.current) {
@@ -1221,15 +1403,10 @@ export function PixelModeWorkbench({
   }, [pixelAtPointer, stageStrokeAtPointer])
 
   const finishStroke = useCallback(() => {
-    const stroke = strokeContextRef.current
-    const points = [...strokePointsRef.current.values()]
-    paintingRef.current = false
-    strokeContextRef.current = null
-    lastStrokePointRef.current = null
-    strokePointsRef.current.clear()
+    const { stroke, points } = releaseStrokeDraft()
     setStrokePreviewRevision((revision) => revision + 1)
     if (!stroke || points.length === 0) return
-    if (historyRef.current.document.revision !== stroke.baseRevision) {
+    if (historyRef.current.document.id !== stroke.documentId || historyRef.current.document.revision !== stroke.baseRevision) {
       setStatus('笔划期间文档已变化，本次草稿未提交')
       return
     }
@@ -1245,7 +1422,20 @@ export function PixelModeWorkbench({
           pixels: points,
         })
     if (succeeded) setStatus(`已提交单笔：${points.length} 个唯一像素 · 1 个撤销单元`)
-  }, [apply])
+  }, [apply, releaseStrokeDraft])
+
+  const cancelCanvasGesture = useCallback(() => {
+    if (!paintingRef.current && !dragContextRef.current) return
+    const { stroke, image } = releaseStrokeDraft()
+    if (stroke?.documentId === historyRef.current.document.id && stroke.baseRevision === historyRef.current.document.revision
+      && image) {
+      canvasRef.current && getPixelCanvasContext(canvasRef.current)?.putImageData(image, 0, 0)
+    }
+    dragContextRef.current = null
+    setDragDraft(null)
+    setStrokePreviewRevision((revision) => revision + 1)
+    setStatus('笔触已取消')
+  }, [releaseStrokeDraft])
 
   const finishCanvasGesture = useCallback(() => {
     if (paintingRef.current) {
@@ -1599,7 +1789,7 @@ export function PixelModeWorkbench({
     if (!canvas || !preview) return
     canvas.width = preview.width
     canvas.height = preview.height
-    const context = canvas.getContext('2d')
+    const context = getPixelCanvasContext(canvas)
     if (!context) return
     context.imageSmoothingEnabled = false
     const image = context.createImageData(preview.width, preview.height)
@@ -1616,7 +1806,7 @@ export function PixelModeWorkbench({
       : activeTerrainMap.cells
     canvas.width = preview?.width ?? activeTerrainMap.width
     canvas.height = preview?.height ?? activeTerrainMap.height
-    const context = canvas.getContext('2d')
+    const context = getPixelCanvasContext(canvas)
     if (!context) return
     context.imageSmoothingEnabled = false
     context.clearRect(0, 0, canvas.width, canvas.height)
@@ -2698,6 +2888,41 @@ export function PixelModeWorkbench({
               </label>
             </div>
             <label className="aq-pixel-import-select">
+              <span>转换档位</span>
+              <select aria-label="转换档位" value={conversionPresetId} disabled={isImporting}
+                onChange={(event) => {
+                  const preset = Object.values(PIXEL_CONVERSION_PRESETS).find(({ id }) => id === event.target.value)
+                  if (preset) setImportSettings((current) => ({ ...current, ...preset.settings }))
+                }}>
+                {Object.values(PIXEL_CONVERSION_PRESETS).map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
+                <option value="custom" disabled>自定义参数</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
+              <span>采样方式</span>
+              <select aria-label="采样方式" value={importSettings.resample} disabled={isImporting}
+                onChange={(event) => setImportSettings((current) => ({ ...current, resample: event.target.value as PixelResampleMode }))}>
+                <option value="nearest">最近邻 · 保留像素硬边</option>
+                <option value="area">面积采样 · 适合缩小插画</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
+              <span>颜色匹配</span>
+              <select aria-label="颜色匹配" value={importSettings.colorMatch} disabled={isImporting}
+                onChange={(event) => setImportSettings((current) => ({ ...current, colorMatch: event.target.value as PixelColorMatchMode }))}>
+                <option value="rgb">标准 RGB</option>
+                <option value="oklab">感知颜色匹配</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
+              <span>透明处理</span>
+              <select aria-label="透明处理" value={importSettings.alphaMode} disabled={isImporting}
+                onChange={(event) => setImportSettings((current) => ({ ...current, alphaMode: event.target.value as PixelAlphaMode }))}>
+                <option value="threshold">硬边透明</option>
+                <option value="preserve">保留半透明</option>
+              </select>
+            </label>
+            <label className="aq-pixel-import-select">
               <span>缩放</span>
               <select
                 value={importSettings.fit}
@@ -2738,11 +2963,21 @@ export function PixelModeWorkbench({
               disabled={!importSourceSummary || isImporting}
               onClick={() => void convertImportedSource()}
             >
-              {isImporting ? '处理中…' : '转换为严格 PixelDocument'}
+              {isImporting ? '生成预览中…' : '生成转换预览'}
             </button>
+            {conversionCandidate ? (
+              <section className="aq-pixel-conversion-candidate" aria-label="像素转换候选">
+                <div className="aq-pixel-conversion-preview">
+                  <figure><figcaption>原图</figcaption><canvas ref={sourcePreviewRef} aria-label="转换原图预览" /></figure>
+                  <figure><figcaption>像素候选</figcaption><canvas ref={conversionPreviewRef} aria-label="像素转换预览" /></figure>
+                </div>
+                <p>应用将替换当前图层与帧，可一次撤销。</p>
+                <button type="button" className="aq-pixel-convert" onClick={applyConversionCandidate}>应用转换预览</button>
+              </section>
+            ) : null}
             {lastConversion ? (
               <p className="aq-pixel-conversion-report">
-                {lastConversion.opaquePixels} 实像素 / {lastConversion.transparentPixels} 透明 · {lastConversion.paletteSize} 色
+                最近生成：{lastConversion.opaquePixels} 非空像素 / {lastConversion.transparentPixels} 透明 · {lastConversion.paletteSize} 色
               </p>
             ) : null}
           </section>
@@ -2775,7 +3010,7 @@ export function PixelModeWorkbench({
               value={selectedColor.color.slice(0, 7)}
               onChange={(event) => apply('palette.replace', {
                 colorId: selectedColor.id,
-                color: `${event.target.value}FF`,
+                color: `${event.target.value}${selectedColor.color.slice(7)}`,
               })}
             />
             <code>{selectedColor.color}</code>
@@ -2922,6 +3157,12 @@ export function PixelModeWorkbench({
                 title="垂直对称绘制"
               ><FlipVertical2 size={15} /><span>垂直对称</span></button>
               <span className="aq-pixel-control-divider" />
+              <button type="button" aria-label="像素完美笔触" title="一像素铅笔自动修整孤立拐角"
+                className={pixelPerfect ? 'is-active' : ''} aria-pressed={pixelPerfect}
+                disabled={tool !== 'pencil' || brushSize !== 1} onClick={() => setPixelPerfect((value) => !value)}>
+                <Pencil size={15} /><span>像素完美</span>
+              </button>
+              <span className="aq-pixel-control-divider" />
               <button
                 type="button"
                 className={gridVisible ? 'is-active' : ''}
@@ -2971,7 +3212,7 @@ export function PixelModeWorkbench({
                 aria-label={`${document.width} 乘 ${document.height} 像素绘制区，当前图层 ${selectedLayer.name}`}
                 onPointerDown={(event) => {
                   event.preventDefault()
-                  event.currentTarget.focus()
+                  event.currentTarget.focus({ preventScroll: true })
                   beginCanvasGesture(event)
                 }}
                 onPointerMove={updateCanvasGesture}
@@ -2980,7 +3221,8 @@ export function PixelModeWorkbench({
                   finishCanvasGesture()
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
                 }}
-                onPointerCancel={finishCanvasGesture}
+                onPointerCancel={cancelCanvasGesture}
+                onLostPointerCapture={cancelCanvasGesture}
               />
               {gridVisible ? <span className="aq-pixel-grid-overlay" aria-hidden="true" /> : null}
               {selectionPreview ? (

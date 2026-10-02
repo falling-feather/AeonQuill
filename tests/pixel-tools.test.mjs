@@ -7,6 +7,7 @@ import {
   expandPixelBrush,
   floodFillPixels,
   normalizePixelRect,
+  pixelPerfectStroke,
   rasterPixelLine,
   rasterPixelRectangle,
 } from '../src/lib/pixel/pixelTools.mjs'
@@ -26,6 +27,103 @@ test('rasterizes deterministic lines and outline or filled rectangles', () => {
   })
   assert.equal(rasterPixelRectangle({ x: 0, y: 0 }, { x: 2, y: 2 }, 4, 4).length, 8)
   assert.equal(rasterPixelRectangle({ x: 0, y: 0 }, { x: 2, y: 2 }, 4, 4, { fill: true }).length, 9)
+})
+
+test('pixel-perfect stroke removes the middle point of each oriented orthogonal L', () => {
+  const cases = [
+    [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 2, y: 2 }],
+    [{ x: 2, y: 1 }, { x: 2, y: 2 }, { x: 1, y: 2 }],
+    [{ x: 2, y: 2 }, { x: 1, y: 2 }, { x: 1, y: 1 }],
+    [{ x: 1, y: 2 }, { x: 1, y: 1 }, { x: 2, y: 1 }],
+  ]
+  for (const points of cases) {
+    assert.deepEqual(pixelPerfectStroke(points, 4, 4), [points[0], points[2]])
+    assert.deepEqual(pixelPerfectStroke([...points].reverse(), 4, 4), [points[2], points[0]])
+  }
+})
+
+test('pixel-perfect stroke leaves straight, diagonal, and non-adjacent paths unchanged', () => {
+  const straight = [{ x: 0, y: 1 }, { x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }]
+  const diagonal = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }]
+  const nonAdjacent = [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }]
+  assert.deepEqual(pixelPerfectStroke(straight, 4, 3), straight)
+  assert.deepEqual(pixelPerfectStroke(diagonal, 3, 3), diagonal)
+  assert.deepEqual(pixelPerfectStroke(nonAdjacent, 4, 2), nonAdjacent)
+  assert.equal(pixelPerfectStroke(straight, 4, 3).length, straight.length)
+})
+
+test('pixel-perfect stroke preserves duplicate, backtracking, and revisited point occurrences', () => {
+  const duplicate = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 0 }]
+  const backtrack = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }]
+  const revisit = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }]
+  assert.deepEqual(pixelPerfectStroke(duplicate, 2, 2), duplicate)
+  assert.deepEqual(pixelPerfectStroke(backtrack, 2, 2), backtrack)
+  assert.deepEqual(pixelPerfectStroke(revisit, 2, 2), revisit)
+})
+
+test('pixel-perfect stroke preserves overlapping candidates and a closed endpoint revisit', () => {
+  const overlapping = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 1 }]
+  const closed = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+    { x: 0, y: 0 },
+  ]
+  assert.deepEqual(pixelPerfectStroke(overlapping, 3, 2), overlapping)
+  assert.deepEqual(pixelPerfectStroke([...overlapping].reverse(), 3, 2).reverse(), overlapping)
+  assert.deepEqual(pixelPerfectStroke(closed, 2, 2), closed)
+})
+
+test('pixel-perfect stroke removes only isolated candidates across long staircases and mirrors', () => {
+  const staircase = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 2, y: 1 },
+    { x: 2, y: 2 },
+    { x: 3, y: 2 },
+    { x: 3, y: 3 },
+  ]
+  const isolated = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 2, y: 2 },
+    { x: 3, y: 2 },
+    { x: 3, y: 3 },
+  ]
+  const mirrored = staircase.map(({ x, y }) => ({ x: 3 - x, y }))
+  assert.deepEqual(pixelPerfectStroke(staircase, 4, 4), staircase)
+  assert.deepEqual(pixelPerfectStroke([...staircase].reverse(), 4, 4).reverse(), staircase)
+  assert.deepEqual(pixelPerfectStroke(mirrored, 4, 4), mirrored)
+  assert.deepEqual(pixelPerfectStroke(isolated, 4, 4), [
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+    { x: 2, y: 2 },
+    { x: 3, y: 3 },
+  ])
+})
+
+test('pixel-perfect stroke validates points, dimensions, and operation length without mutating input', () => {
+  const points = Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 1, y: 0 }),
+    Object.freeze({ x: 1, y: 1 }),
+  ])
+  const result = pixelPerfectStroke(points, 2, 2)
+  assert.deepEqual(result, [{ x: 0, y: 0 }, { x: 1, y: 1 }])
+  assert.notStrictEqual(result[0], points[0])
+  assert.notStrictEqual(result[1], points[2])
+  assert.throws(() => pixelPerfectStroke([], 0, 2), (error) => error?.code === 'INVALID_INTEGER')
+  assert.throws(() => pixelPerfectStroke([{ x: 0, y: 0, value: 'a' }], 2, 2), (error) => error?.code === 'UNKNOWN_FIELD')
+  assert.throws(() => pixelPerfectStroke([{ x: 2, y: 0 }], 2, 2), (error) => error?.code === 'INVALID_INTEGER')
+  assert.throws(() => pixelPerfectStroke(Array.from({ length: 65_537 }, () => ({ x: 0, y: 0 })), 1, 1), (error) => error?.code === 'LIMIT_EXCEEDED')
+})
+
+test('pixel-perfect stroke accepts an empty path and returns a fresh empty array', () => {
+  const result = pixelPerfectStroke([], 1, 1)
+  assert.deepEqual(result, [])
 })
 
 test('expands a bounded square brush with horizontal and vertical symmetry', () => {

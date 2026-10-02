@@ -17,9 +17,15 @@ export const PIXEL_PNG_MIME = 'image/png'
 
 export const PIXEL_CONVERSION_DITHER_MODES = Object.freeze(['none', 'bayer4', 'floyd-steinberg'])
 export const PIXEL_CONVERSION_FIT_MODES = Object.freeze(['contain', 'cover', 'stretch'])
+export const PIXEL_CONVERSION_RESAMPLE_MODES = Object.freeze(['nearest', 'area'])
+export const PIXEL_CONVERSION_COLOR_MATCH_MODES = Object.freeze(['rgb', 'oklab'])
+export const PIXEL_CONVERSION_ALPHA_MODES = Object.freeze(['threshold', 'preserve'])
 
 const DITHER_MODES = new Set(PIXEL_CONVERSION_DITHER_MODES)
 const FIT_MODES = new Set(PIXEL_CONVERSION_FIT_MODES)
+const RESAMPLE_MODES = new Set(PIXEL_CONVERSION_RESAMPLE_MODES)
+const COLOR_MATCH_MODES = new Set(PIXEL_CONVERSION_COLOR_MATCH_MODES)
+const ALPHA_MODES = new Set(PIXEL_CONVERSION_ALPHA_MODES)
 const SOURCE_MAX_SIDE = 16_384
 const SOURCE_MAX_PIXELS = 16_777_216
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{8}$/
@@ -83,8 +89,8 @@ function rgbaHex(red, green, blue, alpha = 255) {
   return `#${toHexChannel(red)}${toHexChannel(green)}${toHexChannel(blue)}${toHexChannel(alpha)}`
 }
 
-function isTransparentAlpha(alpha, threshold) {
-  return alpha === 0 || alpha < threshold
+function isTransparentAlpha(alpha, threshold, alphaMode = 'threshold') {
+  return alphaMode === 'preserve' ? alpha === 0 : alpha === 0 || alpha < threshold
 }
 
 function clonePalette(palette) {
@@ -141,6 +147,9 @@ export function normalizePixelConversionOptions(input = {}) {
     'ditherStrength',
     'fit',
     'alphaThreshold',
+    'resample',
+    'colorMatch',
+    'alphaMode',
     'documentId',
     'documentName',
   ]), 'options')
@@ -153,6 +162,12 @@ export function normalizePixelConversionOptions(input = {}) {
   if (!FIT_MODES.has(fit)) fail('INVALID_FIT', `Unsupported fit mode ${String(fit)}`)
   const ditherStrength = assertNumber(options.ditherStrength ?? 1, 'options.ditherStrength', 0, 1)
   const alphaThreshold = assertInteger(options.alphaThreshold ?? 16, 'options.alphaThreshold', 0, 255)
+  const resample = options.resample ?? 'nearest'
+  if (!RESAMPLE_MODES.has(resample)) fail('INVALID_RESAMPLE', `Unsupported resample mode ${String(resample)}`)
+  const colorMatch = options.colorMatch ?? 'rgb'
+  if (!COLOR_MATCH_MODES.has(colorMatch)) fail('INVALID_COLOR_MATCH', `Unsupported color match mode ${String(colorMatch)}`)
+  const alphaMode = options.alphaMode ?? 'threshold'
+  if (!ALPHA_MODES.has(alphaMode)) fail('INVALID_ALPHA_MODE', `Unsupported alpha mode ${String(alphaMode)}`)
   const palette = options.palette === undefined ? null : clonePalette(options.palette)
   const documentId = options.documentId ?? 'imported-pixel'
   const documentName = options.documentName ?? 'Imported pixel art'
@@ -167,10 +182,48 @@ export function normalizePixelConversionOptions(input = {}) {
     ditherStrength,
     fit,
     alphaThreshold,
+    resample,
+    colorMatch,
+    alphaMode,
     documentId,
     documentName,
   }
 }
+
+function createConversionPreset(id, label, settings) {
+  const normalized = normalizePixelConversionOptions(settings)
+  return Object.freeze({
+    id,
+    label,
+    settings: Object.freeze({
+      resample: normalized.resample,
+      colorMatch: normalized.colorMatch,
+      alphaMode: normalized.alphaMode,
+      dither: normalized.dither,
+    }),
+  })
+}
+
+export const PIXEL_CONVERSION_PRESETS = Object.freeze({
+  'pixel-art': createConversionPreset('pixel-art', '像素素材', {
+    resample: 'nearest',
+    colorMatch: 'rgb',
+    alphaMode: 'threshold',
+    dither: 'none',
+  }),
+  illustration: createConversionPreset('illustration', '插画缩小', {
+    resample: 'area',
+    colorMatch: 'oklab',
+    alphaMode: 'threshold',
+    dither: 'none',
+  }),
+  'soft-alpha': createConversionPreset('soft-alpha', '柔和透明边缘', {
+    resample: 'area',
+    colorMatch: 'oklab',
+    alphaMode: 'preserve',
+    dither: 'none',
+  }),
+})
 
 function nearestSourceCoordinate(position, sourceSize, destinationSize) {
   return Math.max(0, Math.min(sourceSize - 1, Math.round(((position + 0.5) * sourceSize) / destinationSize - 0.5)))
@@ -179,22 +232,101 @@ function nearestSourceCoordinate(position, sourceSize, destinationSize) {
 export function resizeRgbaImage(sourceInput, optionsInput = {}) {
   const source = assertRgbaImage(sourceInput)
   const options = assertRecord(optionsInput, 'options')
-  assertKnownFields(options, new Set(['width', 'height', 'fit']), 'options')
+  assertKnownFields(options, new Set(['width', 'height', 'fit', 'resample']), 'options')
   const width = assertInteger(options.width, 'options.width', 1, PIXEL_LIMITS.maxWidth)
   const height = assertInteger(options.height, 'options.height', 1, PIXEL_LIMITS.maxHeight)
   const fit = options.fit ?? 'contain'
   if (!FIT_MODES.has(fit)) fail('INVALID_FIT', `Unsupported fit mode ${String(fit)}`)
-  return resizeValidatedRgbaImage(source, { width, height, fit })
+  const resample = options.resample ?? 'nearest'
+  if (!RESAMPLE_MODES.has(resample)) fail('INVALID_RESAMPLE', `Unsupported resample mode ${String(resample)}`)
+  return resizeValidatedRgbaImage(source, { width, height, fit, resample })
 }
 
-function resizeValidatedRgbaImage(source, { width, height, fit }) {
+function srgbToLinear(channel) {
+  const normalized = channel / 255
+  return normalized <= 0.04045
+    ? normalized / 12.92
+    : ((normalized + 0.055) / 1.055) ** 2.4
+}
+
+function linearToSrgb(linear) {
+  const clamped = Math.max(0, Math.min(1, linear))
+  return clamped <= 0.0031308
+    ? clamped * 12.92
+    : 1.055 * (clamped ** (1 / 2.4)) - 0.055
+}
+
+function areaResamplePixel(source, x0, x1, y0, y1) {
+  const left = Math.max(0, x0)
+  const right = Math.min(source.width, x1)
+  const top = Math.max(0, y0)
+  const bottom = Math.min(source.height, y1)
+  const destinationArea = (x1 - x0) * (y1 - y0)
+  if (destinationArea <= 0 || right <= left || bottom <= top) return [0, 0, 0, 0]
+
+  let premultipliedRed = 0
+  let premultipliedGreen = 0
+  let premultipliedBlue = 0
+  let alphaWeight = 0
+  for (let sourceY = Math.floor(top); sourceY < Math.ceil(bottom); sourceY += 1) {
+    const overlapY = Math.min(bottom, sourceY + 1) - Math.max(top, sourceY)
+    if (overlapY <= 0) continue
+    for (let sourceX = Math.floor(left); sourceX < Math.ceil(right); sourceX += 1) {
+      const overlapX = Math.min(right, sourceX + 1) - Math.max(left, sourceX)
+      if (overlapX <= 0) continue
+      const weight = overlapX * overlapY
+      const offset = (sourceY * source.width + sourceX) * 4
+      const alpha = source.data[offset + 3] / 255
+      alphaWeight += alpha * weight
+      premultipliedRed += srgbToLinear(source.data[offset]) * alpha * weight
+      premultipliedGreen += srgbToLinear(source.data[offset + 1]) * alpha * weight
+      premultipliedBlue += srgbToLinear(source.data[offset + 2]) * alpha * weight
+    }
+  }
+
+  const alpha = alphaWeight / destinationArea
+  if (alpha <= 0) return [0, 0, 0, 0]
+  return [
+    clampChannel(linearToSrgb(premultipliedRed / alphaWeight) * 255),
+    clampChannel(linearToSrgb(premultipliedGreen / alphaWeight) * 255),
+    clampChannel(linearToSrgb(premultipliedBlue / alphaWeight) * 255),
+    clampChannel(alpha * 255),
+  ]
+}
+
+function resizeValidatedRgbaImage(source, { width, height, fit, resample = 'nearest' }) {
   const output = new Uint8ClampedArray(width * height * 4)
 
-  if (fit === 'stretch') {
+  if (resample === 'nearest') {
+    if (fit === 'stretch') {
+      for (let y = 0; y < height; y += 1) {
+        const sourceY = nearestSourceCoordinate(y, source.height, height)
+        for (let x = 0; x < width; x += 1) {
+          const sourceX = nearestSourceCoordinate(x, source.width, width)
+          const sourceOffset = (sourceY * source.width + sourceX) * 4
+          output.set(source.data.subarray(sourceOffset, sourceOffset + 4), (y * width + x) * 4)
+        }
+      }
+      return { width, height, data: output }
+    }
+
+    const scale = fit === 'contain'
+      ? Math.min(width / source.width, height / source.height)
+      : Math.max(width / source.width, height / source.height)
+    const drawnWidth = Math.max(1, Math.round(source.width * scale))
+    const drawnHeight = Math.max(1, Math.round(source.height * scale))
+    const offsetX = Math.floor((width - drawnWidth) / 2)
+    const offsetY = Math.floor((height - drawnHeight) / 2)
+
     for (let y = 0; y < height; y += 1) {
-      const sourceY = nearestSourceCoordinate(y, source.height, height)
       for (let x = 0; x < width; x += 1) {
-        const sourceX = nearestSourceCoordinate(x, source.width, width)
+        const drawnX = x - offsetX
+        const drawnY = y - offsetY
+        if (fit === 'contain' && (drawnX < 0 || drawnX >= drawnWidth || drawnY < 0 || drawnY >= drawnHeight)) {
+          continue
+        }
+        const sourceX = nearestSourceCoordinate(drawnX, source.width, drawnWidth)
+        const sourceY = nearestSourceCoordinate(drawnY, source.height, drawnHeight)
         const sourceOffset = (sourceY * source.width + sourceX) * 4
         output.set(source.data.subarray(sourceOffset, sourceOffset + 4), (y * width + x) * 4)
       }
@@ -202,72 +334,93 @@ function resizeValidatedRgbaImage(source, { width, height, fit }) {
     return { width, height, data: output }
   }
 
-  const scale = fit === 'contain'
-    ? Math.min(width / source.width, height / source.height)
-    : Math.max(width / source.width, height / source.height)
-  const drawnWidth = Math.max(1, Math.round(source.width * scale))
-  const drawnHeight = Math.max(1, Math.round(source.height * scale))
-  const offsetX = Math.floor((width - drawnWidth) / 2)
-  const offsetY = Math.floor((height - drawnHeight) / 2)
+  const scale = fit === 'stretch'
+    ? 1
+    : fit === 'contain'
+      ? Math.min(width / source.width, height / source.height)
+      : Math.max(width / source.width, height / source.height)
+  const drawnWidth = fit === 'stretch'
+    ? width
+    : Math.max(1, Math.round(source.width * scale))
+  const drawnHeight = fit === 'stretch'
+    ? height
+    : Math.max(1, Math.round(source.height * scale))
+  const offsetX = fit === 'stretch' ? 0 : Math.floor((width - drawnWidth) / 2)
+  const offsetY = fit === 'stretch' ? 0 : Math.floor((height - drawnHeight) / 2)
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const drawnX = x - offsetX
       const drawnY = y - offsetY
-      if (fit === 'contain' && (drawnX < 0 || drawnX >= drawnWidth || drawnY < 0 || drawnY >= drawnHeight)) {
-        continue
-      }
-      const sourceX = nearestSourceCoordinate(drawnX, source.width, drawnWidth)
-      const sourceY = nearestSourceCoordinate(drawnY, source.height, drawnHeight)
-      const sourceOffset = (sourceY * source.width + sourceX) * 4
-      output.set(source.data.subarray(sourceOffset, sourceOffset + 4), (y * width + x) * 4)
+      if (fit === 'contain' && (drawnX < 0 || drawnX >= drawnWidth || drawnY < 0 || drawnY >= drawnHeight)) continue
+      const sourceX0 = drawnX * source.width / drawnWidth
+      const sourceX1 = (drawnX + 1) * source.width / drawnWidth
+      const sourceY0 = drawnY * source.height / drawnHeight
+      const sourceY1 = (drawnY + 1) * source.height / drawnHeight
+      output.set(areaResamplePixel(source, sourceX0, sourceX1, sourceY0, sourceY1), (y * width + x) * 4)
     }
   }
   return { width, height, data: output }
 }
 
-function buildHistogram(rgba, alphaThreshold) {
+function buildHistogram(rgba, alphaThreshold, alphaMode = 'threshold') {
   const histogram = new Map()
   for (let offset = 0; offset < rgba.length; offset += 4) {
-    if (isTransparentAlpha(rgba[offset + 3], alphaThreshold)) continue
-    const key = (rgba[offset] << 16) | (rgba[offset + 1] << 8) | rgba[offset + 2]
+    if (isTransparentAlpha(rgba[offset + 3], alphaThreshold, alphaMode)) continue
+    const key = alphaMode === 'preserve'
+      ? (((rgba[offset] * 256 + rgba[offset + 1]) * 256 + rgba[offset + 2]) * 256 + rgba[offset + 3])
+      : (rgba[offset] << 16) | (rgba[offset + 1] << 8) | rgba[offset + 2]
     const entry = histogram.get(key)
     if (entry) entry.count += 1
-    else histogram.set(key, { key, r: rgba[offset], g: rgba[offset + 1], b: rgba[offset + 2], count: 1 })
+    else histogram.set(key, {
+      key,
+      r: rgba[offset],
+      g: rgba[offset + 1],
+      b: rgba[offset + 2],
+      a: rgba[offset + 3],
+      count: 1,
+    })
   }
   return [...histogram.values()].sort((left, right) => left.key - right.key)
 }
 
-function colorBoxStats(colors) {
+function colorBoxStats(colors, alphaMode = 'threshold') {
   let minR = 255
   let minG = 255
   let minB = 255
+  let minA = 255
   let maxR = 0
   let maxG = 0
   let maxB = 0
+  let maxA = 0
   let population = 0
   for (const color of colors) {
     minR = Math.min(minR, color.r)
     minG = Math.min(minG, color.g)
     minB = Math.min(minB, color.b)
+    minA = Math.min(minA, color.a ?? 255)
     maxR = Math.max(maxR, color.r)
     maxG = Math.max(maxG, color.g)
     maxB = Math.max(maxB, color.b)
+    maxA = Math.max(maxA, color.a ?? 255)
     population += color.count
   }
-  const ranges = [maxR - minR, maxG - minG, maxB - minB]
+  const ranges = alphaMode === 'preserve'
+    ? [maxR - minR, maxG - minG, maxB - minB, maxA - minA]
+    : [maxR - minR, maxG - minG, maxB - minB]
   const channel = ranges.indexOf(Math.max(...ranges))
   return { channel, range: ranges[channel], population }
 }
 
-function splitColorBox(colors) {
+function splitColorBox(colors, alphaMode = 'threshold') {
   if (colors.length < 2) return null
-  const stats = colorBoxStats(colors)
-  const channelKey = ['r', 'g', 'b'][stats.channel]
+  const stats = colorBoxStats(colors, alphaMode)
+  const channelKey = ['r', 'g', 'b', 'a'][stats.channel]
   const sorted = [...colors].sort((left, right) => left[channelKey] - right[channelKey] || left.key - right.key)
   const midpoint = stats.population / 2
   let cumulative = 0
-  let splitIndex = 1
+  // If the weighted midpoint is inside the last bin, isolate that bin.
+  let splitIndex = sorted.length - 1
   for (let index = 0; index < sorted.length - 1; index += 1) {
     cumulative += sorted[index].count
     if (cumulative >= midpoint) {
@@ -278,34 +431,42 @@ function splitColorBox(colors) {
   return [sorted.slice(0, splitIndex), sorted.slice(splitIndex)]
 }
 
-function averageColor(colors) {
+function averageColor(colors, alphaMode = 'threshold') {
   let red = 0
   let green = 0
   let blue = 0
+  let alpha = 0
   let population = 0
   for (const color of colors) {
     red += color.r * color.count
     green += color.g * color.count
     blue += color.b * color.count
+    alpha += (color.a ?? 255) * color.count
     population += color.count
   }
-  return [Math.round(red / population), Math.round(green / population), Math.round(blue / population)]
+  const representative = [Math.round(red / population), Math.round(green / population), Math.round(blue / population)]
+  if (alphaMode === 'preserve') representative.push(Math.round(alpha / population))
+  return representative
 }
 
 export function extractDeterministicPalette(rgbaInput, optionsInput = {}) {
   const options = assertRecord(optionsInput, 'options')
-  assertKnownFields(options, new Set(['colorCount', 'alphaThreshold']), 'options')
+  assertKnownFields(options, new Set(['colorCount', 'alphaThreshold', 'alphaMode']), 'options')
   const colorCount = assertInteger(options.colorCount ?? 8, 'options.colorCount', 1, PIXEL_LIMITS.maxPaletteColors)
   const alphaThreshold = assertInteger(options.alphaThreshold ?? 16, 'options.alphaThreshold', 0, 255)
+  const alphaMode = options.alphaMode ?? 'threshold'
+  if (!ALPHA_MODES.has(alphaMode)) fail('INVALID_ALPHA_MODE', `Unsupported alpha mode ${String(alphaMode)}`)
   if (!Array.isArray(rgbaInput) && !ArrayBuffer.isView(rgbaInput)) fail('INVALID_RGBA', 'rgba must be an array or typed array')
   if (rgbaInput.length % 4 !== 0) fail('INVALID_RGBA', 'rgba length must be divisible by 4')
   const rgba = normalizeRgbaData(rgbaInput, rgbaInput.length, 'rgba')
-  const histogram = buildHistogram(rgba, alphaThreshold)
+  const histogram = buildHistogram(rgba, alphaThreshold, alphaMode)
   if (histogram.length === 0) return [{ id: 'color-01', name: 'Color 1', color: '#000000FF' }]
 
   let representatives
   if (histogram.length <= colorCount) {
-    representatives = histogram.map((color) => [color.r, color.g, color.b])
+    representatives = histogram.map((color) => alphaMode === 'preserve'
+      ? [color.r, color.g, color.b, color.a]
+      : [color.r, color.g, color.b])
   } else {
     const boxes = [histogram]
     while (boxes.length < colorCount) {
@@ -313,7 +474,7 @@ export function extractDeterministicPalette(rgbaInput, optionsInput = {}) {
       let selectedScore = -1
       for (let index = 0; index < boxes.length; index += 1) {
         if (boxes[index].length < 2) continue
-        const stats = colorBoxStats(boxes[index])
+        const stats = colorBoxStats(boxes[index], alphaMode)
         const score = stats.range * stats.population
         if (score > selectedScore) {
           selectedIndex = index
@@ -321,16 +482,17 @@ export function extractDeterministicPalette(rgbaInput, optionsInput = {}) {
         }
       }
       if (selectedIndex < 0) break
-      const split = splitColorBox(boxes[selectedIndex])
+      const split = splitColorBox(boxes[selectedIndex], alphaMode)
       if (!split || split[1].length === 0) break
       boxes.splice(selectedIndex, 1, split[0], split[1])
     }
-    representatives = boxes.map(averageColor)
+    representatives = boxes.map((box) => averageColor(box, alphaMode))
   }
 
   const unique = new Map()
-  for (const [red, green, blue] of representatives) {
-    const color = rgbaHex(red, green, blue)
+  for (const representative of representatives) {
+    const [red, green, blue, alpha = 255] = representative
+    const color = rgbaHex(red, green, blue, alphaMode === 'preserve' ? alpha : 255)
     unique.set(color, { red, green, blue, color })
   }
   const sorted = [...unique.values()].sort((left, right) => {
@@ -345,15 +507,59 @@ export function extractDeterministicPalette(rgbaInput, optionsInput = {}) {
   }))
 }
 
-function nearestPaletteIndex(red, green, blue, parsedPalette) {
+function rgbToOklab(red, green, blue) {
+  const linearRed = srgbToLinear(red)
+  const linearGreen = srgbToLinear(green)
+  const linearBlue = srgbToLinear(blue)
+  const lightness = 0.4122214708 * linearRed + 0.5363325363 * linearGreen + 0.0514459929 * linearBlue
+  const middle = 0.2119034982 * linearRed + 0.6806995451 * linearGreen + 0.1073969566 * linearBlue
+  const short = 0.0883024619 * linearRed + 0.2817188376 * linearGreen + 0.6299787005 * linearBlue
+  const lightnessRoot = Math.cbrt(lightness)
+  const middleRoot = Math.cbrt(middle)
+  const shortRoot = Math.cbrt(short)
+  return [
+    0.2104542553 * lightnessRoot + 0.793617785 * middleRoot - 0.0040720468 * shortRoot,
+    1.9779984951 * lightnessRoot - 2.428592205 * middleRoot + 0.4505937099 * shortRoot,
+    0.0259040371 * lightnessRoot + 0.7827717662 * middleRoot - 0.808675766 * shortRoot,
+  ]
+}
+
+function nearestPaletteIndex(
+  red,
+  green,
+  blue,
+  alpha,
+  parsedPalette,
+  colorMatch = 'rgb',
+  alphaMode = 'threshold',
+  parsedPaletteOklab = null,
+) {
   let selectedIndex = 0
   let selectedDistance = Number.POSITIVE_INFINITY
+  const sourceOklab = colorMatch === 'oklab' ? rgbToOklab(red, green, blue) : null
   for (let index = 0; index < parsedPalette.length; index += 1) {
     const color = parsedPalette[index]
-    const redDelta = red - color[0]
-    const greenDelta = green - color[1]
-    const blueDelta = blue - color[2]
-    const distance = redDelta * redDelta * 0.299 + greenDelta * greenDelta * 0.587 + blueDelta * blueDelta * 0.114
+    let distance
+    if (colorMatch === 'oklab') {
+      const candidateOklab = parsedPaletteOklab[index]
+      const lightnessDelta = sourceOklab[0] - candidateOklab[0]
+      const aDelta = sourceOklab[1] - candidateOklab[1]
+      const bDelta = sourceOklab[2] - candidateOklab[2]
+      distance = lightnessDelta * lightnessDelta + aDelta * aDelta + bDelta * bDelta
+      if (alphaMode === 'preserve') {
+        const alphaDelta = (alpha - color[3]) / 255
+        distance += alphaDelta * alphaDelta
+      }
+    } else {
+      const redDelta = red - color[0]
+      const greenDelta = green - color[1]
+      const blueDelta = blue - color[2]
+      distance = redDelta * redDelta * 0.299 + greenDelta * greenDelta * 0.587 + blueDelta * blueDelta * 0.114
+      if (alphaMode === 'preserve') {
+        const alphaDelta = alpha - color[3]
+        distance += alphaDelta * alphaDelta
+      }
+    }
     if (distance < selectedDistance) {
       selectedDistance = distance
       selectedIndex = index
@@ -372,6 +578,9 @@ const BAYER_4 = Object.freeze([
 function quantizePixels(rgba, width, height, palette, options) {
   const output = Array.from({ length: width * height }, () => null)
   const parsedPalette = palette.map((color) => parseHexColor(color.color))
+  const parsedPaletteOklab = options.colorMatch === 'oklab'
+    ? parsedPalette.map(([red, green, blue]) => rgbToOklab(red, green, blue))
+    : null
   if (options.dither === 'floyd-steinberg') {
     const working = new Float32Array(width * height * 3)
     for (let index = 0; index < width * height; index += 1) {
@@ -382,7 +591,7 @@ function quantizePixels(rgba, width, height, palette, options) {
     const spread = (x, y, redError, greenError, blueError, weight) => {
       if (x < 0 || x >= width || y < 0 || y >= height) return
       const pixelIndex = y * width + x
-      if (isTransparentAlpha(rgba[pixelIndex * 4 + 3], options.alphaThreshold)) return
+      if (isTransparentAlpha(rgba[pixelIndex * 4 + 3], options.alphaThreshold, options.alphaMode)) return
       const offset = pixelIndex * 3
       working[offset] += redError * weight * options.ditherStrength
       working[offset + 1] += greenError * weight * options.ditherStrength
@@ -391,12 +600,21 @@ function quantizePixels(rgba, width, height, palette, options) {
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const pixelIndex = y * width + x
-        if (isTransparentAlpha(rgba[pixelIndex * 4 + 3], options.alphaThreshold)) continue
+        if (isTransparentAlpha(rgba[pixelIndex * 4 + 3], options.alphaThreshold, options.alphaMode)) continue
         const offset = pixelIndex * 3
         const red = Math.max(0, Math.min(255, working[offset]))
         const green = Math.max(0, Math.min(255, working[offset + 1]))
         const blue = Math.max(0, Math.min(255, working[offset + 2]))
-        const paletteIndex = nearestPaletteIndex(red, green, blue, parsedPalette)
+        const paletteIndex = nearestPaletteIndex(
+          red,
+          green,
+          blue,
+          rgba[pixelIndex * 4 + 3],
+          parsedPalette,
+          options.colorMatch,
+          options.alphaMode,
+          parsedPaletteOklab,
+        )
         const selected = parsedPalette[paletteIndex]
         output[pixelIndex] = palette[paletteIndex].id
         const redError = red - selected[0]
@@ -415,7 +633,7 @@ function quantizePixels(rgba, width, height, palette, options) {
     for (let x = 0; x < width; x += 1) {
       const pixelIndex = y * width + x
       const offset = pixelIndex * 4
-      if (isTransparentAlpha(rgba[offset + 3], options.alphaThreshold)) continue
+      if (isTransparentAlpha(rgba[offset + 3], options.alphaThreshold, options.alphaMode)) continue
       let adjustment = 0
       if (options.dither === 'bayer4') {
         adjustment = (((BAYER_4[(y % 4) * 4 + (x % 4)] + 0.5) / 16) - 0.5) * 64 * options.ditherStrength
@@ -424,7 +642,11 @@ function quantizePixels(rgba, width, height, palette, options) {
         clampChannel(rgba[offset] + adjustment),
         clampChannel(rgba[offset + 1] + adjustment),
         clampChannel(rgba[offset + 2] + adjustment),
+        rgba[offset + 3],
         parsedPalette,
+        options.colorMatch,
+        options.alphaMode,
+        parsedPaletteOklab,
       )
       output[pixelIndex] = palette[paletteIndex].id
     }
@@ -439,10 +661,12 @@ export function convertRgbaToPixelDocument(sourceInput, optionsInput = {}) {
     width: options.targetWidth,
     height: options.targetHeight,
     fit: options.fit,
+    resample: options.resample,
   })
   const palette = options.palette ?? extractDeterministicPalette(resized.data, {
     colorCount: options.colorCount,
     alphaThreshold: options.alphaThreshold,
+    alphaMode: options.alphaMode,
   })
   const pixels = quantizePixels(resized.data, resized.width, resized.height, palette, options)
   const opaquePixels = pixels.reduce((count, colorId) => count + (colorId === null ? 0 : 1), 0)
@@ -477,6 +701,9 @@ export function convertRgbaToPixelDocument(sourceInput, optionsInput = {}) {
       dither: options.dither,
       fit: options.fit,
       alphaThreshold: options.alphaThreshold,
+      resample: options.resample,
+      colorMatch: options.colorMatch,
+      alphaMode: options.alphaMode,
     },
   }
 }

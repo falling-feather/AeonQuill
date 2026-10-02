@@ -105,6 +105,7 @@ try {
     await run('controlled custom workflow browser vertical', process.execPath, ['scripts/validate-custom-workflow-ui.mjs'])
     await run('fixed image edit preset browser contract', process.execPath, ['scripts/validate-image-edit-presets-ui.mjs'])
     await run('authoritative workspace recovery browser regression', process.execPath, ['scripts/validate-workspace-recovery-ui.mjs'])
+    await run('pixel-perfect stroke and image conversion browser vertical', process.execPath, ['scripts/validate-pixel-first-round-ui.mjs'])
     await run('isolated browser smoke', process.execPath, ['scripts/validate-browser.mjs'], {
       env: { MIAOHUI_QA_SKIP_BUILD: '1' },
     })

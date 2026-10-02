@@ -24,6 +24,7 @@ export const PIXEL_SELECTION_CLIPBOARD_SCHEMA_VERSION: 1
 
 export function normalizePixelRect(start: PixelPoint, end: PixelPoint, width: number, height: number): PixelRect
 export function rasterPixelLine(start: PixelPoint, end: PixelPoint, width: number, height: number): PixelPoint[]
+export function pixelPerfectStroke(points: PixelPoint[], width: number, height: number): PixelPoint[]
 export function rasterPixelRectangle(
   start: PixelPoint,
   end: PixelPoint,

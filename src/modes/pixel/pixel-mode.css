@@ -457,6 +457,47 @@
   cursor: pointer;
 }
 
+.aq-pixel-conversion-candidate {
+  margin-top: 12px;
+}
+
+.aq-pixel-conversion-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.aq-pixel-conversion-preview figure {
+  min-width: 0;
+  margin: 0;
+}
+
+.aq-pixel-conversion-preview figcaption {
+  margin-bottom: 5px;
+  color: var(--aq-pixel-muted);
+  font-size: 11px;
+}
+
+.aq-pixel-conversion-preview canvas {
+  display: block;
+  width: 100%;
+  height: 96px;
+  object-fit: contain;
+  background: repeating-conic-gradient(#80808022 0 25%, transparent 0 50%) 0 / 12px 12px;
+  border: 1px solid var(--aq-pixel-line);
+  border-radius: 8px;
+}
+
+.aq-pixel-conversion-preview canvas[aria-label="像素转换预览"] {
+  image-rendering: pixelated;
+}
+
+.aq-pixel-conversion-candidate > p {
+  margin: 8px 0;
+  color: var(--aq-pixel-muted);
+  font-size: 11px;
+}
+
 .aq-pixel-convert:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -618,8 +659,10 @@
 .aq-pixel-stage-wrap {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   overflow: auto;
   padding: 28px;
 }
@@ -628,6 +671,9 @@
   position: relative;
   width: min(62vh, 620px, 100%);
   min-width: 240px;
+  max-width: 100%;
+  flex: 0 0 auto;
+  margin-block: auto;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 4px;
@@ -1503,7 +1549,9 @@
 
 .aq-pixel-stage-controls,
 .aq-pixel-selection-actions {
-  position: absolute;
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
   z-index: 7;
   display: flex;
   align-items: center;
@@ -1518,16 +1566,10 @@
 }
 
 .aq-pixel-stage-controls {
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  overflow-x: auto;
 }
 
 .aq-pixel-selection-actions {
-  bottom: 12px;
-  left: 50%;
-  max-width: calc(100% - 24px);
-  transform: translateX(-50%);
   flex-wrap: wrap;
   justify-content: center;
 }
@@ -1740,17 +1782,12 @@
 }
 
 @media (max-width: 460px) {
-  .aq-pixel-stage-controls {
-    top: 8px;
-  }
-
   .aq-pixel-stage-controls .aq-pixel-control-divider:nth-of-type(2),
   .aq-pixel-stage-controls button[title="垂直对称绘制"] {
     display: none;
   }
 
   .aq-pixel-selection-actions {
-    bottom: 8px;
     max-width: calc(100% - 16px);
   }
 }

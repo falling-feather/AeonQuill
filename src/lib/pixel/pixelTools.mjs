@@ -120,6 +120,53 @@ export function rasterPixelLine(startInput, endInput, width, height) {
   return points
 }
 
+function isOrthogonalUnitStep(start, end) {
+  return Math.abs(end.x - start.x) + Math.abs(end.y - start.y) === 1
+}
+
+function isDiagonalAdjacent(start, end) {
+  return Math.abs(end.x - start.x) === 1 && Math.abs(end.y - start.y) === 1
+}
+
+function pointKey(point) {
+  return `${point.x}:${point.y}`
+}
+
+export function pixelPerfectStroke(pointsInput, width, height) {
+  assertSize(width, height)
+  if (!Array.isArray(pointsInput)) fail('INVALID_POINTS', 'points must be an array')
+  if (pointsInput.length > MAX_TOOL_PIXELS) fail('LIMIT_EXCEEDED', 'Tool operation exceeds the maximum pixel patch')
+  if (pointsInput.length === 0) return []
+
+  const points = pointsInput.map((pointInput, index) => assertPoint(pointInput, width, height, `points[${index}]`))
+  const occurrences = new Map()
+  for (const point of points) {
+    const key = pointKey(point)
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1)
+  }
+
+  // Repeated coordinates mark a revisit/backtrack, so every occurrence stays in the path.
+  const candidates = points.map((point, index) => {
+    const previous = points[index - 1]
+    const next = points[index + 1]
+    return index > 0
+      && index < points.length - 1
+      && occurrences.get(pointKey(point)) === 1
+      && isOrthogonalUnitStep(previous, point)
+      && isOrthogonalUnitStep(point, next)
+      && isDiagonalAdjacent(previous, next)
+  })
+
+  const result = []
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index]
+    const removable = candidates[index] && !candidates[index - 1] && !candidates[index + 1]
+    if (removable) continue
+    result.push({ x: point.x, y: point.y })
+  }
+  return result
+}
+
 export function rasterPixelRectangle(startInput, endInput, width, height, options = {}) {
   const rect = normalizePixelRect(startInput, endInput, width, height)
   const fill = options?.fill === true

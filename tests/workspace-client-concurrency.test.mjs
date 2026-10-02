@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -58,6 +59,31 @@ function installFetchMock(t, handler) {
     return handler(pathname, options)
   })
 }
+
+test('large workspace uploads preserve JSON UTF-8 bytes, base revision and returned document', async (t) => {
+  const api = await loadApi('large-utf8-upload')
+  const value = '像素🙂\\n"'.repeat(180_000)
+  let writes = 0
+  installFetchMock(t, async (pathname, options) => {
+    if (options.method === undefined) return jsonResponse({ document: document(7) })
+    assert.equal(pathname, '/api/workspace/documents/document-1')
+    assert.equal(options.method, 'PUT')
+    assert.equal(options.body instanceof Uint8Array, true)
+    const expected = JSON.stringify({ projectId: 'project-1', modeId: 'balanced', revision: 8, value, reason: 'large-autosave', baseRevision: 7 })
+    const expectedBytes = Buffer.from(expected, 'utf8')
+    assert.equal(options.body.byteLength, expectedBytes.byteLength)
+    const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
+    assert.equal(digest(options.body), digest(expectedBytes))
+    assert.equal(options.headers['content-type'], 'application/json')
+    writes += 1
+    return jsonResponse({ document: document(8, value) })
+  })
+  await api.loadWorkspaceModeDocument('project-1', 'document-1', 'balanced')
+  const saved = await api.saveWorkspaceModeDocument({ projectId: 'project-1', documentId: 'document-1', modeId: 'balanced', revision: 8, value, reason: 'large-autosave' })
+  assert.equal(writes, 1)
+  assert.equal(saved.value, value)
+  assert.equal(saved.revision, 8)
+})
 
 test('late read after a failed write cannot replace the retry base revision', async (t) => {
   const api = await loadApi('late-read-after-failed-write')

@@ -9,12 +9,14 @@ import {
 } from '../src/lib/pixel/pixelCore.mjs'
 import {
   PIXEL_METADATA_MIME,
+  PIXEL_CONVERSION_PRESETS,
   PIXEL_PNG_MIME,
   PIXEL_PROJECT_MIME,
   convertRgbaToPixelDocument,
   createPixelExportBundle,
   deserializePixelProject,
   extractDeterministicPalette,
+  normalizePixelConversionOptions,
   pixelDocumentsSemanticallyEqual,
   resizeRgbaImage,
   serializePixelProject,
@@ -56,6 +58,9 @@ test('fixed RGBA conversion is deterministic and matches the checked contract ha
     dither: 'floyd-steinberg',
     fit: 'contain',
     alphaThreshold: 16,
+    resample: 'nearest',
+    colorMatch: 'rgb',
+    alphaMode: 'threshold',
   })
 })
 
@@ -168,6 +173,208 @@ test('contain preserves at least one source pixel at extreme aspect ratios', () 
     if (verticalTarget.data[offset] > 0) opaque += 1
   }
   assert.equal(opaque, 1)
+})
+
+test('normalization exposes the deterministic conversion algorithms and rejects unknown values', () => {
+  assert.deepEqual(normalizePixelConversionOptions({}).resample, 'nearest')
+  assert.deepEqual(normalizePixelConversionOptions({}).colorMatch, 'rgb')
+  assert.deepEqual(normalizePixelConversionOptions({}).alphaMode, 'threshold')
+  assert.deepEqual(normalizePixelConversionOptions({
+    resample: 'area',
+    colorMatch: 'oklab',
+    alphaMode: 'preserve',
+  }), {
+    targetWidth: 32,
+    targetHeight: 32,
+    colorCount: 8,
+    palette: null,
+    dither: 'none',
+    ditherStrength: 1,
+    fit: 'contain',
+    alphaThreshold: 16,
+    documentId: 'imported-pixel',
+    documentName: 'Imported pixel art',
+    resample: 'area',
+    colorMatch: 'oklab',
+    alphaMode: 'preserve',
+  })
+  expectContractError(() => normalizePixelConversionOptions({ resample: 'bilinear' }), 'INVALID_RESAMPLE')
+  expectContractError(() => normalizePixelConversionOptions({ colorMatch: 'hsv' }), 'INVALID_COLOR_MATCH')
+  expectContractError(() => normalizePixelConversionOptions({ alphaMode: 'blend' }), 'INVALID_ALPHA_MODE')
+})
+
+test('conversion presets are immutable normalized recipes and do not change legacy defaults', () => {
+  assert.deepEqual(Object.keys(PIXEL_CONVERSION_PRESETS), ['pixel-art', 'illustration', 'soft-alpha'])
+  for (const [id, preset] of Object.entries(PIXEL_CONVERSION_PRESETS)) {
+    assert.equal(preset.id, id)
+    assert.equal(typeof preset.label, 'string')
+    assert.equal(Object.isFrozen(preset), true)
+    assert.equal(Object.isFrozen(preset.settings), true)
+    const normalized = normalizePixelConversionOptions(preset.settings)
+    assert.deepEqual({
+      resample: normalized.resample,
+      colorMatch: normalized.colorMatch,
+      alphaMode: normalized.alphaMode,
+      dither: normalized.dither,
+    }, preset.settings)
+  }
+  assert.deepEqual({
+    resample: normalizePixelConversionOptions({}).resample,
+    colorMatch: normalizePixelConversionOptions({}).colorMatch,
+    alphaMode: normalizePixelConversionOptions({}).alphaMode,
+    dither: normalizePixelConversionOptions({}).dither,
+  }, { resample: 'nearest', colorMatch: 'rgb', alphaMode: 'threshold', dither: 'none' })
+  assert.throws(() => { PIXEL_CONVERSION_PRESETS['pixel-art'].settings.resample = 'area' }, TypeError)
+})
+
+test('area resize averages opaque black and white in linear sRGB', () => {
+  const resized = resizeRgbaImage({
+    width: 2,
+    height: 2,
+    data: [
+      0, 0, 0, 255, 255, 255, 255, 255,
+      255, 255, 255, 255, 0, 0, 0, 255,
+    ],
+  }, { width: 1, height: 1, fit: 'stretch', resample: 'area' })
+  assert.deepEqual([...resized.data], [188, 188, 188, 255])
+})
+
+test('area resize ignores hidden RGB when averaging transparent edges', () => {
+  const resized = resizeRgbaImage({
+    width: 2,
+    height: 1,
+    data: [255, 255, 255, 255, 0, 0, 0, 0],
+  }, { width: 1, height: 1, fit: 'stretch', resample: 'area' })
+  assert.deepEqual([...resized.data], [255, 255, 255, 128])
+})
+
+test('area resize preserves exact pixels at 1:1 and while enlarging a single pixel', () => {
+  const source = { width: 1, height: 1, data: [37, 101, 203, 77] }
+  assert.deepEqual([...resizeRgbaImage(source, {
+    width: 1,
+    height: 1,
+    fit: 'stretch',
+    resample: 'area',
+  }).data], source.data)
+  assert.deepEqual([...resizeRgbaImage(source, {
+    width: 3,
+    height: 2,
+    fit: 'stretch',
+    resample: 'area',
+  }).data], Array.from({ length: 6 }, () => source.data).flat())
+})
+
+test('preserve palette extraction keeps same RGB colors with distinct alpha and skips fully transparent pixels', () => {
+  const palette = extractDeterministicPalette([
+    255, 0, 0, 64,
+    255, 0, 0, 192,
+    0, 255, 0, 0,
+  ], { colorCount: 2, alphaThreshold: 240, alphaMode: 'preserve' })
+  assert.deepEqual(palette.map((color) => color.color), ['#FF000040', '#FF0000C0'])
+})
+
+test('weighted median cut separates a dominant terminal color instead of mixing it into the background', () => {
+  const rgba = new Uint8ClampedArray(20 * 4).fill(255)
+  rgba.set([255, 0, 0, 255], 0)
+  rgba.set([0, 255, 0, 255], 4)
+  const before = rgba.slice()
+  for (const alphaMode of ['threshold', 'preserve']) {
+    const palette = extractDeterministicPalette(rgba, { colorCount: 2, alphaMode })
+    assert.deepEqual(palette.map(({ color }) => color), ['#808000FF', '#FFFFFFFF'])
+  }
+  assert.deepEqual(rgba, before)
+})
+
+test('preserve conversion matches fixed palette entries by alpha and reports selected algorithms', () => {
+  const palette = [
+    { id: 'light-red', name: 'Light red', color: '#FF000040' },
+    { id: 'dark-red', name: 'Dark red', color: '#FF0000C0' },
+  ]
+  const converted = convertRgbaToPixelDocument({
+    width: 2,
+    height: 1,
+    data: [255, 0, 0, 64, 255, 0, 0, 192],
+  }, {
+    targetWidth: 2,
+    targetHeight: 1,
+    palette,
+    fit: 'stretch',
+    alphaMode: 'preserve',
+    colorMatch: 'rgb',
+  })
+  assert.deepEqual(converted.document.palette, palette)
+  assert.deepEqual(converted.document.frames[0].cels.imported, ['light-red', 'dark-red'])
+  assert.equal(converted.report.resample, 'nearest')
+  assert.equal(converted.report.colorMatch, 'rgb')
+  assert.equal(converted.report.alphaMode, 'preserve')
+})
+
+test('oklab matching can select a different perceptual neighbor than legacy RGB distance', () => {
+  const source = { width: 1, height: 1, data: [5, 157, 98, 255] }
+  const palette = [
+    { id: 'blue', name: 'Blue', color: '#2E1FD9FF' },
+    { id: 'red', name: 'Red', color: '#F4301AFF' },
+  ]
+  const rgb = convertRgbaToPixelDocument(source, {
+    targetWidth: 1,
+    targetHeight: 1,
+    palette,
+    fit: 'stretch',
+    colorMatch: 'rgb',
+  })
+  const oklab = convertRgbaToPixelDocument(source, {
+    targetWidth: 1,
+    targetHeight: 1,
+    palette,
+    fit: 'stretch',
+    colorMatch: 'oklab',
+  })
+  assert.deepEqual(rgb.document.frames[0].cels.imported, ['blue'])
+  assert.deepEqual(oklab.document.frames[0].cels.imported, ['red'])
+})
+
+test('oklab threshold matching keeps legacy fixed-palette alpha semantics', () => {
+  const converted = convertRgbaToPixelDocument({
+    width: 1,
+    height: 1,
+    data: [255, 0, 0, 255],
+  }, {
+    targetWidth: 1,
+    targetHeight: 1,
+    palette: [
+      { id: 'transparent-red', name: 'Transparent red', color: '#FF000000' },
+      { id: 'opaque-red', name: 'Opaque red', color: '#FF0000FF' },
+    ],
+    fit: 'stretch',
+    colorMatch: 'oklab',
+    alphaMode: 'threshold',
+  })
+  assert.deepEqual(converted.document.frames[0].cels.imported, ['transparent-red'])
+})
+
+test('area, oklab, and preserve conversion remain deterministic for frozen input', () => {
+  const source = Object.freeze({
+    width: 2,
+    height: 2,
+    data: Object.freeze([
+      5, 157, 98, 32, 244, 48, 26, 224,
+      5, 157, 98, 32, 0, 0, 0, 0,
+    ]),
+  })
+  const options = {
+    targetWidth: 3,
+    targetHeight: 3,
+    colorCount: 2,
+    fit: 'contain',
+    resample: 'area',
+    colorMatch: 'oklab',
+    alphaMode: 'preserve',
+  }
+  const before = JSON.stringify(source)
+  const first = convertRgbaToPixelDocument(source, options)
+  const second = convertRgbaToPixelDocument(source, options)
+  assert.deepEqual(first, second)
+  assert.equal(JSON.stringify(source), before)
 })
 
 test('invalid RGBA, conversion options, and schema-less projects are rejected', () => {

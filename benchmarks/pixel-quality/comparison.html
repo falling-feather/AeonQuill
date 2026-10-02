@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pixel conversion first-round comparison</title>
+  <style>
+    :root { color-scheme: light; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f7fb; color: #18202b; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-width: 0; overflow-x: hidden; }
+    body { padding: 24px; }
+    main { width: min(1120px, 100%); margin: 0 auto; }
+    header { padding: 4px 0 20px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(22px, 4vw, 32px); letter-spacing: -0.02em; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 15px; text-transform: lowercase; }
+    .lede, .review, .source-note { color: #566275; line-height: 1.55; }
+    .lede { margin-top: 8px; }
+    .review { display: inline-block; margin-top: 12px; padding: 7px 10px; border: 1px solid #e0b75a; border-radius: 8px; background: #fff8df; color: #755b12; }
+    .fixture { margin: 16px 0; padding: 16px; border: 1px solid #dfe5ee; border-radius: 14px; background: #fff; box-shadow: 0 6px 20px rgba(29, 45, 72, 0.05); }
+    .fixture-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+    .source-note { margin-top: 5px; font-size: 13px; overflow-wrap: anywhere; }
+    .source-preview { flex: 0 0 128px; width: 128px; min-height: 90px; display: grid; place-items: center; padding: 6px; border: 1px solid #e7ebf2; border-radius: 10px; background: repeating-conic-gradient(#f0f2f6 0 25%, #fff 0 50%) 50% / 16px 16px; }
+    .source-image { display: block; width: 116px; max-height: 116px; object-fit: contain; }
+    .source-placeholder { width: 100%; color: #7c8797; font-size: 12px; line-height: 1.4; text-align: center; }
+    .preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .preset-card { min-width: 0; padding: 12px; border: 1px solid #e7ebf2; border-radius: 10px; background: #fbfcfe; }
+    .image-link { display: block; margin-top: 8px; width: 100%; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border-radius: 7px; background: repeating-conic-gradient(#edf0f5 0 25%, #fff 0 50%) 50% / 16px 16px; }
+    .output-image { display: block; width: min(256px, 100%); height: min(256px, 100%); object-fit: contain; image-rendering: pixelated; image-rendering: crisp-edges; }
+    .metrics { margin-top: 9px; color: #566275; font-size: 12px; line-height: 1.55; }
+    footer { padding: 12px 0 4px; color: #778296; font-size: 12px; line-height: 1.5; }
+    @media (max-width: 900px) { body { padding: 16px; } .preset-grid { grid-template-columns: 1fr; } .output-image { width: min(256px, 100%); height: min(256px, 100%); } }
+    @media (max-width: 480px) { body { padding: 10px; } .fixture { padding: 12px; } .fixture-heading { display: block; } .source-preview { margin-top: 10px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Pixel conversion first-round comparison</h1>
+      <p class="lede">四类输入 × 三个现有 preset。图片仅用于机器确定性结果的人工复核。</p>
+      <p class="lede">Palette split boundary: corrected to <code>sorted.length - 1</code>.</p>
+      <p class="review">manualReview: pending · 不自动推荐最佳 preset</p>
+    </header>
+    <section class="fixture">
+  <div class="fixture-heading">
+    <div><h2>Native 16×16 hard-edge pattern</h2><p class="source-note">来源：脚本内存生成；未保存源 PNG</p></div>
+    <div class="source-preview"><div class="source-placeholder">合成输入<br>16×16 RGBA</div></div>
+  </div>
+  <div class="preset-grid"><article class="preset-card">
+  <h3>pixel-art</h3>
+  <a class="image-link" href="./hard-edge-pixel-art-16x16.png"><img class="output-image" src="./hard-edge-pixel-art-16x16.png" alt="Native 16×16 hard-edge pattern pixel-art"></a>
+  <p class="metrics">目标 16×16 · 色数 5<br>透明 0 · 半透明 0<br>机器中位 0.66 ms（转换 0.55 / 渲染 0.11）</p>
+</article>
+<article class="preset-card">
+  <h3>illustration</h3>
+  <a class="image-link" href="./hard-edge-illustration-16x16.png"><img class="output-image" src="./hard-edge-illustration-16x16.png" alt="Native 16×16 hard-edge pattern illustration"></a>
+  <p class="metrics">目标 16×16 · 色数 5<br>透明 0 · 半透明 0<br>机器中位 0.41 ms（转换 0.35 / 渲染 0.08）</p>
+</article>
+<article class="preset-card">
+  <h3>soft-alpha</h3>
+  <a class="image-link" href="./hard-edge-soft-alpha-16x16.png"><img class="output-image" src="./hard-edge-soft-alpha-16x16.png" alt="Native 16×16 hard-edge pattern soft-alpha"></a>
+  <p class="metrics">目标 16×16 · 色数 5<br>透明 0 · 半透明 0<br>机器中位 0.46 ms（转换 0.37 / 渲染 0.06）</p>
+</article></div>
+</section>
+<section class="fixture">
+  <div class="fixture-heading">
+    <div><h2>Transparent fine line and outline</h2><p class="source-note">来源：脚本内存生成；未保存源 PNG</p></div>
+    <div class="source-preview"><div class="source-placeholder">合成输入<br>16×16 RGBA</div></div>
+  </div>
+  <div class="preset-grid"><article class="preset-card">
+  <h3>pixel-art</h3>
+  <a class="image-link" href="./fine-outline-pixel-art-16x16.png"><img class="output-image" src="./fine-outline-pixel-art-16x16.png" alt="Transparent fine line and outline pixel-art"></a>
+  <p class="metrics">目标 16×16 · 色数 1<br>透明 188 · 半透明 0<br>机器中位 0.22 ms（转换 0.15 / 渲染 0.03）</p>
+</article>
+<article class="preset-card">
+  <h3>illustration</h3>
+  <a class="image-link" href="./fine-outline-illustration-16x16.png"><img class="output-image" src="./fine-outline-illustration-16x16.png" alt="Transparent fine line and outline illustration"></a>
+  <p class="metrics">目标 16×16 · 色数 1<br>透明 188 · 半透明 0<br>机器中位 0.19 ms（转换 0.16 / 渲染 0.03）</p>
+</article>
+<article class="preset-card">
+  <h3>soft-alpha</h3>
+  <a class="image-link" href="./fine-outline-soft-alpha-16x16.png"><img class="output-image" src="./fine-outline-soft-alpha-16x16.png" alt="Transparent fine line and outline soft-alpha"></a>
+  <p class="metrics">目标 16×16 · 色数 2<br>透明 188 · 半透明 18<br>机器中位 0.23 ms（转换 0.20 / 渲染 0.03）</p>
+</article></div>
+</section>
+<section class="fixture">
+  <div class="fixture-heading">
+    <div><h2>Semi-transparent gradient</h2><p class="source-note">来源：脚本内存生成；未保存源 PNG</p></div>
+    <div class="source-preview"><div class="source-placeholder">合成输入<br>16×16 RGBA</div></div>
+  </div>
+  <div class="preset-grid"><article class="preset-card">
+  <h3>pixel-art</h3>
+  <a class="image-link" href="./alpha-gradient-pixel-art-16x16.png"><img class="output-image" src="./alpha-gradient-pixel-art-16x16.png" alt="Semi-transparent gradient pixel-art"></a>
+  <p class="metrics">目标 16×16 · 色数 16<br>透明 3 · 半透明 0<br>机器中位 1.35 ms（转换 1.25 / 渲染 0.09）</p>
+</article>
+<article class="preset-card">
+  <h3>illustration</h3>
+  <a class="image-link" href="./alpha-gradient-illustration-16x16.png"><img class="output-image" src="./alpha-gradient-illustration-16x16.png" alt="Semi-transparent gradient illustration"></a>
+  <p class="metrics">目标 16×16 · 色数 16<br>透明 3 · 半透明 0<br>机器中位 0.78 ms（转换 0.72 / 渲染 0.08）</p>
+</article>
+<article class="preset-card">
+  <h3>soft-alpha</h3>
+  <a class="image-link" href="./alpha-gradient-soft-alpha-16x16.png"><img class="output-image" src="./alpha-gradient-soft-alpha-16x16.png" alt="Semi-transparent gradient soft-alpha"></a>
+  <p class="metrics">目标 16×16 · 色数 16<br>透明 1 · 半透明 255<br>机器中位 1.46 ms（转换 1.32 / 渲染 0.09）</p>
+</article></div>
+</section>
+<section class="fixture">
+  <div class="fixture-heading">
+    <div><h2>Repository real illustration</h2><p class="source-note">来源：<a href="../../src/assets/sample-summer-character.png">src/assets/sample-summer-character.png</a></p></div>
+    <div class="source-preview"><img class="source-image" src="../../src/assets/sample-summer-character.png" alt="Repository real illustration 原图"></div>
+  </div>
+  <div class="preset-grid"><article class="preset-card">
+  <h3>pixel-art</h3>
+  <a class="image-link" href="./summer-character-pixel-art-32x32.png"><img class="output-image" src="./summer-character-pixel-art-32x32.png" alt="Repository real illustration pixel-art"></a>
+  <p class="metrics">目标 32×32 · 色数 16<br>透明 0 · 半透明 0<br>机器中位 12.40 ms（转换 12.24 / 渲染 0.14）</p>
+</article>
+<article class="preset-card">
+  <h3>illustration</h3>
+  <a class="image-link" href="./summer-character-illustration-32x32.png"><img class="output-image" src="./summer-character-illustration-32x32.png" alt="Repository real illustration illustration"></a>
+  <p class="metrics">目标 32×32 · 色数 16<br>透明 0 · 半透明 0<br>机器中位 161.08 ms（转换 160.95 / 渲染 0.14）</p>
+</article>
+<article class="preset-card">
+  <h3>soft-alpha</h3>
+  <a class="image-link" href="./summer-character-soft-alpha-32x32.png"><img class="output-image" src="./summer-character-soft-alpha-32x32.png" alt="Repository real illustration soft-alpha"></a>
+  <p class="metrics">目标 32×32 · 色数 16<br>透明 0 · 半透明 0<br>机器中位 168.44 ms（转换 168.27 / 渲染 0.18）</p>
+</article></div>
+</section>
+    <footer>固定设置：16 色 · fit=contain · dither=none。机器中位耗时不代表视觉质量。PNG 与数据报告由同一 benchmark 脚本生成。</footer>
+  </main>
+</body>
+</html>

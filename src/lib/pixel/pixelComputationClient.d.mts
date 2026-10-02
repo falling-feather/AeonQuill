@@ -9,6 +9,7 @@ export type PixelComputationWorkerLike = {
 
 export type PixelComputationClientOptions = {
   workerFactory?: () => PixelComputationWorkerLike
+  /** Used for ordinary operations only; image-convert always requires a Worker. */
   syncFallback?: (request: PixelComputationRequest) => unknown
 }
 

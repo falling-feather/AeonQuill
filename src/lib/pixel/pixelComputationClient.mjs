@@ -27,6 +27,17 @@ function structuredError(errorInput) {
   return error
 }
 
+function imageConversionWorkerRequiredError() {
+  return new PixelComputationError(
+    'PIXEL_CONVERSION_WORKER_REQUIRED',
+    '图像转换需要 Worker，请重试',
+  )
+}
+
+function isImageConversionRequest(request) {
+  return request?.operation === 'image-convert'
+}
+
 export class PixelComputationClient {
   constructor(options = {}) {
     if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -52,10 +63,12 @@ export class PixelComputationClient {
     try {
       worker = this.workerFactory()
     } catch {
+      if (isImageConversionRequest(request)) return Promise.reject(imageConversionWorkerRequiredError())
       return this.runFallback(request, { signal, token })
     }
     if (!worker || typeof worker.postMessage !== 'function' || typeof worker.terminate !== 'function') {
       try { worker?.terminate?.() } catch {}
+      if (isImageConversionRequest(request)) return Promise.reject(imageConversionWorkerRequiredError())
       return this.runFallback(request, { signal, token })
     }
     this.worker = worker
@@ -85,6 +98,10 @@ export class PixelComputationClient {
       }
       worker.onerror = (event) => {
         if (!finish(() => {})) return
+        if (isImageConversionRequest(request)) {
+          reject(imageConversionWorkerRequiredError())
+          return
+        }
         this.runFallback(request, { signal }).then(resolve, reject)
       }
       if (signal) {
@@ -97,6 +114,10 @@ export class PixelComputationClient {
         worker.postMessage(request)
       } catch {
         if (!finish(() => {})) return
+        if (isImageConversionRequest(request)) {
+          reject(imageConversionWorkerRequiredError())
+          return
+        }
         this.runFallback(request, { signal }).then(resolve, reject)
       }
     })
@@ -104,6 +125,7 @@ export class PixelComputationClient {
 
   runFallback(request, options = {}) {
     if (this.disposed) return Promise.reject(new PixelComputationError('CLIENT_DISPOSED', 'Pixel computation client is disposed'))
+    if (isImageConversionRequest(request)) return Promise.reject(imageConversionWorkerRequiredError())
     const signal = options?.signal
     if (signal?.aborted) return Promise.reject(abortError())
     const token = options?.token ?? ++this.sequence

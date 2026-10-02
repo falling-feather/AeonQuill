@@ -8,6 +8,20 @@ export type RgbaImage = {
 
 export type PixelDitherMode = 'none' | 'bayer4' | 'floyd-steinberg'
 export type PixelFitMode = 'contain' | 'cover' | 'stretch'
+export type PixelResampleMode = 'nearest' | 'area'
+export type PixelColorMatchMode = 'rgb' | 'oklab'
+export type PixelAlphaMode = 'threshold' | 'preserve'
+export type PixelConversionPresetId = 'pixel-art' | 'illustration' | 'soft-alpha'
+export type PixelConversionPreset = {
+  readonly id: PixelConversionPresetId
+  readonly label: string
+  readonly settings: Readonly<{
+    resample: PixelResampleMode
+    colorMatch: PixelColorMatchMode
+    alphaMode: PixelAlphaMode
+    dither: PixelDitherMode
+  }>
+}
 
 export type PixelConversionOptions = {
   targetWidth?: number
@@ -18,6 +32,9 @@ export type PixelConversionOptions = {
   ditherStrength?: number
   fit?: PixelFitMode
   alphaThreshold?: number
+  resample?: PixelResampleMode
+  colorMatch?: PixelColorMatchMode
+  alphaMode?: PixelAlphaMode
   documentId?: string
   documentName?: string
 }
@@ -38,6 +55,9 @@ export type PixelConversionReport = {
   dither: PixelDitherMode
   fit: PixelFitMode
   alphaThreshold: number
+  resample: PixelResampleMode
+  colorMatch: PixelColorMatchMode
+  alphaMode: PixelAlphaMode
 }
 
 export type PixelExportBundle = {
@@ -72,16 +92,20 @@ export const PIXEL_METADATA_MIME: 'application/json'
 export const PIXEL_PNG_MIME: 'image/png'
 export const PIXEL_CONVERSION_DITHER_MODES: readonly PixelDitherMode[]
 export const PIXEL_CONVERSION_FIT_MODES: readonly PixelFitMode[]
+export const PIXEL_CONVERSION_RESAMPLE_MODES: readonly PixelResampleMode[]
+export const PIXEL_CONVERSION_COLOR_MATCH_MODES: readonly PixelColorMatchMode[]
+export const PIXEL_CONVERSION_ALPHA_MODES: readonly PixelAlphaMode[]
+export const PIXEL_CONVERSION_PRESETS: Readonly<Record<PixelConversionPresetId, PixelConversionPreset>>
 
 export function assertRgbaImage(input: unknown): { width: number; height: number; data: Uint8ClampedArray }
 export function normalizePixelConversionOptions(input?: PixelConversionOptions): NormalizedPixelConversionOptions
 export function resizeRgbaImage(
   source: RgbaImage,
-  options: { width: number; height: number; fit?: PixelFitMode },
+  options: { width: number; height: number; fit?: PixelFitMode; resample?: PixelResampleMode },
 ): { width: number; height: number; data: Uint8ClampedArray }
 export function extractDeterministicPalette(
   rgba: Uint8ClampedArray | Uint8Array | number[],
-  options?: { colorCount?: number; alphaThreshold?: number },
+  options?: { colorCount?: number; alphaThreshold?: number; alphaMode?: PixelAlphaMode },
 ): PixelPaletteColor[]
 export function convertRgbaToPixelDocument(
   source: RgbaImage,
