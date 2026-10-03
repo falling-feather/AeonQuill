@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "status": "original-control-and-resource-gates-passed",
+  "functionalTrack": "V0.7.92",
+  "sourceBaseCommit": "b805460",
+  "generatedAt": "2026-10-03T20:39:38.480Z",
+  "fixture": {
+    "width": 256,
+    "height": 256,
+    "frames": 96,
+    "layers": 1,
+    "celCells": 6291456,
+    "terrainMapCells": 64
+  },
+  "transport": {
+    "strategy": "Explicit UTF-8 bytes inside application/json Blob for large bodies; small string path unchanged.",
+    "bodySemantics": "Exact JSON bytes, base revision, serial ordering and failed-write recovery unchanged.",
+    "diagnosticNativeFetchMs": {
+      "baseline": [
+        488,
+        542.8
+      ],
+      "baselineMedian": 515.4,
+      "candidate": [
+        0.7,
+        1.1
+      ],
+      "candidateMedian": 0.9
+    },
+    "measurementScope": "Diagnostic native-call durations only, not end-to-end save completion; profiling includes wrappers."
+  },
+  "terrainProjection": {
+    "selectedFrames": 6,
+    "unselectedFrames": 90,
+    "sharedEmptyCel": true,
+    "medianMs": {
+      "projectionPreparation": 20.876,
+      "projectedStructuredClone": 14.914,
+      "fullStructuredClone": 147.592
+    },
+    "scope": "Five paired clone/preparation samples only; full exports unchanged."
+  },
+  "validation": {
+    "unitTests": 474,
+    "baselineChecks": 148,
+    "p7Phases": 6,
+    "draftFailureRecovery": "passed",
+    "pixelFirstRoundUi": "passed",
+    "independentReview": "no-new-P0-P1-blockers"
+  },
+  "soak": {
+    "requestedMinutes": 30,
+    "durationMs": 1801584,
+    "cycles": 60,
+    "collectedSamples": 337,
+    "peakSampledJsHeapBytes": 737296036,
+    "start": {
+      "elapsedMs": 252,
+      "jsHeapUsedBytes": 334138016,
+      "domNodes": 1965,
+      "documents": 1,
+      "eventListeners": 371
+    },
+    "afterExit": {
+      "elapsedMs": 1801584,
+      "jsHeapUsedBytes": 32228992,
+      "domNodes": 2315,
+      "documents": 1,
+      "eventListeners": 393
+    },
+    "growth": {
+      "jsHeapUsedBytes": 0,
+      "domNodes": 350,
+      "documents": 0,
+      "eventListeners": 22
+    },
+    "slopes": {
+      "jsHeapUsedBytesPerMinute": -613707.6,
+      "domNodesPerMinute": 0.19,
+      "documentsPerMinute": 0,
+      "eventListenersPerMinute": 0.01
+    },
+    "release": {
+      "modeHosts": 0,
+      "pixelWorkbench": 0,
+      "mediaElements": 0
+    },
+    "worker": {
+      "created": 567,
+      "terminated": 567,
+      "activeAfterUnload": 0,
+      "createdBeforeUnload": 567,
+      "terminatedBeforeUnload": 567,
+      "releasedOnHome": 0
+    },
+    "interaction": {
+      "cycleIntervalMs": 30000,
+      "cycles": 60,
+      "editedDocuments": 63,
+      "undoRedoPairs": 60,
+      "cancelledComputations": 59,
+      "cancelTimeouts": 0,
+      "undoTimeouts": 0,
+      "redoTimeouts": 0,
+      "revisionVerification": {
+        "drawAdvances": 60,
+        "undoAdvances": 60,
+        "redoAdvances": 60,
+        "failures": 0
+      },
+      "foregroundBackgroundSwitches": 60
+    },
+    "inputLatency": {
+      "handlerToFrame": {
+        "count": 63,
+        "min": 271.9,
+        "p50": 545.6,
+        "p95": 749.83,
+        "max": 1169.3
+      },
+      "eventToHandler": {
+        "count": 63,
+        "min": 0.7,
+        "p50": 1.3,
+        "p95": 2.1,
+        "max": 7.2
+      },
+      "validSamples": 63,
+      "timeoutCount": 0,
+      "missingTargetCount": 0
+    },
+    "thresholdAssessment": {
+      "status": "passed",
+      "checks": [
+        {
+          "id": "soak-heap-growth",
+          "status": "passed",
+          "actual": 0,
+          "limit": 67108864,
+          "unit": "bytes"
+        },
+        {
+          "id": "soak-heap-slope",
+          "status": "passed",
+          "actual": 0,
+          "limit": 2097152,
+          "unit": "bytes/minute"
+        },
+        {
+          "id": "soak-dom-growth",
+          "status": "passed",
+          "actual": 350,
+          "limit": 500,
+          "unit": "nodes"
+        },
+        {
+          "id": "soak-dom-slope",
+          "status": "passed",
+          "actual": 0.19,
+          "limit": 20,
+          "unit": "nodes/minute"
+        },
+        {
+          "id": "soak-document-growth",
+          "status": "passed",
+          "actual": 0,
+          "limit": 2,
+          "unit": "documents"
+        },
+        {
+          "id": "soak-listener-growth",
+          "status": "passed",
+          "actual": 22,
+          "limit": 500,
+          "unit": "listeners"
+        },
+        {
+          "id": "released-mode-hosts",
+          "status": "passed",
+          "actual": 0,
+          "limit": 0,
+          "unit": "elements"
+        },
+        {
+          "id": "released-media-elements",
+          "status": "passed",
+          "actual": 0,
+          "limit": 0,
+          "unit": "elements"
+        },
+        {
+          "id": "input-latency-measurement",
+          "status": "passed",
+          "actual": 0,
+          "limit": 0,
+          "unit": "invalid samples"
+        },
+        {
+          "id": "interaction-control-timeouts",
+          "status": "passed",
+          "actual": 0,
+          "limit": 0,
+          "unit": "timeouts"
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Original 3-second control and resource-growth gates passed; no threshold was relaxed.",
+    "Click-to-next-frame P95 749.83ms is still above low-latency drawing expectations; this checkpoint does not claim Aseprite-level latency.",
+    "Historical 1708.59ms is a reference from an earlier run, not a fresh paired baseline.",
+    "64MiB calculation budget is not a whole-page heap ceiling.",
+    "Machine performance, assistant review and human image/audio quality remain separate."
+  ]
+}

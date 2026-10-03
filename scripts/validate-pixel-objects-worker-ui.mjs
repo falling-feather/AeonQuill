@@ -17,18 +17,42 @@ import { renderPixelTerrainMapRgba } from '../src/lib/pixel/pixelGamePipeline.mj
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const artifactDirectory = join(projectRoot, '.runtime', 'qa')
-const reportPath = join(artifactDirectory, 'pixel-objects-worker-ui.json')
-const desktopScreenshotPath = join(artifactDirectory, 'pixel-objects-worker-desktop.png')
-const largeScreenshotPath = join(artifactDirectory, 'pixel-objects-worker-large.png')
-const cancelScreenshotPath = join(artifactDirectory, 'pixel-objects-worker-cancelled.png')
 const cliArgs = new Map(process.argv.slice(2).map((argument) => {
   const separator = argument.indexOf('=')
   return separator === -1 ? [argument, true] : [argument.slice(0, separator), argument.slice(separator + 1)]
 }))
+const preflightOnly = cliArgs.has('--preflight-only')
+const profileSummary = cliArgs.has('--profile-summary')
+const diagnosticsEnabled = preflightOnly || profileSummary
 const soakMinutes = cliArgs.has('--soak-minutes') ? Number(cliArgs.get('--soak-minutes')) : 0
 if (!Number.isInteger(soakMinutes) || soakMinutes < 0 || soakMinutes > 120) {
   throw new Error('--soak-minutes must be an integer between 0 and 120')
 }
+if (preflightOnly && soakMinutes > 0) {
+  throw new Error('--preflight-only cannot be combined with --soak-minutes greater than 0')
+}
+const localDatePart = (() => {
+  const now = new Date()
+  return [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+    .map((value, index) => index === 0 ? String(value) : String(value).padStart(2, '0'))
+    .join('')
+})()
+const diagnosticArtifactStem = `pixel-${localDatePart}-preflight`
+const reportPath = join(artifactDirectory, diagnosticsEnabled
+  ? `${diagnosticArtifactStem}-diagnostic.json`
+  : 'pixel-objects-worker-ui.json')
+const desktopScreenshotPath = join(artifactDirectory, diagnosticsEnabled
+  ? `${diagnosticArtifactStem}-desktop.png`
+  : 'pixel-objects-worker-desktop.png')
+const largeScreenshotPath = join(artifactDirectory, diagnosticsEnabled
+  ? `${diagnosticArtifactStem}-large.png`
+  : 'pixel-objects-worker-large.png')
+const cancelScreenshotPath = join(artifactDirectory, diagnosticsEnabled
+  ? `${diagnosticArtifactStem}-cancelled.png`
+  : 'pixel-objects-worker-cancelled.png')
+const failureScreenshotPath = join(artifactDirectory, diagnosticsEnabled
+  ? `${diagnosticArtifactStem}-failure.png`
+  : 'pixel-objects-worker-failure.png')
 const soakReportPath = soakMinutes > 0
   ? join(artifactDirectory, `pixel-objects-worker-soak-${soakMinutes}m.json`)
   : null
@@ -44,6 +68,8 @@ const performanceThresholds = validatePerformanceThresholds(JSON.parse(await rea
   join(projectRoot, 'benchmarks', 'product-performance', 'thresholds.json'),
   'utf8',
 )))
+
+let preflightDiagnostic = null
 
 function observePage(page, issues, requests, persistenceRequests = []) {
   const persistenceByRequest = new Map()
@@ -180,6 +206,8 @@ async function captureInteractionState(page, persistenceRequests, cycle, phase) 
         .map((entry) => entry.textContent?.trim().slice(0, 180) ?? '')
         .filter(Boolean)
         .slice(-4),
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
       worker: telemetry ? {
         created: telemetry.created,
         terminated: telemetry.terminated,
@@ -203,6 +231,98 @@ async function captureInteractionState(page, persistenceRequests, cycle, phase) 
         endedAt: latest.endedAt,
       } : null,
     },
+  }
+}
+
+async function capturePageVisibility(page) {
+  return page.evaluate(() => ({
+    visibilityState: document.visibilityState,
+    hasFocus: document.hasFocus(),
+  }))
+}
+
+async function setDiagnosticStage(page, stage) {
+  if (!diagnosticsEnabled) return
+  await page.evaluate((nextStage) => {
+    if (nextStage === 'preflight-1-input' && !globalThis.__pixelDiagnosticStarted) {
+      if (typeof globalThis.__pixelDiagnosticReset !== 'function') throw new Error('Pixel diagnostic reset hook is unavailable')
+      globalThis.__pixelDiagnosticStarted = true
+      globalThis.__pixelDiagnosticReset()
+    }
+    globalThis.__pixelDiagnosticStage = nextStage
+  }, stage)
+}
+
+async function recordDiagnosticEvent(page, event, details = {}) {
+  if (!diagnosticsEnabled) return
+  await page.evaluate(({ event: eventName, details: eventDetails }) => {
+    if (typeof globalThis.__pixelDiagnosticRecord !== 'function') throw new Error('Pixel diagnostic event hook is unavailable')
+    globalThis.__pixelDiagnosticRecord(eventName, eventDetails)
+  }, { event, details })
+}
+
+function summarizeError(error) {
+  return {
+    name: error?.name ?? 'Error',
+    message: String(error?.message ?? error).slice(0, 500),
+    stack: error?.stack?.split('\n').slice(0, 4).join('\n') ?? String(error).slice(0, 500),
+  }
+}
+
+function relativeScriptUrl(url) {
+  if (!url) return ''
+  try {
+    const parsed = new URL(url)
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return String(url)
+  }
+}
+
+function cpuProfileSummary(profile) {
+  if (!profile?.nodes?.length || !profile.samples?.length) {
+    return { status: 'empty', sampleCount: profile?.samples?.length ?? 0, totalSelfMs: 0, top: [] }
+  }
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]))
+  const merged = new Map()
+  let totalSelfMs = 0
+  for (let index = 0; index < profile.samples.length; index += 1) {
+    const nodeId = profile.samples[index]
+    const durationMs = Number(profile.timeDeltas?.[index] ?? 0) / 1_000
+    totalSelfMs += durationMs
+    const frame = nodes.get(nodeId)?.callFrame ?? {}
+    const functionName = frame.functionName || '(anonymous)'
+    const url = relativeScriptUrl(frame.url || '')
+    const lineNumber = Number.isInteger(frame.lineNumber) ? frame.lineNumber + 1 : null
+    const columnNumber = Number.isInteger(frame.columnNumber) ? frame.columnNumber + 1 : null
+    const key = [functionName, url, lineNumber ?? '', columnNumber ?? ''].join('|')
+    const entry = merged.get(key) ?? {
+      functionName,
+      url,
+      lineNumber,
+      columnNumber,
+      selfMs: 0,
+      samples: 0,
+    }
+    entry.selfMs += durationMs
+    entry.samples += 1
+    merged.set(key, entry)
+  }
+  return {
+    status: 'captured',
+    sampleCount: profile.samples.length,
+    totalSelfMs: Number(totalSelfMs.toFixed(2)),
+    top: [...merged.values()]
+      .sort((left, right) => right.selfMs - left.selfMs)
+      .slice(0, 20)
+      .map((entry) => ({
+        functionName: entry.functionName,
+        url: entry.url,
+        lineNumber: entry.lineNumber,
+        columnNumber: entry.columnNumber,
+        selfMs: Number(entry.selfMs.toFixed(2)),
+        samples: entry.samples,
+      })),
   }
 }
 
@@ -246,7 +366,12 @@ async function waitForPixelRevisionAdvance(page, previousText, deadline) {
 
 async function clickPixelHistoryButton(page, name, deadline) {
   const button = page.getByRole('button', { name, exact: true })
-  await button.click({ timeout: remainingControlMs(deadline) })
+  await recordDiagnosticEvent(page, 'click-start', { target: name, kind: 'history' })
+  try {
+    await button.click({ timeout: remainingControlMs(deadline) })
+  } finally {
+    await recordDiagnosticEvent(page, 'click-end', { target: name, kind: 'history' })
+  }
 }
 
 function metricMap(payload) {
@@ -321,7 +446,12 @@ async function measureCanvasInputLatency(page, canvas, cell) {
       }
     }, 1_000)
   })
-  await page.mouse.click(point.x, point.y)
+  await recordDiagnosticEvent(page, 'click-start', { target: 'pixel-canvas', kind: 'canvas', cell })
+  try {
+    await page.mouse.click(point.x, point.y)
+  } finally {
+    await recordDiagnosticEvent(page, 'click-end', { target: 'pixel-canvas', kind: 'canvas', cell })
+  }
   const deadline = Date.now() + 1_500
   while (Date.now() < deadline) {
     const probe = await page.evaluate(() => globalThis.__pixelInputProbe ?? { status: 'missing' })
@@ -341,7 +471,9 @@ function thresholdCheck(id, actual, limit, unit) {
   }
 }
 
-async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests) {
+async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests, options = {}) {
+  const runPreflightOnly = options.preflightOnly === true
+  const collectCpuProfile = options.profileSummary === true
   const session = await context.newCDPSession(page)
   await session.send('Performance.enable')
   await session.send('HeapProfiler.enable')
@@ -368,36 +500,183 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
   let editedDocuments = 0
   let undoRedoPairs = 0
   let healthWritten = false
+  const backgroundPageCreatedAt = Date.now()
+  const mainPageBeforeBackground = diagnosticsEnabled ? await capturePageVisibility(page) : null
   const backgroundPage = await context.newPage()
   await backgroundPage.goto('about:blank')
+  await page.bringToFront()
+  const backgroundPageImpact = diagnosticsEnabled ? {
+    created: true,
+    url: backgroundPage.url(),
+    creationDurationMs: Date.now() - backgroundPageCreatedAt,
+    mainPageBefore: mainPageBeforeBackground,
+    foregroundPreflight: true,
+    mainPageAfter: await capturePageVisibility(page),
+  } : null
   const canvas = page.getByLabel(/256 乘 256 像素绘制区/u)
   const revisionText = () => page.locator('.aq-pixel-document-title small').textContent()
   const preflightSamples = []
-  for (let index = 0; index < 3; index += 1) {
-    const preflightRevisionBefore = await revisionText()
-    const preflight = await measureCanvasInputLatency(page, canvas, {
-      column: 200 + index,
-      row: 250,
-      columns: 256,
-      rows: 256,
-    })
-    const preflightRevisionAfter = (await waitForPixelRevisionAdvance(
-      page,
-      preflightRevisionBefore,
-      Date.now() + 3_000,
-    )).text
-    preflightSamples.push({ index, revisionBefore: preflightRevisionBefore, revisionAfter: preflightRevisionAfter, probe: preflight })
-    assert.equal(preflight.status, 'ok', `PERF-004 input preflight ${index + 1} did not receive a real pointer event: ${JSON.stringify(preflight)}`)
-    assert.notEqual(preflightRevisionAfter, preflightRevisionBefore, `PERF-004 preflight ${index + 1} did not advance the pixel document revision`)
-    inputLatencies.push(preflight.handlerToFrameMs)
-    inputEventToHandlerLatencies.push(preflight.eventToHandlerMs)
-    editedDocuments += 1
-    const preflightUndoDeadline = Date.now() + 3_000
-    await clickPixelHistoryButton(page, '撤销', preflightUndoDeadline)
-    await waitForPixelRevisionAdvance(page, preflightRevisionAfter, preflightUndoDeadline)
-    if (index < 2) await delay(1_000)
-  }
   const preflight = { requiredSamples: 3, samples: preflightSamples }
+  let preflightFailure = null
+  let profileSummaryResult = null
+  let profileStarted = false
+  if (collectCpuProfile) {
+    await setDiagnosticStage(page, 'preflight-1-input')
+    try {
+      await session.send('Profiler.enable')
+      await session.send('Profiler.start')
+      profileStarted = true
+    } catch (error) {
+      profileSummaryResult = {
+        status: 'error',
+        sampleCount: 0,
+        totalSelfMs: 0,
+        top: [],
+        error: summarizeError(error),
+      }
+      await session.send('Profiler.disable').catch(() => undefined)
+    }
+  }
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      const sample = { index }
+      try {
+        await setDiagnosticStage(page, `preflight-${index + 1}-input`)
+        const inputBefore = diagnosticsEnabled
+          ? await captureInteractionState(page, persistenceRequests, index, 'preflight-input-before')
+          : null
+        const preflightRevisionBefore = await revisionText()
+        const input = {
+          column: 200 + index,
+          row: 250,
+          columns: 256,
+          rows: 256,
+        }
+        const inputProbe = await measureCanvasInputLatency(page, canvas, input)
+        const preflightRevisionAfter = (await waitForPixelRevisionAdvance(
+          page,
+          preflightRevisionBefore,
+          Date.now() + 3_000,
+        )).text
+        sample.revisionBefore = preflightRevisionBefore
+        sample.revisionAfter = preflightRevisionAfter
+        sample.probe = inputProbe
+        if (diagnosticsEnabled) {
+          sample.inputBefore = inputBefore
+          sample.inputAfter = await captureInteractionState(page, persistenceRequests, index, 'preflight-input-after')
+        }
+        assert.equal(inputProbe.status, 'ok', `PERF-004 input preflight ${index + 1} did not receive a real pointer event: ${JSON.stringify(inputProbe)}`)
+        assert.notEqual(preflightRevisionAfter, preflightRevisionBefore, `PERF-004 preflight ${index + 1} did not advance the pixel document revision`)
+        inputLatencies.push(inputProbe.handlerToFrameMs)
+        inputEventToHandlerLatencies.push(inputProbe.eventToHandlerMs)
+        editedDocuments += 1
+        await setDiagnosticStage(page, `preflight-${index + 1}-undo`)
+        if (diagnosticsEnabled) {
+          sample.undoBefore = await captureInteractionState(page, persistenceRequests, index, 'preflight-undo-before')
+        }
+        const preflightUndoDeadline = Date.now() + 3_000
+        await clickPixelHistoryButton(page, '撤销', preflightUndoDeadline)
+        sample.undoClickReturned = true
+        sample.undoRevisionAfter = (await waitForPixelRevisionAdvance(page, preflightRevisionAfter, preflightUndoDeadline)).text
+        if (diagnosticsEnabled) {
+          sample.undoAfter = await captureInteractionState(page, persistenceRequests, index, 'preflight-undo-after')
+        }
+        preflightSamples.push(sample)
+        if (index < 2) await delay(1_000)
+      } catch (error) {
+        sample.error = summarizeError(error)
+        if (diagnosticsEnabled) {
+          sample.failureState = await captureInteractionFailure(page, persistenceRequests, index, 'preflight-failure', error).catch((captureError) => ({
+            captureError: summarizeError(captureError),
+          }))
+        }
+        preflightSamples.push(sample)
+        preflightFailure = sample.error
+        throw error
+      }
+    }
+  } finally {
+    if (profileStarted) {
+      try {
+        const stopped = await session.send('Profiler.stop')
+        profileSummaryResult = cpuProfileSummary(stopped.profile)
+      } catch (error) {
+        profileSummaryResult = {
+          status: 'error',
+          sampleCount: 0,
+          totalSelfMs: 0,
+          top: [],
+          error: summarizeError(error),
+        }
+      } finally {
+        await session.send('Profiler.disable').catch(() => undefined)
+      }
+    }
+    if (diagnosticsEnabled) {
+      const telemetry = await page.evaluate(() => {
+        const value = globalThis.__pixelWorkerTelemetry ?? {}
+        return {
+          syncWork: value.syncWork ?? null,
+          interactionEvents: value.interactionEvents ?? null,
+        }
+      }).catch((error) => ({
+        syncWork: null,
+        interactionEvents: null,
+        error: summarizeError(error),
+      }))
+      preflightDiagnostic = {
+        schemaVersion: 1,
+        enabled: true,
+        preflightOnly: runPreflightOnly,
+        profileRequested: collectCpuProfile,
+        profileSummary: profileSummaryResult,
+        interpretation: {
+          profileIncludesDiagnosticWrapperOverhead: true,
+          use: 'Root-cause localization only; native operations remain inside diagnostic wrappers.',
+          productionPerformanceSource: 'Unprofiled formal soak with diagnostic wrappers disabled.',
+          sizeCounting: 'String.length or binary byteLength/size; no extra UTF-8 encoding for measurements.',
+        },
+        preflight,
+        failure: preflightFailure,
+        backgroundPage: backgroundPageImpact,
+        telemetry,
+      }
+    }
+  }
+
+  if (collectCpuProfile && profileSummaryResult?.status !== 'captured') {
+    throw new Error('Requested pixel CPU profile could not be captured')
+  }
+  if (diagnosticsEnabled && (!preflightDiagnostic?.telemetry?.syncWork
+    || !preflightDiagnostic?.telemetry?.interactionEvents || preflightDiagnostic.telemetry.error)) {
+    throw new Error('Requested pixel diagnostic telemetry is incomplete')
+  }
+
+  if (runPreflightOnly) {
+    if (backgroundPageImpact) {
+      backgroundPageImpact.mainPageBeforeClose = await capturePageVisibility(page)
+    }
+    await backgroundPage.close().catch(() => undefined)
+    if (backgroundPageImpact) {
+      backgroundPageImpact.closed = true
+      backgroundPageImpact.mainPageAfterClose = await capturePageVisibility(page).catch(() => null)
+    }
+    await session.detach().catch(() => undefined)
+    return {
+      status: 'preflight-only',
+      durationMs: Date.now() - soakStartedAt,
+      inputPreflight: preflight,
+      interaction: {
+        editedDocuments,
+        undoRedoPairs: 0,
+        revisionVerification,
+      },
+      backgroundPage: backgroundPageImpact,
+      cpuProfile: profileSummaryResult,
+      diagnostics: preflightDiagnostic,
+      thresholdAssessment: 'not assessed in preflight-only mode',
+    }
+  }
 
   const writeHealth = async (reason) => {
     if (!soakHealthReportPath || healthWritten) return
@@ -449,7 +728,9 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
 
   while (Date.now() - soakStartedAt < durationMs) {
     const cycleStartedAt = Date.now()
+    await setDiagnosticStage(page, `soak-${cycles}-input`)
     await page.bringToFront()
+    await recordDiagnosticEvent(page, 'page-foreground-sample', { target: 'main-page', kind: 'foreground' })
     const revisionBeforeDraw = await revisionText()
     const column = cycles % 16
     const row = 128 + (Math.floor(cycles / 16) % 16)
@@ -508,11 +789,14 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
     ])
     if (cancelOutcome === 'cancelled') cancelledComputations += 1
     if (cancelOutcome === 'timeout') cancelTimeouts += 1
+    await recordDiagnosticEvent(page, 'page-background-start', { target: 'background-page', kind: 'background' })
     await backgroundPage.bringToFront()
     await delay(250)
     visibilityStates.push(await page.evaluate(() => document.visibilityState).catch(() => 'unavailable'))
+    await recordDiagnosticEvent(page, 'page-background-sample', { target: 'main-page', kind: 'background' })
     await page.bringToFront()
     visibilityStates.push(await page.evaluate(() => document.visibilityState).catch(() => 'unavailable'))
+    await recordDiagnosticEvent(page, 'page-foreground-after-background', { target: 'main-page', kind: 'foreground' })
     cycles += 1
 
     const cycleDeadline = cycleStartedAt + cycleIntervalMs
@@ -544,7 +828,14 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
     mediaElements: document.querySelectorAll('video, audio, .canvas-viewport, [aria-label="光阴砚像素模式工作台"], [aria-label="智能视频工作台"]').length,
   }))
   const workerAfterUnload = await page.evaluate(() => globalThis.__pixelWorkerTelemetry ?? null)
+  if (backgroundPageImpact) {
+    backgroundPageImpact.mainPageBeforeClose = await capturePageVisibility(page)
+  }
   await backgroundPage.close().catch(() => undefined)
+  if (backgroundPageImpact) {
+    backgroundPageImpact.closed = true
+    backgroundPageImpact.mainPageAfterClose = await capturePageVisibility(page).catch(() => null)
+  }
   samples.push(await collectPerformanceSample(session, soakStartedAt))
   const soakResult = finalizeSoak(samples, releaseState, Date.now() - soakStartedAt, cycles)
   const limits = performanceThresholds.limits
@@ -601,6 +892,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
       foregroundBackgroundSwitches: cycles,
       visibilityStates: [...new Set(visibilityStates)],
     },
+    backgroundPage: backgroundPageImpact,
+    cpuProfile: profileSummaryResult,
     worker,
     thresholdAssessment,
     environment: {
@@ -683,13 +976,198 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
     posts: [],
     responses: [],
   }
-  await page.addInitScript(() => {
+  await page.addInitScript(({ enableDiagnostics }) => {
     const NativeWorker = globalThis.Worker
     const telemetry = {
       created: 0,
       terminated: 0,
       posts: [],
       responses: [],
+      syncWork: enableDiagnostics ? {
+        thresholds: { characters: 1024 * 1024, bytes: 1024 * 1024 },
+        recordLimit: 20,
+        records: [],
+        counts: {},
+        stageCounts: {},
+        droppedRecords: 0,
+      } : null,
+      interactionEvents: enableDiagnostics ? {
+        recordLimit: 200,
+        records: [],
+        droppedRecords: 0,
+      } : null,
+    }
+    const nativeJSON = JSON.stringify
+    const NativeTextEncoder = globalThis.TextEncoder
+    const nativeTextEncoderEncode = typeof NativeTextEncoder === 'function'
+      ? NativeTextEncoder.prototype.encode
+      : null
+    const syncThresholdCharacters = 1024 * 1024
+    const syncThresholdBytes = 1024 * 1024
+    const now = () => performance.now()
+    const errorName = (error) => error instanceof Error ? error.name : String(error).slice(0, 160)
+    const characterLengthOfString = (value) => typeof value === 'string' ? value.length : null
+    const diagnosticStage = () => globalThis.__pixelDiagnosticStage ?? 'setup'
+    const recordSyncWork = (name, size, unit, startedAt, error, status) => {
+      const syncWork = telemetry.syncWork
+      const threshold = unit === 'bytes' ? syncThresholdBytes : syncThresholdCharacters
+      if (!syncWork || !Number.isFinite(size) || size < threshold) return
+      const stage = diagnosticStage()
+      syncWork.counts[name] = (syncWork.counts[name] ?? 0) + 1
+      const stageCounts = syncWork.stageCounts[stage] ?? {}
+      stageCounts[name] = (stageCounts[name] ?? 0) + 1
+      syncWork.stageCounts[stage] = stageCounts
+      const entry = {
+        name,
+        stage,
+        size,
+        unit,
+        timeMs: Number((now() - startedAt).toFixed(3)),
+        error: error ?? null,
+        status: status ?? (error ? 'error' : 'ok'),
+      }
+      if (syncWork.records.length < syncWork.recordLimit) syncWork.records.push(entry)
+      else syncWork.droppedRecords += 1
+    }
+    const safeInteractionDetails = (details) => ({
+      target: typeof details?.target === 'string' ? details.target.slice(0, 80) : undefined,
+      kind: typeof details?.kind === 'string' ? details.kind.slice(0, 40) : undefined,
+      cell: details?.cell && Number.isFinite(details.cell.column) && Number.isFinite(details.cell.row)
+        ? { column: details.cell.column, row: details.cell.row }
+        : undefined,
+    })
+    const buttonState = (name) => {
+      const button = [...document.querySelectorAll('button')].find((entry) => entry.getAttribute('aria-label') === name)
+      return {
+        exists: Boolean(button),
+        disabled: button?.disabled ?? null,
+        visible: Boolean(button?.getClientRects().length),
+      }
+    }
+    const recordInteraction = (event, details = {}) => {
+      const interaction = telemetry.interactionEvents
+      if (!interaction || interaction.records.length >= interaction.recordLimit) {
+        if (interaction) interaction.droppedRecords += 1
+        return
+      }
+      interaction.records.push({
+        event,
+        stage: diagnosticStage(),
+        at: Number(now().toFixed(3)),
+        capturedAt: new Date().toISOString(),
+        revision: document.querySelector('.aq-pixel-document-title small')?.textContent?.trim() ?? null,
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus(),
+        history: {
+          undo: buttonState('撤销'),
+          redo: buttonState('重做'),
+        },
+        details: safeInteractionDetails(details),
+      })
+    }
+    globalThis.__pixelDiagnosticStage = 'setup'
+    globalThis.__pixelDiagnosticRecord = enableDiagnostics ? recordInteraction : undefined
+    globalThis.__pixelDiagnosticReset = enableDiagnostics ? () => {
+      telemetry.syncWork.records = []
+      telemetry.syncWork.counts = {}
+      telemetry.syncWork.stageCounts = {}
+      telemetry.syncWork.droppedRecords = 0
+      telemetry.interactionEvents.records = []
+      telemetry.interactionEvents.droppedRecords = 0
+    } : undefined
+    if (enableDiagnostics) {
+      JSON.stringify = function diagnosticStringify(...args) {
+        const startedAt = now()
+        let output
+        let error = null
+        try {
+          output = nativeJSON(...args)
+          return output
+        } catch (caught) {
+          error = errorName(caught)
+          throw caught
+        } finally {
+          const characters = characterLengthOfString(output)
+          recordSyncWork('JSON.stringify', characters, 'characters', startedAt, error, error ? 'error' : 'ok')
+        }
+      }
+      const nativeSetItem = globalThis.Storage?.prototype?.setItem
+      if (typeof nativeSetItem === 'function') {
+        globalThis.Storage.prototype.setItem = function diagnosticSetItem(key, value) {
+          const startedAt = now()
+          let error = null
+          try {
+            return nativeSetItem.call(this, key, value)
+          } catch (caught) {
+            error = errorName(caught)
+            throw caught
+          } finally {
+            let characters = null
+            try { characters = String(value).length } catch { /* diagnostic only */ }
+            recordSyncWork('Storage.prototype.setItem', characters, 'characters', startedAt, error, error ? 'error' : 'ok')
+          }
+        }
+      }
+      if (typeof NativeTextEncoder === 'function' && typeof nativeTextEncoderEncode === 'function') {
+        NativeTextEncoder.prototype.encode = function diagnosticEncode(input) {
+          const startedAt = now()
+          let output
+          let error = null
+          try {
+            output = nativeTextEncoderEncode.call(this, input)
+            return output
+          } catch (caught) {
+            error = errorName(caught)
+            throw caught
+          } finally {
+            const bytes = output?.byteLength ?? null
+            recordSyncWork('TextEncoder.encode', bytes, 'bytes', startedAt, error, error ? 'error' : 'ok')
+          }
+        }
+      }
+      const nativeFetch = globalThis.fetch
+      const fetchBodySize = (input, init) => {
+        const body = init?.body
+        if (typeof body === 'string') return { size: body.length, unit: 'characters' }
+        if (body instanceof ArrayBuffer) return { size: body.byteLength, unit: 'bytes' }
+        if (ArrayBuffer.isView(body)) return { size: body.byteLength, unit: 'bytes' }
+        if (typeof Blob === 'function' && body instanceof Blob) return { size: body.size, unit: 'bytes' }
+        if (typeof URLSearchParams === 'function' && body instanceof URLSearchParams) {
+          return { size: String(body).length, unit: 'characters' }
+        }
+        const headers = init?.headers ?? input?.headers
+        const contentLength = headers?.get?.('content-length')
+        const parsed = Number(contentLength)
+        return Number.isFinite(parsed) ? { size: parsed, unit: 'bytes' } : null
+      }
+      if (typeof nativeFetch === 'function') {
+        globalThis.fetch = function diagnosticFetch(input, init) {
+          const startedAt = now()
+          let error = null
+          try {
+            return nativeFetch.call(this, input, init)
+          } catch (caught) {
+            error = errorName(caught)
+            throw caught
+          } finally {
+            const bodySize = fetchBodySize(input, init)
+            recordSyncWork('fetch', bodySize?.size, bodySize?.unit, startedAt, error, error ? 'error' : 'ok')
+          }
+        }
+      }
+      document.addEventListener('pointerdown', (event) => recordInteraction('dom-pointerdown', {
+        target: event.target instanceof Element ? event.target.getAttribute('aria-label') ?? event.target.tagName : null,
+        kind: 'dom',
+      }), true)
+      document.addEventListener('pointerup', (event) => recordInteraction('dom-pointerup', {
+        target: event.target instanceof Element ? event.target.getAttribute('aria-label') ?? event.target.tagName : null,
+        kind: 'dom',
+      }), true)
+      document.addEventListener('click', (event) => recordInteraction('dom-click', {
+        target: event.target instanceof Element ? event.target.getAttribute('aria-label') ?? event.target.tagName : null,
+        kind: 'dom',
+      }), true)
+      document.addEventListener('visibilitychange', () => recordInteraction('visibilitychange'), true)
     }
     const fnv1a = (bytes) => {
       let hash = 0x811c9dc5
@@ -766,7 +1244,7 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
         return super.terminate()
       }
     }
-  })
+  }, { enableDiagnostics: diagnosticsEnabled })
   observePage(page, issues, requests, persistenceRequests)
   page.on('download', (download) => downloads.push(download))
   try {
@@ -947,10 +1425,14 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
     assert.match(budgetMessage ?? '', /budget|预算|64/u)
     await page.screenshot({ path: largeScreenshotPath, fullPage: true })
 
-    const soakResult = soakMinutes > 0
-      ? await runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests)
+    const shouldRunPreflight = soakMinutes > 0 || preflightOnly || profileSummary
+    const soakResult = shouldRunPreflight
+      ? await runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests, {
+        preflightOnly,
+        profileSummary,
+      })
       : null
-    if (soakResult?.thresholdAssessment.status === 'failed') {
+    if (soakResult?.thresholdAssessment?.status === 'failed') {
       const failedChecks = soakResult.thresholdAssessment.checks
         .filter((check) => check.status === 'failed')
         .map((check) => `${check.id}=${check.actual}>${check.limit}`)
@@ -993,7 +1475,7 @@ async function validateProjectUi(baseUrl, largeFixturePath) {
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     })
-    await page.screenshot({ path: join(artifactDirectory, 'pixel-objects-worker-failure.png'), fullPage: true }).catch(() => undefined)
+    await page.screenshot({ path: failureScreenshotPath, fullPage: true }).catch(() => undefined)
     throw error
   } finally {
     await browser.close().catch(() => undefined)
@@ -1021,11 +1503,14 @@ try {
     node: process.version,
     browser: 'Microsoft Edge via Playwright (Browser plugin unavailable)',
     soakMinutes,
+    preflightOnly,
+    profileSummary,
     soakReportPath,
     soakHealthReportPath,
     baseUrl: bridge?.baseUrl,
     phases,
-    screenshots: [desktopScreenshotPath, cancelScreenshotPath, largeScreenshotPath],
+    diagnostics: preflightDiagnostic,
+    screenshots: [desktopScreenshotPath, cancelScreenshotPath, largeScreenshotPath, failureScreenshotPath],
     error: failure?.message,
   }, null, 2)}\n`, 'utf8')
 }

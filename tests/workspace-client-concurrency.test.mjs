@@ -60,7 +60,7 @@ function installFetchMock(t, handler) {
   })
 }
 
-test('large workspace uploads preserve JSON UTF-8 bytes, base revision and returned document', async (t) => {
+test('large workspace uploads use a reusable Blob with exact JSON UTF-8 bytes and revision semantics', async (t) => {
   const api = await loadApi('large-utf8-upload')
   const value = '像素🙂\\n"'.repeat(180_000)
   let writes = 0
@@ -68,12 +68,15 @@ test('large workspace uploads preserve JSON UTF-8 bytes, base revision and retur
     if (options.method === undefined) return jsonResponse({ document: document(7) })
     assert.equal(pathname, '/api/workspace/documents/document-1')
     assert.equal(options.method, 'PUT')
-    assert.equal(options.body instanceof Uint8Array, true)
+    assert.equal(options.body instanceof Blob, true)
     const expected = JSON.stringify({ projectId: 'project-1', modeId: 'balanced', revision: 8, value, reason: 'large-autosave', baseRevision: 7 })
     const expectedBytes = Buffer.from(expected, 'utf8')
-    assert.equal(options.body.byteLength, expectedBytes.byteLength)
+    assert.equal(options.body.size, expectedBytes.byteLength)
+    assert.equal(options.body.type, 'application/json')
+    const actualBytes = new Uint8Array(await options.body.arrayBuffer())
     const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
-    assert.equal(digest(options.body), digest(expectedBytes))
+    assert.equal(digest(actualBytes), digest(expectedBytes))
+    assert.equal(digest(new Uint8Array(await options.body.arrayBuffer())), digest(expectedBytes))
     assert.equal(options.headers['content-type'], 'application/json')
     writes += 1
     return jsonResponse({ document: document(8, value) })

@@ -281,10 +281,10 @@ export function saveWorkspaceModeDocument(input: {
         : null
       const { documentId, ...body } = input
       const serializedBody = JSON.stringify({ ...body, baseRevision })
-      // Encoding once keeps large uploads out of fetch's synchronous string
-      // conversion; HTTP still receives the same UTF-8 JSON body.
+      // Blob keeps fetch from copying a large BufferSource on the UI thread.
+      // Encode explicitly so the HTTP body remains the same UTF-8 JSON bytes.
       const requestBody = serializedBody.length >= LARGE_WORKSPACE_BODY_CHARS
-        ? new TextEncoder().encode(serializedBody)
+        ? new Blob([new TextEncoder().encode(serializedBody)], { type: 'application/json' })
         : serializedBody
       const payload = await api<{ document: WorkspaceModeDocument }>(
         `/api/workspace/documents/${encodeURIComponent(documentId)}`,

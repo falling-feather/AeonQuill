@@ -17,6 +17,7 @@ import {
   createPixelExportBundle,
 } from '../src/lib/pixel/pixelConversion.mjs'
 import {
+  PIXEL_TERRAIN_GRID_PRESETS,
   createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
   createPixelTerrainMapExportBundle,
@@ -68,6 +69,82 @@ function makeTerrainDocument() {
     terrainLayer: { visible: true, locked: false }, objectLayers: [],
   }]
   const { kind: _kind, schemaVersion: _schemaVersion, ...input } = document
+  return createPixelDocument(input)
+}
+
+function makeProjectedTerrainDocument() {
+  const base = makeTerrainDocument()
+  const { kind: _kind, schemaVersion: _schemaVersion, ...input } = base
+  input.layerGroups = [{ id: 'group', name: 'Group', visible: true, locked: false }]
+  input.layers = [
+    { id: 'ink', name: 'Ink', visible: true, locked: false, opacity: 1, groupId: 'group', blendMode: 'normal' },
+    { id: 'shade', name: 'Shade', visible: true, locked: false, opacity: 0.75, groupId: null, blendMode: 'multiply' },
+  ]
+  input.paletteCycles = [{
+    id: 'cycle', name: 'Cycle', colorIds: ['ink', 'paper'], stepDurationMs: 20, direction: 'forward', enabled: true,
+  }]
+  input.frames = [
+    ...base.frames.map((frame, index) => ({
+      ...frame,
+      gameplay: index === 1
+        ? {
+            ...frame.gameplay,
+            collisions: [{ id: 'selected-solid', name: 'Selected solid', type: 'solid', x: 0, y: 0, width: 1, height: 1 }],
+          }
+        : frame.gameplay,
+      cels: {
+        ink: frame.cels.ink,
+        shade: index === 0 ? ['paper', null, null, null] : [null, 'ink', null, null],
+      },
+    })),
+    {
+      id: 'frame-object-only',
+      name: 'Object only',
+      durationMs: 140,
+      gameplay: {
+        anchor: { x: 0, y: 0 },
+        collisions: [{ id: 'object-solid', name: 'Object solid', type: 'solid', x: 0, y: 0, width: 1, height: 1 }],
+        tileRule: { terrainId: 'grass', bitmask: 128 },
+      },
+      cels: { ink: ['paper', 'paper', 'ink', 'ink'], shade: ['ink', null, 'paper', null] },
+    },
+  ]
+  input.animationEvents = [{
+    id: 'terrain-hit', name: 'Terrain hit', type: 'hit', animationTagId: 'loop', frameId: 'frame-2', value: 'hit',
+  }]
+  input.terrainMaps = [{
+    ...base.terrainMaps[0],
+    objectLayers: [{
+      id: 'props',
+      name: 'Props',
+      visible: true,
+      locked: false,
+      objects: [
+        {
+          id: 'tree',
+          name: 'Tree',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          frameId: 'frame-object-only',
+          collisionId: 'object-solid',
+          properties: { blocking: true },
+        },
+        {
+          id: 'marker',
+          name: 'Marker',
+          x: 1,
+          y: 0,
+          width: 1,
+          height: 1,
+          frameId: 'frame-2',
+          collisionId: 'selected-solid',
+          properties: { selected: true },
+        },
+      ],
+    }],
+  }]
   return createPixelDocument(input)
 }
 
@@ -409,12 +486,75 @@ test('createPixelComputationSnapshot uses shared null cels for coverage while pr
   assert.deepEqual(source, before)
 })
 
+test('createPixelComputationSnapshot sparsifies terrain preview and map cels while preserving full metadata and outputs', () => {
+  const source = makeProjectedTerrainDocument()
+  const before = structuredClone(source)
+  const cases = [
+    ...PIXEL_TERRAIN_GRID_PRESETS.map((preset) => ({
+      operation: 'terrain-preview',
+      options: { terrainId: 'grass', occupancy: [...preset.occupancy] },
+    })),
+    {
+      operation: 'terrain-preview',
+      options: { terrainId: 'grass', occupancy: [false, false, false, false, false, false, false, false, false] },
+    },
+    { operation: 'terrain-map', options: { terrainMapId: 'yard' } },
+    { operation: 'terrain-map', options: { terrainMapId: 'yard', cells: ['grass', null] } },
+  ]
+
+  for (const { operation, options } of cases) {
+    const snapshot = createPixelComputationSnapshot(source, operation, options)
+    assert.notStrictEqual(snapshot, source)
+    assert.deepEqual(snapshot.frames.map((frame) => frame.id), source.frames.map((frame) => frame.id))
+    assert.deepEqual(snapshot.frames.map((frame) => frame.gameplay), source.frames.map((frame) => frame.gameplay))
+    assert.deepEqual(snapshot.palette, source.palette)
+    assert.deepEqual(snapshot.paletteCycles, source.paletteCycles)
+    assert.deepEqual(snapshot.layers, source.layers)
+    assert.deepEqual(snapshot.layerGroups, source.layerGroups)
+    assert.deepEqual(snapshot.animationTags, source.animationTags)
+    assert.deepEqual(snapshot.animationEvents, source.animationEvents)
+    assert.deepEqual(snapshot.terrainMaps, source.terrainMaps)
+    assert.equal(snapshot.terrainMaps[0].objectLayers[0].objects[0].frameId, 'frame-object-only')
+    assert.equal(snapshot.terrainMaps[0].objectLayers[0].objects[0].collisionId, 'object-solid')
+
+    const layout = operation === 'terrain-preview'
+      ? createPixelTerrainPreviewLayout(source, options)
+      : createPixelTerrainMapLayout(source, options)
+    const dependencyIds = new Set(layout.cells.map((cell) => cell.frameId).filter(Boolean))
+    const nonDependencyFrames = snapshot.frames.filter((frame) => !dependencyIds.has(frame.id))
+    assert.equal(nonDependencyFrames.length, source.frames.length - dependencyIds.size)
+    if (operation === 'terrain-map' && options.cells === undefined) {
+      assert(dependencyIds.has('frame-2'))
+      assert.equal(dependencyIds.has('frame-object-only'), false)
+    }
+    if (nonDependencyFrames.length > 0) {
+      assert(nonDependencyFrames.every((frame) => frame.cels.ink.every((colorId) => colorId === null)))
+      assert(nonDependencyFrames.every((frame) => frame.cels.shade.every((colorId) => colorId === null)))
+      assert.equal(nonDependencyFrames[0].cels.ink, nonDependencyFrames[0].cels.shade)
+      assert.equal(nonDependencyFrames[0].cels.ink, nonDependencyFrames.at(-1).cels.ink)
+    }
+    for (const frame of snapshot.frames.filter((candidate) => dependencyIds.has(candidate.id))) {
+      const sourceFrame = source.frames.find((candidate) => candidate.id === frame.id)
+      assert.equal(frame.cels.ink, sourceFrame.cels.ink)
+      assert.equal(frame.cels.shade, sourceFrame.cels.shade)
+    }
+
+    const original = runPixelComputation(request(source, operation, options))
+    const projected = runPixelComputation(request(snapshot, operation, options))
+    assert.deepEqual(Array.from(projected.result.pixels), Array.from(original.result.pixels))
+    assert.deepEqual(projected.result.layout, original.result.layout)
+  }
+  assert.deepEqual(source, before)
+})
+
 test('createPixelComputationSnapshot returns the original document for non-rendering operations', () => {
   const source = makeTerrainDocument()
   assert.strictEqual(createPixelComputationSnapshot(source, 'sprite-sheet', { columns: 2 }), source)
-  assert.strictEqual(createPixelComputationSnapshot(source, 'terrain-map', { terrainMapId: 'yard' }), source)
-  assert.strictEqual(createPixelComputationSnapshot(source, 'terrain-preview', { terrainId: 'grass' }), source)
   assert.strictEqual(createPixelComputationSnapshot(source, 'game-export', { columns: 2, mapWidth: 2, mapHeight: 1 }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'terrain-map-export', { terrainMapId: 'yard', baseName: 'terrain' }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'engine-export', { columns: 2, mapWidth: 2, mapHeight: 1 }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'clip-export', { tagId: 'loop', columns: 2 }), source)
+  assert.strictEqual(createPixelComputationSnapshot(source, 'pixel-export', { columns: 2, frameId: 'frame-1' }), source)
 })
 
 test('image-convert delegates the exact converter result and projects only a 1x1 task identity', () => {

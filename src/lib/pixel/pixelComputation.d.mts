@@ -68,6 +68,8 @@ export type PixelComputationConversionResult = ReturnType<typeof convertRgbaToPi
  * Build a short-lived, read-only PixelDocument projection for Worker input.
  * The returned value is not a storage or export document and must not be mutated.
  * Immutable source substructures may be shared until postMessage/structuredClone.
+ * Terrain previews retain frame metadata and only the Cels selected by the
+ * authoritative terrain layout. Storage and export operations keep the full document.
  */
 export function createPixelComputationSnapshot(
   document: PixelDocument,

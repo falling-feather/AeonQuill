@@ -17,7 +17,9 @@ import {
   createPixelEngineBridgeExportBundle,
   createPixelGameExportBundle,
   createPixelTerrainMapExportBundle,
+  createPixelTerrainMapLayout,
   inspectPixelTerrainCoverage,
+  createPixelTerrainPreviewLayout,
   renderPixelTerrainMapRgba,
   renderPixelTerrainPreviewRgba,
 } from './pixelGamePipeline.mjs'
@@ -238,6 +240,30 @@ function withoutBudget(options) {
   const next = { ...options }
   delete next.budgetBytes
   return next
+}
+
+function projectDocumentWithBlankCels(document, dependencyFrameIds = new Set()) {
+  const blankCel = Array.from({ length: document.width * document.height }, () => null)
+  const frames = document.frames.map((frame) => {
+    if (dependencyFrameIds.has(frame.id)) return frame
+    return {
+      ...frame,
+      cels: Object.fromEntries(document.layers.map((layer) => [layer.id, blankCel])),
+    }
+  })
+  return { ...document, frames }
+}
+
+function createTerrainComputationSnapshot(document, operation, options) {
+  const layout = operation === 'terrain-map'
+    ? createPixelTerrainMapLayout(document, options)
+    : createPixelTerrainPreviewLayout(document, options)
+  const dependencyFrameIds = new Set(
+    layout.cells
+      .filter((cell) => cell.occupied && cell.frameId !== null)
+      .map((cell) => cell.frameId),
+  )
+  return projectDocumentWithBlankCels(document, dependencyFrameIds)
 }
 
 function safePositiveInteger(value, fallback) {
@@ -499,15 +525,14 @@ export function createPixelComputationSnapshot(documentInput, operationInput, op
   assertBudget(document, operation, options)
   assertSnapshotOperationInput(document, operation, options)
 
+  if (operation === 'terrain-map' || operation === 'terrain-preview') {
+    return createTerrainComputationSnapshot(document, operation, withoutBudget(options))
+  }
+
   if (operation !== 'frame' && operation !== 'frames' && operation !== 'coverage') return document
 
   if (operation === 'coverage') {
-    const blankCel = Array.from({ length: document.width * document.height }, () => null)
-    const frames = document.frames.map((frame) => ({
-      ...frame,
-      cels: Object.fromEntries(document.layers.map((layer) => [layer.id, blankCel])),
-    }))
-    return { ...document, frames }
+    return projectDocumentWithBlankCels(document)
   }
 
   const frameIds = operation === 'frame' ? [options.frameId] : options.frameIds
