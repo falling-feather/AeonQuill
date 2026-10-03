@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "status": "local-engineering-passed",
+  "generatedAt": "2026-10-03T20:54:51.1165984Z",
+  "source": {
+    "cleanCommit": "50361c3a04ce2e7acac8056676bbcd08c288c19d",
+    "functionalTrack": "V0.7.92",
+    "productVersion": "0.7.1"
+  },
+  "install": {
+    "directory": "D:/AEONQUILL/App",
+    "binaries": [
+      {
+        "filename": "aeonquill-desktop.exe",
+        "bytes": 13181440,
+        "sha256": "3ee77056f4a4a249c9c9b89a5249b6d8fb79c0c684bc1c5e8b7a5e42e90905df"
+      },
+      {
+        "filename": "aeonquill-bridge.exe",
+        "bytes": 61013545,
+        "sha256": "f13a4dcda95df25308d598775cd2dc0810febba9dbd39644ce57608d13398814"
+      }
+    ]
+  },
+  "sidecar": {
+    "status": "passed",
+    "systemNodeRequired": false,
+    "readyMs": 545,
+    "exitCode": 0,
+    "portClosed": true,
+    "parentControl": "stdio"
+  },
+  "native": {
+    "status": "passed",
+    "timeline": {
+      "tauriReadyMs": 40,
+      "bridgeSpawnedMs": 83,
+      "bridgeReadyMs": 613,
+      "windowLoadedMs": 3744,
+      "rendererProbedMs": 3893,
+      "windowCloseRequestedMs": 4496,
+      "shutdownFinishedMs": 4853
+    },
+    "rendererProbe": {
+      "tauriGlobalType": "undefined",
+      "processType": "undefined",
+      "requireType": "undefined",
+      "documentReadyState": "complete"
+    },
+    "shutdown": {
+      "requested": true,
+      "exited": true,
+      "exitCode": 0,
+      "forced": false,
+      "portClosed": true
+    }
+  },
+  "singleInstance": {
+    "status": "passed",
+    "attempts": 4,
+    "desktopCount": 1,
+    "bridgeCount": 1,
+    "secondaryExitCodes": [
+      0,
+      0,
+      0
+    ]
+  },
+  "userData": {
+    "status": "passed",
+    "protectedFiles": 77,
+    "changedFiles": 0,
+    "beforeSnapshotSha256": "718888d03cef5fd60d22a295413c7ca9b2388094c2f314f1c52537b232a1b75e"
+  },
+  "validation": {
+    "sourceUnitTests": 474,
+    "sourceBaselineChecks": 148,
+    "p7Phases": 6,
+    "installedLargePixelPreflight": "passed",
+    "installedPixelFirstRound": "passed",
+    "installedDraftFailureRecovery": "passed",
+    "preflightSamples": 3
+  },
+  "performance": {
+    "report": "benchmarks/product-performance/pixel-20261004.json",
+    "formalSourceSoak": "passed",
+    "cycles": 60,
+    "workerCreated": 567,
+    "workerTerminated": 567,
+    "handlerToFrameP95Ms": 749.83,
+    "scope": "The 30-minute formal run was against source; installed self-contained runtime was separately validated by original preflight and full persistence regressions."
+  },
+  "limitations": [
+    "No installer, public signing or cross-machine acceptance is claimed.",
+    "P95 is improved and original gates passed; low-latency drawing and human model/audio/image quality remain separate future work."
+  ]
+}

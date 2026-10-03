@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { cpus, platform, release, totalmem } from 'node:os'
-import { join } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { startIsolatedBridge } from './qa-runtime.mjs'
@@ -24,6 +24,12 @@ const cliArgs = new Map(process.argv.slice(2).map((argument) => {
 const preflightOnly = cliArgs.has('--preflight-only')
 const profileSummary = cliArgs.has('--profile-summary')
 const diagnosticsEnabled = preflightOnly || profileSummary
+const bridgeExecutableInput = cliArgs.get('--bridge-executable')
+if (bridgeExecutableInput !== undefined && (typeof bridgeExecutableInput !== 'string' || !isAbsolute(bridgeExecutableInput))) {
+  throw new Error('--bridge-executable must be an absolute executable path')
+}
+const bridgeExecutable = bridgeExecutableInput === undefined ? null : resolve(bridgeExecutableInput)
+if (bridgeExecutable) await access(bridgeExecutable)
 const soakMinutes = cliArgs.has('--soak-minutes') ? Number(cliArgs.get('--soak-minutes')) : 0
 if (!Number.isInteger(soakMinutes) || soakMinutes < 0 || soakMinutes > 120) {
   throw new Error('--soak-minutes must be an integer between 0 and 120')
@@ -37,7 +43,7 @@ const localDatePart = (() => {
     .map((value, index) => index === 0 ? String(value) : String(value).padStart(2, '0'))
     .join('')
 })()
-const diagnosticArtifactStem = `pixel-${localDatePart}-preflight`
+const diagnosticArtifactStem = `pixel-${localDatePart}-preflight${bridgeExecutable ? '-installed' : ''}`
 const reportPath = join(artifactDirectory, diagnosticsEnabled
   ? `${diagnosticArtifactStem}-diagnostic.json`
   : 'pixel-objects-worker-ui.json')
@@ -1488,6 +1494,7 @@ let failure
 try {
   bridge = await startIsolatedBridge('pixel-objects-worker', {
     comfyPolicy: 'manual',
+    ...(bridgeExecutable ? { executablePath: bridgeExecutable } : {}),
   })
   const largeFixturePath = join(bridge.runtimeDirectory, 'pixel-perf-large.aeonpixel.json')
   await writeFile(largeFixturePath, JSON.stringify(createLargePixelDocument()), 'utf8')
@@ -1502,6 +1509,10 @@ try {
     generatedAt: new Date().toISOString(),
     node: process.version,
     browser: 'Microsoft Edge via Playwright (Browser plugin unavailable)',
+    bridge: {
+      type: bridgeExecutable ? 'self-contained-sidecar' : 'source',
+      file: bridgeExecutable ? basename(bridgeExecutable) : 'server/index.mjs',
+    },
     soakMinutes,
     preflightOnly,
     profileSummary,

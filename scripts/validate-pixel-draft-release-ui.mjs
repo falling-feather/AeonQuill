@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { cpus, platform, release, totalmem } from 'node:os'
-import { resolve } from 'node:path'
+import { basename, isAbsolute, resolve } from 'node:path'
 import { chromium } from 'playwright'
 
 import { createPixelDocument, serializePixelDocument } from '../src/lib/pixel/pixelCore.mjs'
@@ -10,7 +10,12 @@ import { startIsolatedBridge } from './qa-runtime.mjs'
 
 const PROJECT_ID = 'pixel-draft-release-project'
 const DOCUMENT_ID = 'pixel-draft-release-document'
-const REPORT_PATH = resolve('.runtime', 'qa', 'pixel-draft-release.json')
+const bridgeArgument = process.argv.find((argument) => argument.startsWith('--bridge-executable='))
+const bridgeInput = bridgeArgument?.slice('--bridge-executable='.length)
+if (bridgeInput !== undefined && !isAbsolute(bridgeInput)) throw new Error('--bridge-executable must be an absolute executable path')
+const bridgeExecutable = bridgeInput === undefined ? null : resolve(bridgeInput)
+if (bridgeExecutable) await access(bridgeExecutable)
+const REPORT_PATH = resolve('.runtime', 'qa', bridgeExecutable ? 'pixel-draft-release-installed.json' : 'pixel-draft-release.json')
 const EDGE_PATHS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
@@ -119,7 +124,14 @@ let report = {
 try {
   if (!edgePath) throw new Error('Microsoft Edge executable was not found in the standard Windows installation paths')
   await mkdir(resolve('.runtime', 'qa'), { recursive: true })
-  bridge = await startIsolatedBridge('pixel-draft-release', { comfyPolicy: 'manual' })
+  bridge = await startIsolatedBridge('pixel-draft-release', {
+    comfyPolicy: 'manual',
+    ...(bridgeExecutable ? { executablePath: bridgeExecutable } : {}),
+  })
+  report.bridge = {
+    type: bridgeExecutable ? 'self-contained-sidecar' : 'source',
+    file: bridgeExecutable ? basename(bridgeExecutable) : 'server/index.mjs',
+  }
 
   const created = createWorkspaceProject(createProjectCatalog(), {
     title: 'PIXEL-DRAFT RELEASE 性能释放', initialModeId: 'pixel', color: 'violet',
