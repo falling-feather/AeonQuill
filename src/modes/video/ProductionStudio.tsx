@@ -56,6 +56,7 @@ import {
   reconcileMediaRunJob,
   type MediaRun,
   type MediaRunKind,
+  type MediaRunPreparation,
 } from '../../lib/story/mediaSupervisor.mjs'
 import {
   AGENT_ADAPTER_STATUS_EVENT,
@@ -91,12 +92,14 @@ export type MediaStepPreparation = {
   targetId: string | null
   inputFingerprint: string
   requestSummary: string
+  preparation?: MediaRunPreparation
 }
 
 export type MediaStepPreparationInput = {
   nodeId: string
   kind: MediaRunKind
   targetId: string | null
+  preparation?: MediaRunPreparation
 }
 
 type ProductionStudioProps = {
@@ -410,6 +413,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
         targetId: prepared.targetId,
         inputFingerprint: prepared.inputFingerprint,
         requestSummary: prepared.requestSummary,
+        ...(prepared.preparation === undefined ? {} : { preparation: prepared.preparation }),
       }, { now: Math.max(Date.now(), projectRef.current.updatedAt) })
       execute('media-runs.propose', { run }, `已提出${option.label}媒体任务；确认前不会调用真实执行器。`)
     } catch (error) {
@@ -424,7 +428,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
     }
     mediaConfirmInFlightRef.current.add(run.id)
     try {
-      const prepared = await onPrepareMediaStep?.({ nodeId: run.nodeId, kind: run.kind, targetId: run.targetId })
+      const prepared = await onPrepareMediaStep?.({ nodeId: run.nodeId, kind: run.kind, targetId: run.targetId, preparation: run.preparation })
       assertCanConfirmMediaRun(projectRef.current, run.id, {
         currentInputFingerprint: prepared?.inputFingerprint,
         hasPreparedTarget: Boolean(prepared),
@@ -481,6 +485,7 @@ export function ProductionStudio({ active, runtimeLabel, workspaceProjectId, wor
         targetId: prepared.targetId,
         inputFingerprint: prepared.inputFingerprint,
         requestSummary: prepared.requestSummary,
+        ...(prepared.preparation === undefined ? {} : { preparation: prepared.preparation }),
       }, { now: Math.max(Date.now(), projectRef.current.updatedAt) })
       execute('media-runs.propose', { run: nextRun }, '已根据当前输入重新提出媒体任务；请再次确认后才会调用执行器。')
     } catch (error) {

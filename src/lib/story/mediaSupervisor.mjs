@@ -18,6 +18,7 @@ export const MEDIA_RUN_NODE_KINDS = Object.freeze({
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const FINGERPRINT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/u
 const ERROR_CODE = /^[A-Z0-9][A-Z0-9._:-]{0,119}$/u
+const SHA256 = /^[a-f0-9]{64}$/u
 const UNSAFE_SUMMARY = /(?:api[_ -]?key|access[_ -]?token|secret|password|authorization|bearer|https?:\/\/|file:\/\/|(?:^|\s)(?:[A-Za-z]:[\\/]|[\\/]|\.\.?[\\/])|(?:^|\s)(?:cmd|powershell|bash|sh)\b)/iu
 
 export class MediaSupervisorError extends Error {
@@ -68,11 +69,50 @@ function assertTimestamp(value, path) {
   return value
 }
 
+function optionalPair(value, idField, hashField, path, result) {
+  const hasId = Object.hasOwn(value, idField)
+  const hasHash = Object.hasOwn(value, hashField)
+  if (hasId !== hasHash) fail('MEDIA_PREPARATION_PAIR_REQUIRED', `${path}.${idField}和${hashField}必须成对出现`)
+  if (!hasId) return
+  result[idField] = safeId(value[idField], `${path}.${idField}`)
+  if (typeof value[hashField] !== 'string' || !SHA256.test(value[hashField])) {
+    fail('MEDIA_PREPARATION_INVALID_HASH', `${path}.${hashField}必须是64位小写SHA-256`)
+  }
+  result[hashField] = value[hashField]
+}
+
+export function normalizeMediaRunPreparation(kind, input) {
+  if (input === undefined) return undefined
+  const value = record(input, 'mediaRun.preparation')
+  if (value.kind !== kind || !['image', 'prepare-speech'].includes(kind)) {
+    fail('MEDIA_PREPARATION_KIND_MISMATCH', `媒体准备描述符kind必须与${kind}一致`)
+  }
+  if (kind === 'image') {
+    knownFields(value, new Set([
+      'kind', 'workflowId', 'sourceLibraryItemId', 'sourceContentHash',
+      'lastFrameLibraryItemId', 'lastFrameContentHash',
+    ]), 'mediaRun.preparation')
+    const result = {
+      kind: 'image',
+      workflowId: safeId(value.workflowId, 'mediaRun.preparation.workflowId'),
+    }
+    optionalPair(value, 'sourceLibraryItemId', 'sourceContentHash', 'mediaRun.preparation', result)
+    optionalPair(value, 'lastFrameLibraryItemId', 'lastFrameContentHash', 'mediaRun.preparation', result)
+    return result
+  }
+  knownFields(value, new Set(['kind', 'speechBudgetUsd']), 'mediaRun.preparation')
+  if (typeof value.speechBudgetUsd !== 'number' || !Number.isFinite(value.speechBudgetUsd)
+    || value.speechBudgetUsd < 0.01 || value.speechBudgetUsd > 50) {
+    fail('MEDIA_PREPARATION_INVALID_BUDGET', 'mediaRun.preparation.speechBudgetUsd必须在0.01到50之间')
+  }
+  return { kind: 'prepare-speech', speechBudgetUsd: value.speechBudgetUsd }
+}
+
 export function assertMediaRun(input, { nodeIds } = {}) {
   const run = record(input, 'mediaRun')
   knownFields(run, new Set([
     'id', 'nodeId', 'kind', 'targetId', 'inputFingerprint', 'requestSummary', 'status',
-    'jobId', 'createdAt', 'updatedAt', 'errorCode',
+    'jobId', 'createdAt', 'updatedAt', 'errorCode', 'preparation',
   ]), 'mediaRun')
   safeId(run.id, 'mediaRun.id')
   safeId(run.nodeId, 'mediaRun.nodeId')
@@ -89,6 +129,7 @@ export function assertMediaRun(input, { nodeIds } = {}) {
   assertTimestamp(run.updatedAt, 'mediaRun.updatedAt')
   if (run.updatedAt < run.createdAt) fail('MEDIA_INVALID_TIMESTAMP', 'mediaRun.updatedAt不能早于createdAt')
   if (run.errorCode !== null) boundedString(run.errorCode, 'mediaRun.errorCode', 120, ERROR_CODE)
+  if (Object.hasOwn(run, 'preparation')) normalizeMediaRunPreparation(run.kind, run.preparation)
   if (run.status === 'proposed' && run.jobId !== null) fail('MEDIA_PROPOSAL_JOB_BOUND', 'proposed媒体提议不能绑定Job')
   if (['queued', 'running', 'completed', 'failed', 'cancelled'].includes(run.status) && run.jobId === null) {
     fail('MEDIA_JOB_REQUIRED', `${run.status}媒体记录必须引用受管Job`)
@@ -107,7 +148,7 @@ function stableToken(value) {
 
 export function createMediaRunProposal(input, { now = Date.now(), idFactory } = {}) {
   const value = record(input, 'mediaRunProposal')
-  knownFields(value, new Set(['id', 'nodeId', 'kind', 'targetId', 'inputFingerprint', 'requestSummary']), 'mediaRunProposal')
+  knownFields(value, new Set(['id', 'nodeId', 'kind', 'targetId', 'inputFingerprint', 'requestSummary', 'preparation']), 'mediaRunProposal')
   const createdAt = assertTimestamp(now, 'now')
   const proposal = {
     id: value.id ?? `media-run-${stableToken(`${value.nodeId}|${value.kind}|${value.targetId ?? ''}|${value.inputFingerprint}|${createdAt}`)}`,
@@ -121,6 +162,7 @@ export function createMediaRunProposal(input, { now = Date.now(), idFactory } = 
     createdAt,
     updatedAt: createdAt,
     errorCode: null,
+    ...(value.preparation === undefined ? {} : { preparation: normalizeMediaRunPreparation(value.kind, value.preparation) }),
   }
   if (idFactory) proposal.id = idFactory(proposal)
   return assertMediaRun(proposal)

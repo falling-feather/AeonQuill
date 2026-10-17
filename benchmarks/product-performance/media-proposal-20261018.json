@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "generatedAt": "2026-10-17T20:50:50.598Z",
+  "issues": [],
+  "checks": [
+    "proposal and rejection create no media job",
+    "explicit confirmation creates one scoped Job; completion requires human approval",
+    "refresh restores execution without repeating it",
+    "first proposal records both reference IDs and version hashes",
+    "refresh restores the saved workflow and both reference versions for one confirmed Job",
+    "changed reference version is rejected before a new Job and leaves the proposal intact",
+    "non-default speech budget is persisted as a preparation descriptor",
+    "refresh restores the non-default speech budget; unconfigured TTS rejects before creating a Job"
+  ],
+  "job": {
+    "id": "custom-run-93a9d7b1-4ae8-4ffd-999d-6ece555ffda4",
+    "kind": "custom-workflow",
+    "status": "completed",
+    "mediaBinding": {
+      "projectId": "media-supervisor-ui-project",
+      "documentId": "media-supervisor-ui-document",
+      "runId": "media-run-6ufx3d",
+      "inputFingerprint": "5f758fd32d76303a19a825dedaadbb8f554c226f5968643d0d682a0c884cd233"
+    }
+  },
+  "sourceScope": "Working-tree preparation recovery integration; mock provider engineering only.",
+  "qualityScope": "No real GPU, paid BYOK or human media quality conclusion."
+}

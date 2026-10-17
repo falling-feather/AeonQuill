@@ -15,6 +15,7 @@ import {
   confirmMediaRun,
   createMediaRunProposal,
   evaluateMediaSupervisor,
+  normalizeMediaRunPreparation,
   reconcileMediaRunJob,
 } from '../src/lib/story/mediaSupervisor.mjs'
 
@@ -248,4 +249,57 @@ test('rejected and stale proposals cannot be attached or executed', () => {
     () => assertCanConfirmMediaRun(edited, staleRun.id, { currentInputFingerprint: 'new-fingerprint' }),
     (error) => error.code === 'MEDIA_INPUT_STALE',
   )
+})
+
+test('media preparation descriptors are strict, copied, kind-bound, and preserve legacy records', () => {
+  const imageInput = {
+    kind: 'image',
+    workflowId: 'workflow-image',
+    sourceLibraryItemId: 'library-source',
+    sourceContentHash: 'a'.repeat(64),
+    lastFrameLibraryItemId: 'library-last',
+    lastFrameContentHash: 'b'.repeat(64),
+  }
+  const image = normalizeMediaRunPreparation('image', imageInput)
+  assert.deepEqual(image, imageInput)
+  imageInput.sourceLibraryItemId = 'mutated'
+  assert.equal(image.sourceLibraryItemId, 'library-source')
+  const speech = normalizeMediaRunPreparation('prepare-speech', { kind: 'prepare-speech', speechBudgetUsd: 12.5 })
+  assert.deepEqual(speech, { kind: 'prepare-speech', speechBudgetUsd: 12.5 })
+  assert.equal(normalizeMediaRunPreparation('video', undefined), undefined)
+  const legacy = proposal()
+  assert.equal(Object.hasOwn(legacy, 'preparation'), false)
+  const described = createMediaRunProposal({
+    id: 'media-run-prepared', nodeId: 'asset-producer', kind: 'image', targetId: 'workflow-image',
+    inputFingerprint: legacy.inputFingerprint, requestSummary: legacy.requestSummary, preparation: image,
+  }, { now: 2_000 })
+  assert.deepEqual(described.preparation, image)
+  const projectWithPreparation = apply(approvedVideoProject(), 'media-runs.propose', { run: described })
+  const restored = deserializeVideoProductionProject(serializeVideoProductionProject(projectWithPreparation))
+  assert.deepEqual(restored.mediaRuns[0].preparation, image)
+  const speechRun = createMediaRunProposal({
+    id: 'media-run-speech-prepared', nodeId: 'sound-director', kind: 'prepare-speech', targetId: null,
+    inputFingerprint: legacy.inputFingerprint, requestSummary: legacy.requestSummary,
+    preparation: speech,
+  }, { now: 2_001 })
+  const restoredSpeech = deserializeVideoProductionProject(serializeVideoProductionProject(
+    apply(approvedVideoProject(), 'media-runs.propose', { run: speechRun }),
+  ))
+  assert.deepEqual(restoredSpeech.mediaRuns[0].preparation, speech)
+  const legacyProject = apply(approvedVideoProject(), 'media-runs.propose', { run: legacy })
+  assert.equal(Object.hasOwn(JSON.parse(serializeVideoProductionProject(legacyProject)).mediaRuns[0], 'preparation'), false)
+  for (const [kind, value, code] of [
+    ['image', { kind: 'prepare-speech', speechBudgetUsd: 1 }, 'MEDIA_PREPARATION_KIND_MISMATCH'],
+    ['image', { kind: 'image', workflowId: 'workflow-image', sourceContentHash: 'a'.repeat(64) }, 'MEDIA_PREPARATION_PAIR_REQUIRED'],
+    ['image', { kind: 'image', workflowId: 'workflow-image', sourceLibraryItemId: 'library-source', sourceContentHash: 'A'.repeat(64) }, 'MEDIA_PREPARATION_INVALID_HASH'],
+    ['image', { kind: 'image', workflowId: 'workflow-image', sourceLibraryItemId: 'C:\\secret', sourceContentHash: 'a'.repeat(64) }, 'MEDIA_INVALID_ID'],
+    ['image', { kind: 'image', workflowId: 'workflow-image', prompt: 'secret' }, 'MEDIA_UNKNOWN_FIELD'],
+    ['prepare-speech', { kind: 'prepare-speech', speechBudgetUsd: 0 }, 'MEDIA_PREPARATION_INVALID_BUDGET'],
+    ['prepare-speech', { kind: 'prepare-speech', speechBudgetUsd: 51 }, 'MEDIA_PREPARATION_INVALID_BUDGET'],
+  ]) {
+    assert.throws(
+      () => normalizeMediaRunPreparation(kind, value),
+      (error) => error.code === code,
+    )
+  }
 })

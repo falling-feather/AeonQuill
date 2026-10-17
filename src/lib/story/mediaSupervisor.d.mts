@@ -6,6 +6,16 @@ export const MEDIA_RUN_STATUSES: readonly ['proposed', 'rejected', 'queued', 'ru
 export const MEDIA_RUN_NODE_KINDS: Readonly<Record<string, readonly string[]>>
 
 export type MediaRunKind = 'image' | 'video' | 'prepare-speech' | 'render-mix' | 'final-cut'
+export type MediaRunPreparation =
+  | {
+    kind: 'image'
+    workflowId: string
+    sourceLibraryItemId?: string
+    sourceContentHash?: string
+    lastFrameLibraryItemId?: string
+    lastFrameContentHash?: string
+  }
+  | { kind: 'prepare-speech'; speechBudgetUsd: number }
 export type MediaRunStatus = 'proposed' | 'rejected' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type MediaRun = {
   id: string
@@ -19,9 +29,11 @@ export type MediaRun = {
   createdAt: number
   updatedAt: number
   errorCode: string | null
+  preparation?: MediaRunPreparation
 }
 export class MediaSupervisorError extends Error { code: string; details?: unknown }
 export function assertMediaRun(input: unknown, options?: { nodeIds?: ReadonlySet<string> }): MediaRun
+export function normalizeMediaRunPreparation(kind: MediaRunKind, input: unknown): MediaRunPreparation | undefined
 export function createMediaRunProposal(input: Omit<MediaRun, 'id' | 'status' | 'jobId' | 'createdAt' | 'updatedAt' | 'errorCode'> & { id?: string }, options?: { now?: number; idFactory?: (proposal: MediaRun) => string }): MediaRun
 export function assertMediaJobForRun(run: MediaRun, job: ProcessingJob, options?: { projectId?: string; documentId?: string }): ProcessingJob
 export function assertCanConfirmMediaRun(project: { globalPaused: boolean; nodes: Array<{ id: string; status: string; dependsOn: string[] }>; mediaRuns: MediaRun[] }, runId: string, options?: { currentInputFingerprint?: string; hasPreparedTarget?: boolean }): MediaRun

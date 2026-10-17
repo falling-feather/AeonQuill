@@ -103,7 +103,7 @@ import type { ProcessingJob, RuntimeStatus, VideoJobRequest, SoundRenderJobReque
 import { listLibraryAssets, type LibraryAsset, type LibraryAssetInsertion } from '../../lib/libraryApi'
 import { createCustomWorkflowJob, fetchWorkflowCenterCatalog, type CustomWorkflowSummary } from '../../lib/workflowCenterApi'
 import { mediaJobFingerprint } from '../../lib/story/mediaJobBinding.mjs'
-import type { MediaRun } from '../../lib/story/mediaSupervisor.mjs'
+import { normalizeMediaRunPreparation, type MediaRun, type MediaRunPreparation } from '../../lib/story/mediaSupervisor.mjs'
 import {
   ProductionStudio,
   type ApprovedProductionStorySource,
@@ -136,7 +136,7 @@ export type SmartVideoWorkbenchProps = {
 }
 
 type PreparedMediaCall =
-  | { kind: 'image'; targetId: string; request: CustomWorkflowJobRequest }
+  | { kind: 'image'; targetId: string; request: CustomWorkflowJobRequest; preparation: MediaRunPreparation }
   | { kind: 'video'; targetId: string; itemId: string; request: VideoJobRequest }
   | { kind: 'prepare-speech' | 'render-mix'; targetId: null; request: SoundRenderJobRequest }
   | { kind: 'final-cut'; targetId: null; request: FinalCutJobRequest }
@@ -1065,20 +1065,49 @@ export function SmartVideoWorkbench({
     let prepared: PreparedMediaCall
     let requestSummary: string
     if (input.kind === 'image') {
-      const workflowId = input.targetId ?? mediaWorkflowId
+      const savedPreparation = input.preparation?.kind === 'image' ? input.preparation : undefined
+      if (input.preparation && !savedPreparation) throw new Error('图片媒体准备描述符类型不匹配，请重新提议')
+      const workflowId = savedPreparation?.workflowId ?? input.targetId ?? mediaWorkflowId
       const workflow = mediaWorkflows.find(({ id, enabled }) => id === workflowId && enabled)
       if (!workflow) throw new Error('请先选择已启用的素材工作流')
-      if (workflow.mappings.sourceImage && !mediaSourceId) throw new Error('请为素材工作流选择参考图')
-      if (workflow.mappings.lastFrame && !mediaLastSourceId) throw new Error('请为素材工作流选择第二张参考图')
+      const sourceLibraryItemId = savedPreparation?.sourceLibraryItemId ?? mediaSourceId
+      const sourceContentHash = savedPreparation?.sourceContentHash
+        ?? mediaAssets.find(({ id }) => id === sourceLibraryItemId)?.version.assetId
+      const lastFrameLibraryItemId = savedPreparation?.lastFrameLibraryItemId ?? mediaLastSourceId
+      const lastFrameContentHash = savedPreparation?.lastFrameContentHash
+        ?? mediaAssets.find(({ id }) => id === lastFrameLibraryItemId)?.version.assetId
+      if (workflow.mappings.sourceImage && !sourceLibraryItemId) throw new Error('请为素材工作流选择参考图')
+      if (workflow.mappings.lastFrame && !lastFrameLibraryItemId) throw new Error('请为素材工作流选择第二张参考图')
+      if (workflow.mappings.sourceImage && !sourceContentHash) throw new Error('参考图当前版本不可用，请重新提议')
+      if (workflow.mappings.lastFrame && !lastFrameContentHash) throw new Error('第二张参考图当前版本不可用，请重新提议')
+      if (savedPreparation?.sourceLibraryItemId) {
+        const currentAsset = mediaAssets.find(({ id }) => id === savedPreparation.sourceLibraryItemId)
+        if (!currentAsset || currentAsset.version.assetId !== savedPreparation.sourceContentHash) {
+          throw new Error('参考图版本已变化，请重新提议媒体任务')
+        }
+      }
+      if (savedPreparation?.lastFrameLibraryItemId) {
+        const currentAsset = mediaAssets.find(({ id }) => id === savedPreparation.lastFrameLibraryItemId)
+        if (!currentAsset || currentAsset.version.assetId !== savedPreparation.lastFrameContentHash) {
+          throw new Error('第二张参考图版本已变化，请重新提议媒体任务')
+        }
+      }
       const node = current.production.nodes.find(({ id }) => id === 'asset-producer')
+      const preparation = normalizeMediaRunPreparation('image', {
+        kind: 'image',
+        workflowId,
+        ...(workflow.mappings.sourceImage ? { sourceLibraryItemId, sourceContentHash } : {}),
+        ...(workflow.mappings.lastFrame ? { lastFrameLibraryItemId, lastFrameContentHash } : {}),
+      })
+      if (!preparation || preparation.kind !== 'image') throw new Error('图片媒体准备描述符生成失败，请重新提议')
       prepared = { kind: 'image', targetId: workflow.id, request: {
         customWorkflowId: workflow.id, projectId: workspaceProjectId,
         workflowHash: workflow.hash, mappingHash: workflow.mappingHash,
         title: `${current.production.title} · 素材候选`.slice(0, 120),
         prompt: [current.production.brief, node?.instructions, node?.outputSummary].filter(Boolean).join('\n').slice(0, 8000),
-        ...(workflow.mappings.sourceImage ? { sourceLibraryItemId: mediaSourceId, sourceContentHash: mediaAssets.find(({ id }) => id === mediaSourceId)?.version.assetId } : {}),
-        ...(workflow.mappings.lastFrame ? { lastFrameLibraryItemId: mediaLastSourceId, lastFrameContentHash: mediaAssets.find(({ id }) => id === mediaLastSourceId)?.version.assetId } : {}),
-      } }
+        ...(workflow.mappings.sourceImage ? { sourceLibraryItemId, sourceContentHash } : {}),
+        ...(workflow.mappings.lastFrame ? { lastFrameLibraryItemId, lastFrameContentHash } : {}),
+      }, preparation }
       requestSummary = `本地素材工作流：${workflow.title}。生成后进入项目资源库，由你选择和绑定。`
     } else if (input.kind === 'video') {
       const target = current.production.continuityGraph.shots.find((shot) => input.targetId
@@ -1102,18 +1131,26 @@ export function SmartVideoWorkbench({
       } }
       requestSummary = `本地 H3 · ${target.label} · ${submission.request.duration} 秒 · ${mediaPreset === 'fast' ? '快速预览' : 'Base 质量档'}。完成后进入镜头候选，等待人工复核。`
     } else if (input.kind === 'prepare-speech' || input.kind === 'render-mix') {
-      if (input.kind === 'prepare-speech' && (!Number.isFinite(mediaSpeechBudget) || mediaSpeechBudget < 0.01 || mediaSpeechBudget > 50)) throw new Error('配音费用上限应为 0.01–50 美元')
+      const savedPreparation = input.preparation?.kind === 'prepare-speech' ? input.preparation : undefined
+      if (input.preparation && !savedPreparation) throw new Error('声音媒体准备描述符类型不匹配，请重新提议')
+      const speechBudgetUsd = savedPreparation?.speechBudgetUsd ?? mediaSpeechBudget
+      if (input.kind === 'prepare-speech' && (!Number.isFinite(speechBudgetUsd) || speechBudgetUsd < 0.01 || speechBudgetUsd > 50)) throw new Error('配音费用上限应为 0.01–50 美元')
       const soundIdentity = {
         projectId: workspaceProjectId, documentId,
         productionRevision: current.production.revision, soundTimelineRevision: current.production.soundTimeline.revision,
         title: `${current.production.title} · ${input.kind === 'prepare-speech' ? '配音' : '混音字幕'}`.slice(0, 120),
       }
       const request: SoundRenderJobRequest = input.kind === 'prepare-speech'
-        ? { ...soundIdentity, action: 'prepare-speech', format: 'mp3', speechBudgetUsd: mediaSpeechBudget }
+        ? { ...soundIdentity, action: 'prepare-speech', format: 'mp3', speechBudgetUsd }
         : { ...soundIdentity, action: 'render-mix' }
-      prepared = { kind: input.kind, targetId: null, request }
+      prepared = {
+        kind: input.kind,
+        targetId: null,
+        request,
+        ...(input.kind === 'prepare-speech' ? { preparation: normalizeMediaRunPreparation('prepare-speech', { kind: 'prepare-speech', speechBudgetUsd }) } : {}),
+      }
       requestSummary = input.kind === 'prepare-speech'
-        ? `使用本次配置的语音服务，为缺失的对白生成配音；费用上限 ${mediaSpeechBudget.toFixed(2)} 美元，完成后需试听批准。`
+        ? `使用本次配置的语音服务，为缺失的对白生成配音；费用上限 ${speechBudgetUsd.toFixed(2)} 美元，完成后需试听批准。`
         : '按当前已批准的音频、字幕和混音设置生成本地声音版本。'
     } else {
       const sourceJobIds = current.production.continuityGraph.shots.map((shot) => {
@@ -1137,7 +1174,12 @@ export function SmartVideoWorkbench({
       if (!oldest) break
       preparedMediaRef.current.delete(oldest)
     }
-    return { targetId: prepared.targetId, inputFingerprint, requestSummary }
+    return {
+      targetId: prepared.targetId,
+      inputFingerprint,
+      requestSummary,
+      ...('preparation' in prepared && prepared.preparation !== undefined ? { preparation: prepared.preparation } : {}),
+    }
   }
 
   const runControlledMediaStep = async (proposal: MediaRun) => {
