@@ -97,9 +97,10 @@ export async function startIsolatedBridge(label = 'qa', options = {}) {
   let child
   let sessionCookie = ''
   let stopped = false
+  const executablePath = options.executablePath || process.env.AEONQUILL_QA_BRIDGE_EXECUTABLE
 
   const spawnBridge = () => {
-    child = spawn(options.executablePath || process.execPath, options.executablePath ? [] : ['server/index.mjs'], {
+    child = spawn(executablePath || process.execPath, executablePath ? [] : ['server/index.mjs'], {
       cwd: projectRoot,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

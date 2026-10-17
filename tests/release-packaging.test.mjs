@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { Script } from 'node:vm'
 import { loadReleaseMetadata, resolveReleasePaths } from '../desktop/release/release-meta.mjs'
 import { validateReleaseManifestShape } from '../desktop/release/manifest-contract.mjs'
 import { FUNCTIONAL_TRACK } from '../desktop/release/product-identity.mjs'
@@ -17,6 +19,15 @@ import {
 } from '../desktop/shared/portable-layout.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+
+test('the LoRA catalog is transformed into the CommonJS dependency required by the packaged entry', async () => {
+  const require = createRequire(import.meta.url)
+  const { transformESMtoCJS } = require(join(projectRoot, 'node_modules', '@yao-pkg', 'pkg', 'lib-es5', 'esm-transformer.js'))
+  const filename = join(projectRoot, 'server', 'lora-catalog.mjs')
+  const transformed = transformESMtoCJS(await readFile(filename, 'utf8'), filename)
+  assert.equal(transformed.isTransformed, true, 'The runtime importer requires lora-catalog.js; untransformed .mjs fallback cannot satisfy it')
+  assert.doesNotThrow(() => new Script(transformed.code, { filename: 'lora-catalog.js' }))
+})
 
 test('desktop release identity and version mirrors resolve from package.json', async () => {
   const metadata = await loadReleaseMetadata(projectRoot)

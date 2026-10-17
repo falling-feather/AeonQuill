@@ -197,7 +197,7 @@ export class LoraCatalog {
     if (!this.opened) throw catalogError('LORA_CATALOG_NOT_OPEN', '请先打开LoRA catalog')
   }
 
-  async #scan() {
+  #scan = async () => {
     this.#assertOpen()
     const warnings = []
     const models = []

@@ -272,5 +272,17 @@
     "Fixtures prove software contracts, not model/voice quality.",
     "Real SAM, Qwen, H3 and alignment samples are separately recorded.",
     "No LoRA training without meaningful topic and authorized train/validation data."
-  ]
+  ],
+  "nativeBuildFollowup": {
+    "attemptedTrack": "V0.7.109",
+    "startup": "failed: lora-catalog.js absent after pkg private-async-method false TLA detection",
+    "installed": false,
+    "fixTrack": "V0.7.110",
+    "fullUnitAfterFix": {
+      "total": 575,
+      "passed": 574,
+      "skipped": 1
+    },
+    "installedWitness": "REL-023 follows"
+  }
 }
