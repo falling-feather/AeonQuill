@@ -686,6 +686,7 @@ export default function ProductApp() {
   const pixelBridgeSaveTimerRef = useRef<number | undefined>(undefined)
   const pixelBridgeSaveRef = useRef<string | undefined>(undefined)
   const unsavedPixelDraftsRef = useRef(new Map<string, PixelDraftSnapshot>())
+  const pixelSerializationAttemptsRef = useRef(new Map<string, number>())
   const packageInputRef = useRef<HTMLInputElement>(null)
   const packageBusyRef = useRef(false)
   const [workspaceDocumentResolvedKey, setWorkspaceDocumentResolvedKey] = useState<string | null>(null)
@@ -1738,101 +1739,126 @@ export default function ProductApp() {
     if (value && bridgeReadyRef.current) void saveClientState('pixel-document', value).catch(() => undefined)
   }, [])
 
-  const handlePixelChange = useCallback((next: PixelDocument) => {
+  const handlePixelChange = useCallback(async (next: PixelDocument) => {
     const catalogDocumentId = activeWorkspaceProjectId && activeModeDocumentMode === 'pixel'
       ? activeModeDocumentId
       : undefined
     const storageKey = pixelStorageKey(catalogDocumentId)
+    const serializationAttempt = (pixelSerializationAttemptsRef.current.get(storageKey) ?? 0) + 1
+    pixelSerializationAttemptsRef.current.set(storageKey, serializationAttempt)
     const usesLegacyBridge = !catalogDocumentId
     const agentCommit = catalogDocumentId ? takeWorkspaceCreativePlanCommit(catalogDocumentId) : null
-    if (!isMeaningfulPixelDraft(next)) {
-      const serialized = serializePixelDocument(next)
-      if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
-      try { localStorage.setItem(storageKey, serialized) } catch { /* surfaced after the first meaningful edit */ }
-      if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
-      setPixelDraft({ status: 'empty', document: next })
-      if (agentCommit) commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
-      return
-    }
-    const serialized = serializePixelDocument(next)
-    if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
-    let browserStored = true
+    const pendingDraft: PixelDraftSnapshot = { status: 'ready', document: next }
+    if (catalogDocumentId && !agentCommit) unsavedPixelDraftsRef.current.set(catalogDocumentId, pendingDraft)
+    setPixelDraft(agentCommit ? { ...pendingDraft, backedByWorkspace: true } : pendingDraft)
     try {
-      localStorage.setItem(storageKey, serialized)
-    } catch {
-      browserStored = false
-    }
-    if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
-    const durablyStored = browserStored || bridgeReadyRef.current
-    const snapshot: PixelDraftSnapshot = durablyStored
-      ? { status: 'ready', document: next }
-      : {
-          status: 'error',
-          document: next,
-          error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
-        }
-    if (catalogDocumentId && !agentCommit) unsavedPixelDraftsRef.current.set(catalogDocumentId, snapshot)
-    setPixelDraft(agentCommit ? { ...snapshot, backedByWorkspace: true } : snapshot)
-    if (catalogDocumentId && activeWorkspaceProjectId) {
-      if (agentCommit) {
-        unsavedPixelDraftsRef.current.delete(catalogDocumentId)
-        commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
-      } else if (bridgeReadyRef.current) {
-        void saveWorkspaceModeDocument({
-          projectId: activeWorkspaceProjectId,
-          documentId: catalogDocumentId,
-          modeId: 'pixel',
-          revision: next.revision,
-          value: serialized,
-          reason: 'pixel-autosave',
-        }).then(() => {
-          if (unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next) {
-            unsavedPixelDraftsRef.current.delete(catalogDocumentId)
-          }
-          setPixelDraft((current) => {
-            if (current.document !== next) return current
-            return pixelRouteRef.current === catalogDocumentId
-              ? { status: 'ready', document: next, backedByWorkspace: true }
-              : { status: 'empty' }
-          })
-        }).catch((error) => {
-          const conflict = error instanceof ProjectApiError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT'
-          const failed: PixelDraftSnapshot = {
+      const { serializePixelDocumentOffThread } = await import('./lib/pixel/pixelPersistence.mjs')
+      const serialized = await serializePixelDocumentOffThread(next)
+      if (pixelSerializationAttemptsRef.current.get(storageKey) !== serializationAttempt) return
+      if (catalogDocumentId && !agentCommit
+        && unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document !== next) return
+
+      if (!isMeaningfulPixelDraft(next)) {
+        if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
+        try { localStorage.setItem(storageKey, serialized) } catch { /* surfaced after the first meaningful edit */ }
+        if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
+        setPixelDraft((current) => current.document === next ? { status: 'empty', document: next } : current)
+        if (agentCommit) commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+        return
+      }
+      if (usesLegacyBridge) clientStateDirtyRef.current.add('pixel-document')
+      let browserStored = true
+      try {
+        localStorage.setItem(storageKey, serialized)
+      } catch {
+        browserStored = false
+      }
+      if (usesLegacyBridge) queuePixelBridgeSave(serialized, next)
+      const durablyStored = browserStored || bridgeReadyRef.current
+      const snapshot: PixelDraftSnapshot = durablyStored
+        ? { status: 'ready', document: next }
+        : {
             status: 'error',
             document: next,
-            error: conflict
-              ? '像素文档已在另一页面更新；当前内存草稿仍保留，未覆盖 SQLite 版本。'
-              : '像素草稿仍在当前页面，但写入 SQLite 项目正文失败；刷新前请先导出。',
+            error: '像素草稿仍在当前页面，但项目文档存储写入失败；刷新前请先导出。',
           }
-          const isCurrent = unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next
-          if (isCurrent) {
-            unsavedPixelDraftsRef.current.set(catalogDocumentId, failed)
-          }
-          setPixelDraft((current) => current.document === next ? failed : current)
-          if (isCurrent && pixelRouteRef.current === catalogDocumentId) {
-            setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '像素项目正文保存失败' })
-          }
-        })
-      }
-      try {
-        if (!agentCommit) {
-          commitProjectCatalog(touchProjectDocument(
-            projectCatalogRef.current,
-            activeWorkspaceProjectId,
-            catalogDocumentId,
-            { title: next.name, revision: next.revision },
-          ))
+      if (catalogDocumentId && !agentCommit) unsavedPixelDraftsRef.current.set(catalogDocumentId, snapshot)
+      setPixelDraft((current) => current.document === next
+        ? agentCommit ? { ...snapshot, backedByWorkspace: true } : snapshot
+        : current)
+      if (catalogDocumentId && activeWorkspaceProjectId) {
+        if (agentCommit) {
+          unsavedPixelDraftsRef.current.delete(catalogDocumentId)
+          commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+        } else if (bridgeReadyRef.current) {
+          void saveWorkspaceModeDocument({
+            projectId: activeWorkspaceProjectId,
+            documentId: catalogDocumentId,
+            modeId: 'pixel',
+            revision: next.revision,
+            value: serialized,
+            reason: 'pixel-autosave',
+          }).then(() => {
+            if (unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next) {
+              unsavedPixelDraftsRef.current.delete(catalogDocumentId)
+            }
+            setPixelDraft((current) => {
+              if (current.document !== next) return current
+              return pixelRouteRef.current === catalogDocumentId
+                ? { status: 'ready', document: next, backedByWorkspace: true }
+                : { status: 'empty' }
+            })
+          }).catch((error) => {
+            const conflict = error instanceof ProjectApiError && error.code === 'WORKSPACE_DOCUMENT_CONFLICT'
+            const failed: PixelDraftSnapshot = {
+              status: 'error',
+              document: next,
+              error: conflict
+                ? '像素文档已在另一页面更新；当前内存草稿仍保留，未覆盖 SQLite 版本。'
+                : '像素草稿仍在当前页面，但写入 SQLite 项目正文失败；刷新前请先导出。',
+            }
+            const isCurrent = unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next
+            if (isCurrent) {
+              unsavedPixelDraftsRef.current.set(catalogDocumentId, failed)
+            }
+            setPixelDraft((current) => current.document === next ? failed : current)
+            if (isCurrent && pixelRouteRef.current === catalogDocumentId) {
+              setModeNotice({ tone: 'error', message: error instanceof Error ? error.message : '像素项目正文保存失败' })
+            }
+          })
         }
-      } catch (error) {
-        setProjectCatalogError(error instanceof Error ? error.message : '像素文档索引更新失败')
+        try {
+          if (!agentCommit) {
+            commitProjectCatalog(touchProjectDocument(
+              projectCatalogRef.current,
+              activeWorkspaceProjectId,
+              catalogDocumentId,
+              { title: next.name, revision: next.revision },
+            ))
+          }
+        } catch (error) {
+          setProjectCatalogError(error instanceof Error ? error.message : '像素文档索引更新失败')
+        }
+      } else if (route.modeId === 'pixel' && route.projectId !== next.id) {
+        replaceModeProjectReference('pixel', next.id)
       }
-    } else if (route.modeId === 'pixel' && route.projectId !== next.id) {
-      replaceModeProjectReference('pixel', next.id)
-    }
-    if (!browserStored) {
-      setModeNotice(bridgeReadyRef.current
-        ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到 SQLite 工作区。' }
-        : { tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
+      if (!browserStored) {
+        setModeNotice(bridgeReadyRef.current
+          ? { tone: 'info', message: '浏览器配额不足；像素草稿将保存到 SQLite 工作区。' }
+          : { tone: 'error', message: '像素草稿未能持久化；刷新前请先导出。' })
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '像素正文保存准备失败，内存草稿仍保留。'
+      const failed: PixelDraftSnapshot = {
+        status: 'error', document: next,
+        error: message,
+      }
+      const isCurrent = pixelSerializationAttemptsRef.current.get(storageKey) === serializationAttempt
+        && (!catalogDocumentId || unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next)
+      if (catalogDocumentId && isCurrent) unsavedPixelDraftsRef.current.set(catalogDocumentId, failed)
+      if (isCurrent) setPixelDraft((current) => current.document === next ? failed : current)
+      if (isCurrent && pixelRouteRef.current === (catalogDocumentId ?? next.id)) setModeNotice({ tone: 'error', message })
     }
   }, [activeModeDocumentId, activeModeDocumentMode, activeWorkspaceProjectId, commitProjectCatalog, queuePixelBridgeSave, replaceModeProjectReference, route.modeId, route.projectId])
 

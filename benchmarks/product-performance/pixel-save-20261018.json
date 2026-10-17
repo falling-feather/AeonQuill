@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.pixel-save-checkpoint",
+  "status": "targeted-passed",
+  "date": "2026-10-18",
+  "changes": [
+    "Large workspace request JSON escaping and UTF-8 encoding use a short-lived Worker; the canonical Blob encoder remains the fallback.",
+    "Large pixel document serialization uses the existing strict computation Worker; at most one active serializer per document.",
+    "Dirty memory drafts are registered before async work; superseded preparation cannot replace newer drafts or another active document."
+  ],
+  "validation": {
+    "targetedTests": 34,
+    "productionBuild": "passed-before-final-lifetime-guard",
+    "draftFailureRecovery": "passed",
+    "pixelFirstRoundUi": "passed",
+    "preflight": "passed",
+    "preflightSamples": [
+      {
+        "status": "ok",
+        "eventToHandlerMs": 2.2,
+        "handlerToFrameMs": 104.4
+      },
+      {
+        "status": "ok",
+        "eventToHandlerMs": 1.5,
+        "handlerToFrameMs": 86.5
+      },
+      {
+        "status": "ok",
+        "eventToHandlerMs": 2.2,
+        "handlerToFrameMs": 90
+      }
+    ]
+  },
+  "limits": [
+    "Three preflight samples are not a formal P95 or 30-minute result.",
+    "Final linked-Cel/schema integration and continuous latency verification remain under PERF-005.",
+    "The lifetime guard has direct cancellation/resource tests; a clean checkpoint build follows the local commit."
+  ]
+}

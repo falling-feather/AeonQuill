@@ -261,8 +261,6 @@ export async function loadWorkspaceModeDocument(
   return payload.document
 }
 
-const LARGE_WORKSPACE_BODY_CHARS = 1024 * 1024
-
 export function saveWorkspaceModeDocument(input: {
   projectId: string
   documentId: string
@@ -280,12 +278,8 @@ export function saveWorkspaceModeDocument(input: {
         ? workspaceDocumentRevisions.get(input.documentId) ?? null
         : null
       const { documentId, ...body } = input
-      const serializedBody = JSON.stringify({ ...body, baseRevision })
-      // Blob keeps fetch from copying a large BufferSource on the UI thread.
-      // Encode explicitly so the HTTP body remains the same UTF-8 JSON bytes.
-      const requestBody = serializedBody.length >= LARGE_WORKSPACE_BODY_CHARS
-        ? new Blob([new TextEncoder().encode(serializedBody)], { type: 'application/json' })
-        : serializedBody
+      const { prepareWorkspaceRequestBody } = await import('./workspaceRequestBody.mjs')
+      const requestBody = await prepareWorkspaceRequestBody({ ...body, baseRevision })
       const payload = await api<{ document: WorkspaceModeDocument }>(
         `/api/workspace/documents/${encodeURIComponent(documentId)}`,
         {

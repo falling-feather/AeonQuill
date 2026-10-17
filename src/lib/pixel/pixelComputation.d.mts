@@ -29,6 +29,7 @@ export type PixelComputationOperation =
   | 'clip-export'
   | 'pixel-export'
   | 'terrain-map-export'
+  | 'document-json'
 
 export type PixelComputationOptions =
   | ({ frameId: string; includeHiddenLayers?: boolean; paletteCycleElapsedMs?: number } & { budgetBytes?: number })

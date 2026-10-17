@@ -60,6 +60,14 @@ function request(document, operation, options = {}) {
   }
 }
 
+test('document-json serializes the complete authoritative document with unchanged JSON bytes', () => {
+  const document = makeDocument()
+  const response = runPixelComputation(request(document, 'document-json'))
+  assert.equal(response.result, JSON.stringify(document))
+  assert.equal(JSON.parse(response.result).frames.length, document.frames.length)
+  assert.throws(() => runPixelComputation(request(document, 'document-json', { extra: true })))
+})
+
 function makeTerrainDocument() {
   const document = makeDocument()
   document.frames[0].gameplay.tileRule = { terrainId: 'grass', bitmask: 0 }

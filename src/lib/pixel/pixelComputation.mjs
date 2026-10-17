@@ -5,6 +5,7 @@ import {
   renderPixelFrameRgba,
   renderPixelFramesRgba,
   renderSpriteSheetRgba,
+  serializePixelDocument,
 } from './pixelCore.mjs'
 import {
   convertRgbaToPixelDocument,
@@ -38,6 +39,7 @@ export const PIXEL_COMPUTATION_OPERATIONS = Object.freeze([
   'clip-export',
   'pixel-export',
   'terrain-map-export',
+  'document-json',
 ])
 
 const OPERATION_SET = new Set(PIXEL_COMPUTATION_OPERATIONS)
@@ -56,6 +58,7 @@ for (let index = 0; index < 256; index += 1) {
 const GENERATED_PALETTE_CACHE = new Map()
 const REQUEST_FIELDS = new Set(['requestId', 'documentId', 'revision', 'operation', 'document', 'options', 'source'])
 const OPERATION_OPTION_FIELDS = Object.freeze({
+  'document-json': new Set(['budgetBytes']),
   frame: new Set(['frameId', 'includeHiddenLayers', 'paletteCycleElapsedMs', 'budgetBytes']),
   frames: new Set(['frameIds', 'includeHiddenLayers', 'paletteCycleElapsedMs', 'budgetBytes']),
   'sprite-sheet': new Set(['columns', 'padding', 'spacing', 'paletteCycleElapsedMs', 'budgetBytes']),
@@ -369,6 +372,7 @@ function estimateImageConversion(sourceMetadata, options) {
 }
 
 function estimateComputation(document, operation, options, sourceMetadata, normalizedConversionOptions) {
+  if (operation === 'document-json') return { outputBytes: JSON.stringify(document).length * 2, intermediateBytes: 0 }
   const singleFrame = frameBytes(document)
   if (operation === 'frame') return { outputBytes: singleFrame, intermediateBytes: 0 }
   if (operation === 'frames') {
@@ -497,6 +501,8 @@ function executeOperation(document, operation, options, source) {
       return createPixelExportBundle(document, input)
     case 'terrain-map-export':
       return createPixelTerrainMapExportBundle(document, input)
+    case 'document-json':
+      return serializePixelDocument(document)
     default:
       fail('UNKNOWN_OPERATION', `Unsupported pixel computation operation ${String(operation)}`, { operation })
   }
