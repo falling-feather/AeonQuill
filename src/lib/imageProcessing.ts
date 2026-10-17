@@ -1,3 +1,4 @@
+import { IMAGE_EFFECT_MAX_EDGE, IMAGE_EFFECT_MAX_PIXELS } from './imageEffects.mjs'
 import type {
   CropSettings,
   ImageAdjustments,
@@ -361,6 +362,53 @@ export function imageAdjustmentFilter(adjustments?: ImageAdjustments) {
   return `brightness(${value.brightness}%) contrast(${value.contrast}%) saturate(${value.saturation}%)`
 }
 
+export type ImageAdjustmentRasterOptions = {
+  maxEdge?: number
+  maxPixels?: number
+}
+
+const LOCAL_RASTER_MAX_EDGE = IMAGE_EFFECT_MAX_EDGE
+const LOCAL_RASTER_MAX_PIXELS = IMAGE_EFFECT_MAX_PIXELS
+
+function assertRasterOutputBounds(
+  width: number,
+  height: number,
+  options: ImageAdjustmentRasterOptions = {},
+) {
+  const maxEdge = options.maxEdge ?? LOCAL_RASTER_MAX_EDGE
+  const maxPixels = options.maxPixels ?? LOCAL_RASTER_MAX_PIXELS
+  if (!Number.isSafeInteger(maxEdge) || maxEdge < 1 || maxEdge > LOCAL_RASTER_MAX_EDGE) {
+    throw new Error(`本地图像处理最大边必须是 1-${LOCAL_RASTER_MAX_EDGE} 的整数`)
+  }
+  if (!Number.isSafeInteger(maxPixels) || maxPixels < 1 || maxPixels > LOCAL_RASTER_MAX_PIXELS) {
+    throw new Error(`本地图像处理最大像素必须是 1-${LOCAL_RASTER_MAX_PIXELS} 的整数`)
+  }
+  if (width > maxEdge || height > maxEdge) {
+    throw new Error(`本地图像处理尺寸超过最大边 ${maxEdge}px；请先缩小或裁剪`)
+  }
+  if (width * height > maxPixels) {
+    throw new Error(`本地图像处理尺寸超过 ${maxPixels} 像素上限；请先缩小或裁剪`)
+  }
+}
+
+export async function createImageAdjustmentRaster(
+  src: string,
+  adjustments: ImageAdjustments,
+  options: ImageAdjustmentRasterOptions = {},
+) {
+  const image = await loadImage(src)
+  const width = image.naturalWidth
+  const height = image.naturalHeight
+  assertRasterOutputBounds(width, height, options)
+  const canvas = createCanvas(width, height)
+  const context = getContext(canvas)
+  context.clearRect(0, 0, width, height)
+  context.filter = imageAdjustmentFilter(adjustments)
+  context.drawImage(image, 0, 0, width, height)
+  context.filter = 'none'
+  return { url: canvas.toDataURL('image/png'), width, height }
+}
+
 export async function createPixelDraft(
   src: string,
   settings: PixelPreviewSettings,
@@ -440,7 +488,17 @@ export async function createBackgroundPreview(
   return { url: canvas.toDataURL('image/png'), width, height }
 }
 
-export async function createCropPreview(src: string, settings: CropSettings) {
+export type CropPreviewOptions = {
+  output?: 'preview' | 'full'
+  maxEdge?: number
+  maxPixels?: number
+}
+
+export async function createCropPreview(
+  src: string,
+  settings: CropSettings,
+  options: CropPreviewOptions = {},
+) {
   const image = await loadImage(src)
   const aspectMap: Record<CropSettings['aspect'], number> = {
     '1:1': 1,
@@ -449,12 +507,34 @@ export async function createCropPreview(src: string, settings: CropSettings) {
     '16:9': 16 / 9,
   }
   const ratio = aspectMap[settings.aspect]
-  const width = ratio >= 1 ? 640 : Math.round(640 * ratio)
-  const height = ratio >= 1 ? Math.round(640 / ratio) : 640
+  const fullOutput = options.output === 'full'
+  let width = ratio >= 1 ? 640 : Math.round(640 * ratio)
+  let height = ratio >= 1 ? Math.round(640 / ratio) : 640
+  if (fullOutput) {
+    let availableWidth: number
+    let availableHeight: number
+    if (ratio >= image.naturalWidth / image.naturalHeight) {
+      availableWidth = Math.max(1, Math.round(image.naturalWidth))
+      availableHeight = Math.max(1, Math.round(availableWidth / ratio))
+    } else {
+      availableHeight = Math.max(1, Math.round(image.naturalHeight))
+      availableWidth = Math.max(1, Math.round(availableHeight * ratio))
+    }
+    const zoom = clamp(settings.zoom, 1, 2.5)
+    width = Math.max(1, Math.floor(availableWidth / zoom))
+    height = Math.max(1, Math.floor(availableHeight / zoom))
+    assertRasterOutputBounds(width, height, options)
+  } else if (options.output !== undefined && options.output !== 'preview') {
+    throw new Error('裁剪输出模式必须是 preview 或 full')
+  }
   const canvas = createCanvas(width, height)
   const context = getContext(canvas)
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, width, height)
+  if (fullOutput) {
+    context.clearRect(0, 0, width, height)
+  } else {
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+  }
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
 

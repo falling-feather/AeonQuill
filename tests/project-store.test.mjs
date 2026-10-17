@@ -1,9 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { ProjectStore } from '../server/project-store.mjs'
+import { canvasLogicalAssetId, observeCanvasAssetVersions, reserveCanvasAssetVersion } from '../src/lib/canvasAssets.mjs'
+
+const projectTestTemp = fileURLToPath(new URL('../.runtime/test-temp/', import.meta.url))
 
 const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg=='
 const pixelVariant = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
@@ -26,7 +29,9 @@ function document(id = 'project-1', revision = 1) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'miaohui-project-store-'))
+  const parent = projectTestTemp
+  await mkdir(parent, { recursive: true })
+  const root = await mkdtemp(join(parent, 'miaohui-project-store-'))
   const store = await new ProjectStore(root).open()
   t.after(async () => {
     store.close()
@@ -116,6 +121,25 @@ test('records immutable logical asset versions with parent lineage', async (t) =
   }), (error) => error.code === 'ASSET_VERSION_CONFLICT')
 })
 
+test('effect asset versions stay monotonic when undo branches from an older image', async (t) => {
+  const { store } = await fixture(t)
+  const first = await store.saveProject(document('effect-branch', 1))
+  observeCanvasAssetVersions(first.id, first.assetVersions)
+  const image = first.document.elements[0]
+  const logicalId = canvasLogicalAssetId(image)
+  const second = await store.saveProject({ ...first.document, revision: 2, updatedAt: 3,
+    elements: [{ ...image, src: pixelVariant, assetVersion: reserveCanvasAssetVersion(first.id, logicalId, image.assetVersion) }] })
+  observeCanvasAssetVersions(second.id, second.assetVersions)
+  const undone = await store.saveProject({ ...first.document, revision: 3, updatedAt: 4 })
+  observeCanvasAssetVersions(undone.id, undone.assetVersions)
+  const version = reserveCanvasAssetVersion(first.id, logicalId, image.assetVersion)
+  assert.equal(version, 3)
+  const branch = await store.saveProject({ ...undone.document, revision: 4, updatedAt: 5,
+    elements: [{ ...image, assetVersion: version }] })
+  assert.deepEqual(branch.assetVersions.map((entry) => entry.version).sort(), [1, 2, 3])
+  assert.equal(branch.document.elements[0].assetVersion, 3)
+})
+
 test('failed saves are atomic and leave neither metadata nor staged blobs', async (t) => {
   const { root, store } = await fixture(t)
   const saved = await store.saveProject(document('atomic', 1))
@@ -144,7 +168,7 @@ test('portable package round-trips document, hashes and provenance', async (t) =
   assert.equal(manifest.assets.length, 1)
   assert.equal(manifest.assets[0].sha256, saved.assets[0].id)
 
-  const destinationRoot = await mkdtemp(join(tmpdir(), 'miaohui-project-import-'))
+  const destinationRoot = await mkdtemp(join(projectTestTemp, 'miaohui-project-import-'))
   const importedStore = await new ProjectStore(destinationRoot).open()
   try {
     const imported = await importedStore.importProject(exportDirectory, { projectId: 'portable-copy' })

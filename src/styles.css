@@ -2034,6 +2034,32 @@ textarea:focus-visible,
   background: #f2f3f5;
 }
 
+.aq-canvas-connection { width: min(420px, 100%); max-height: calc(100dvh - 48px); overflow: auto; border-radius: 12px; background: #fff; padding: 20px; box-shadow: 0 24px 70px #0f10173b; }
+.aq-canvas-connection header, .aq-canvas-connection footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.aq-canvas-connection h2 { margin: 0; font-size: 18px; }
+.aq-canvas-connection p { color: #626575; font-size: 13px; line-height: 1.6; }
+.aq-canvas-connection label { display: grid; gap: 6px; margin-block: 16px; font-size: 13px; }
+.aq-canvas-connection select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #dedfe5; border-radius: 6px; }
+.aq-canvas-connection footer button, .aq-canvas-connect-open, .aq-canvas-connection-details button { border: 1px solid #dedfe5; border-radius: 6px; padding: 7px 10px; background: #fafaff; cursor: pointer; }
+.aq-canvas-connection footer button:last-child { color: #fff; background: #6558d9; }
+.aq-canvas-connection button:disabled, .aq-canvas-connection-details button:disabled { opacity: .45; cursor: not-allowed; }
+.aq-canvas-connection [role="alert"] { color: #a43b45; }
+.aq-canvas-connect-open { margin: 8px 18px; }
+.aq-canvas-connection-details { padding: 18px; display: grid; gap: 12px; }
+.aq-canvas-connection-details p { overflow-wrap: anywhere; font-size: 12px; }
+.aq-effects-hint { font-size: 11px; line-height: 1.6; color: #747780; }
+.aq-effect-row { display: grid; gap: 6px; padding: 9px 0; border-bottom: 1px solid #ececf2; }
+.aq-effect-title { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.aq-effect-title span { display: grid; gap: 3px; min-width: 0; }
+.aq-effect-title strong { font-size: 12px; }
+.aq-effect-title small { font-size: 10px; color: #7c7e88; overflow-wrap: anywhere; }
+.aq-effect-title em { font-size: 9px; color: #6558d9; font-style: normal; }
+.aq-effect-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.aq-effect-actions button, .aq-effect-recipes button, .aq-effect-recipes label { display: inline-flex; gap: 5px; align-items: center; justify-content: center; border: 1px solid #dedfe5; border-radius: 5px; padding: 5px 7px; background: #fff; font-size: 10px; cursor: pointer; }
+.aq-effect-actions button:disabled, .aq-effect-recipes button:disabled { opacity: .4; cursor: not-allowed; }
+.aq-effect-recipes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.aq-effect-recipes small { flex-basis: 100%; color: #7c7e88; font-size: 10px; }
+
 .pixel-editor-body {
   min-height: 420px;
   display: grid;
@@ -4937,17 +4963,3 @@ button.video-frame-card {
     transition-duration: 0.01ms !important;
   }
 }
-
-.aq-canvas-connection { width: min(420px, 100%); max-height: calc(100dvh - 48px); overflow: auto; border-radius: 12px; background: #fff; padding: 20px; box-shadow: 0 24px 70px #0f10173b; }
-.aq-canvas-connection header, .aq-canvas-connection footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.aq-canvas-connection h2 { margin: 0; font-size: 18px; }
-.aq-canvas-connection p { color: #626575; font-size: 13px; line-height: 1.6; }
-.aq-canvas-connection label { display: grid; gap: 6px; margin-block: 16px; font-size: 13px; }
-.aq-canvas-connection select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #dedfe5; border-radius: 6px; }
-.aq-canvas-connection footer button, .aq-canvas-connect-open, .aq-canvas-connection-details button { border: 1px solid #dedfe5; border-radius: 6px; padding: 7px 10px; background: #fafaff; cursor: pointer; }
-.aq-canvas-connection footer button:last-child { color: #fff; background: #6558d9; }
-.aq-canvas-connection button:disabled, .aq-canvas-connection-details button:disabled { opacity: .45; cursor: not-allowed; }
-.aq-canvas-connection [role="alert"] { color: #a43b45; }
-.aq-canvas-connect-open { margin: 8px 18px; }
-.aq-canvas-connection-details { padding: 18px; display: grid; gap: 12px; }
-.aq-canvas-connection-details p { overflow-wrap: anywhere; font-size: 12px; }

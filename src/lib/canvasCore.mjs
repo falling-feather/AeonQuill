@@ -1,3 +1,5 @@
+import { assertMaskRecipe as assertSharedMaskRecipe } from './maskRecipe.mjs'
+import { normalizeImageEffectParameters } from './imageEffects.mjs'
 export const CANVAS_DOCUMENT_SCHEMA_VERSION = 1
 export const CANVAS_COMMAND_SCHEMA_VERSION = 1
 export const CANVAS_DRAFT_SCHEMA_VERSION = 1
@@ -9,8 +11,6 @@ const MAX_MEDIA_REFERENCE_LENGTH = 32 * 1024 * 1024
 const MAX_COORDINATE = 10_000_000
 const MAX_DIMENSION = 10_000_000
 const MAX_PROCESSING_STEPS = 64
-const MAX_MASK_STROKES = 512
-const MAX_MASK_POINTS = 20_000
 const ACTORS = new Set(['user', 'tool', 'agent', 'system'])
 const ELEMENT_KINDS = new Set([
   'poster',
@@ -39,13 +39,8 @@ const AGENT_PATCH_KEYS = new Set([
 ])
 const AGENT_CREATABLE_KINDS = new Set(['frame', 'text', 'note', 'shape', 'pixel', 'connector'])
 const PROCESSING_STEP_KEYS = new Set([
-  'id', 'type', 'label', 'detail', 'enabled', 'createdAt', 'outputSrc', 'maskRecipe',
+  'id', 'type', 'label', 'detail', 'enabled', 'createdAt', 'outputSrc', 'maskRecipe', 'parameters',
 ])
-const MASK_RECIPE_V1_KEYS = new Set(['schemaVersion', 'strokes'])
-const MASK_RECIPE_V2_KEYS = new Set(['schemaVersion', 'strokes', 'morphology'])
-const MASK_MORPHOLOGY_KEYS = new Set(['expand', 'feather', 'trim'])
-const MASK_STROKE_KEYS = new Set(['id', 'mode', 'size', 'hardness', 'points'])
-const MASK_POINT_KEYS = new Set(['x', 'y'])
 
 export class CanvasContractError extends Error {
   constructor(code, message, details = undefined) {
@@ -102,44 +97,7 @@ function assertCamera(camera, path = 'document.camera') {
 }
 
 function assertMaskRecipe(recipe, path) {
-  if (!isRecord(recipe)) fail('INVALID_MASK_RECIPE', `${path} must be an object`)
-  if (recipe.schemaVersion !== 1 && recipe.schemaVersion !== 2) {
-    fail('INVALID_MASK_RECIPE', `${path}.schemaVersion must be 1 or 2`)
-  }
-  assertExactKeys(recipe, recipe.schemaVersion === 2 ? MASK_RECIPE_V2_KEYS : MASK_RECIPE_V1_KEYS, path)
-  if (recipe.schemaVersion === 2) {
-    assertExactKeys(recipe.morphology, MASK_MORPHOLOGY_KEYS, `${path}.morphology`)
-    assertInteger(recipe.morphology.expand, `${path}.morphology.expand`, -32, 32)
-    assertInteger(recipe.morphology.feather, `${path}.morphology.feather`, 0, 32)
-    assertInteger(recipe.morphology.trim, `${path}.morphology.trim`, 0, 127)
-  }
-  if (!Array.isArray(recipe.strokes) || recipe.strokes.length > MAX_MASK_STROKES) {
-    fail('INVALID_MASK_RECIPE', `${path}.strokes must contain at most ${MAX_MASK_STROKES} strokes`)
-  }
-  let pointCount = 0
-  recipe.strokes.forEach((stroke, strokeIndex) => {
-    const strokePath = `${path}.strokes[${strokeIndex}]`
-    assertExactKeys(stroke, MASK_STROKE_KEYS, strokePath)
-    assertString(stroke.id, `${strokePath}.id`, { nonEmpty: true, maxLength: 160 })
-    if (stroke.mode !== 'remove' && stroke.mode !== 'restore') {
-      fail('INVALID_MASK_RECIPE', `${strokePath}.mode must be remove or restore`)
-    }
-    assertFiniteNumber(stroke.size, `${strokePath}.size`, 0.001, 0.75)
-    assertFiniteNumber(stroke.hardness, `${strokePath}.hardness`, 0, 1)
-    if (!Array.isArray(stroke.points) || !stroke.points.length) {
-      fail('INVALID_MASK_RECIPE', `${strokePath}.points must be a non-empty array`)
-    }
-    pointCount += stroke.points.length
-    if (pointCount > MAX_MASK_POINTS) {
-      fail('INVALID_MASK_RECIPE', `${path} exceeds ${MAX_MASK_POINTS} total points`)
-    }
-    stroke.points.forEach((point, pointIndex) => {
-      const pointPath = `${strokePath}.points[${pointIndex}]`
-      assertExactKeys(point, MASK_POINT_KEYS, pointPath)
-      assertFiniteNumber(point.x, `${pointPath}.x`, 0, 1)
-      assertFiniteNumber(point.y, `${pointPath}.y`, 0, 1)
-    })
-  })
+  assertSharedMaskRecipe(recipe, path, fail)
 }
 
 function assertProcessingStack(stack, path) {
@@ -159,6 +117,12 @@ function assertProcessingStack(stack, path) {
       assertString(step.outputSrc, `${stepPath}.outputSrc`, { maxLength: MAX_MEDIA_REFERENCE_LENGTH })
     }
     if (step.maskRecipe !== undefined) assertMaskRecipe(step.maskRecipe, `${stepPath}.maskRecipe`)
+    if (step.parameters !== undefined) {
+      let parameters
+      try { parameters = normalizeImageEffectParameters(step.parameters) }
+      catch (error) { fail('INVALID_PROCESSING_PARAMETERS', error.message, { path: `${stepPath}.parameters`, cause: error.code }) }
+      if (parameters.kind !== step.type) fail('INVALID_PROCESSING_PARAMETERS', `${stepPath}.parameters must match step.type`)
+    }
   })
 }
 

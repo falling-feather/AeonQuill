@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "task": "FE-006",
+  "status": "passed",
+  "command": "node scripts/validate-image-effects-ui.mjs",
+  "browser": "Microsoft Edge headless",
+  "unit": {
+    "total": 570,
+    "passed": 569,
+    "skipped": 1,
+    "failed": 0
+  },
+  "checks": [
+    "legacy-css-adjust-migrates-to-explicit-parameters",
+    "adjust-crop-mask-local-replay-order-toggle-recipe-undo-redo",
+    "two-size-batch-single-commit-and-locked-atomic-rejection",
+    "legacy-crop-clear-restores-source-ratio-and-33-image-budget-preflight",
+    "cancel-read-failure-and-processing-revision-conflict"
+  ],
+  "issues": [],
+  "sourceScope": "FE-006 working-tree integration, separate clean build and installed candidate gate",
+  "artifacts": [
+    ".runtime/qa/image-effects-ui.json",
+    ".runtime/qa/image-effects-ui-desktop.png",
+    ".runtime/qa/image-effects-ui-mobile.png"
+  ],
+  "qualityBoundary": "Local deterministic fixtures prove editing, atomicity and persistence; no model, training or human-blind quality claim."
+}

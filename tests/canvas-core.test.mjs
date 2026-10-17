@@ -30,6 +30,19 @@ const element = {
   zIndex: 1,
 }
 
+test('parameterized image steps round-trip strict local effects without changing legacy records', () => {
+  const step = { id: 'adjust-step', type: 'adjust', label: '调整', detail: '', enabled: true, createdAt: 1,
+    parameters: { kind: 'adjust', brightness: 110, contrast: 90, saturation: 80 } }
+  const image = { ...element, kind: 'image', src: '/assets/source.png', processingStack: [step] }
+  const value = createCanvasDocument({ elements: [image], camera })
+  assert.deepEqual(migrateCanvasDocument(JSON.parse(JSON.stringify(value))).elements[0].processingStack[0].parameters, step.parameters)
+  assert.throws(() => createCanvasDocument({ elements: [{ ...image, processingStack: [{ ...step, parameters: { ...step.parameters, unknown: true } }] }], camera }), CanvasContractError)
+  assert.throws(() => createCanvasDocument({ elements: [{ ...image, processingStack: [{ ...step, type: 'crop' }] }], camera }))
+  assert.throws(() => createCanvasDocument({ elements: [{ ...image, processingStack: [{ ...step, parameters: { ...step.parameters, contrast: Infinity } }] }], camera }))
+  const legacy = { ...step }; delete legacy.parameters
+  assert.equal(Object.hasOwn(createCanvasDocument({ elements: [{ ...image, processingStack: [legacy] }], camera }).elements[0].processingStack[0], 'parameters'), false)
+})
+
 function makeDocument() {
   return createCanvasDocument({
     id: 'test-project',

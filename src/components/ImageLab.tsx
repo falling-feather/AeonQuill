@@ -23,7 +23,6 @@ import {
 import {
   createBackgroundPreview,
   createCropPreview,
-  createMaskRefinement,
   createPixelDraft,
   createUpscalePreview,
   DEFAULT_IMAGE_ADJUSTMENTS,
@@ -41,6 +40,7 @@ import type {
   ProcessingJob,
   MaskDraft,
   MaskRecipe,
+  ProcessingStep,
   SemanticPoint,
   SemanticWorkflowManifest,
 } from '../types'
@@ -63,6 +63,7 @@ export type ImageLabResult =
       height: number
       detail: string
       maskRecipe?: MaskRecipe
+      crop?: CropSettings
     }
   | {
       kind: 'pixel'
@@ -73,9 +74,10 @@ export type ImageLabResult =
 type ImageLabProps = {
   element: CanvasElement
   initialMode: ImageLabMode
+  editingStep?: ProcessingStep
   projectId?: string
   onClose: () => void
-  onApply: (result: ImageLabResult) => void
+  onApply: (result: ImageLabResult) => void | Promise<void>
   onJobUpdate: (job: ProcessingJob) => void
 }
 
@@ -274,6 +276,7 @@ function ToggleSetting({
 export function ImageLab({
   element,
   initialMode,
+  editingStep,
   projectId,
   onClose,
   onApply,
@@ -281,10 +284,10 @@ export function ImageLab({
 }: ImageLabProps) {
   const [mode, setMode] = useState<ImageLabMode>(initialMode)
   const [adjustments, setAdjustments] = useState<ImageAdjustments>(
-    element.adjustments ?? DEFAULT_IMAGE_ADJUSTMENTS,
+    editingStep?.parameters?.kind === 'adjust' ? editingStep.parameters : DEFAULT_IMAGE_ADJUSTMENTS,
   )
   const [crop, setCrop] = useState<CropSettings>(
-    element.crop ?? {
+    editingStep?.parameters?.kind === 'crop' ? editingStep.parameters : {
       aspect: '1:1',
       zoom: 1,
       positionX: 50,
@@ -710,9 +713,9 @@ export function ImageLab({
     }
   }
 
-  const applyResult = async () => {
+  const applyResultUnchecked = async () => {
     if (mode === 'adjust') {
-      onApply({
+      await onApply({
         kind: 'adjust',
         adjustments,
         detail: `亮度 ${adjustments.brightness}% · 对比度 ${adjustments.contrast}% · 饱和度 ${adjustments.saturation}%`,
@@ -721,7 +724,7 @@ export function ImageLab({
     }
     if (mode === 'pixelate') {
       if (pixelDraft) {
-        onApply({
+        await onApply({
           kind: 'pixel',
           draft: pixelDraft,
           detail: `${pixelDraft.width} × ${pixelDraft.height} · ${pixelSettings.colorCount} 色`,
@@ -731,31 +734,8 @@ export function ImageLab({
     }
     if (mode === 'mask-refine') {
       if (!maskDraft?.recipe.strokes.length) return
-      const jobId = makeId('job')
-      const createdAt = Date.now()
-      setIsGenerating(true)
-      setError(null)
-      reportJob(jobId, createdAt, 'running', 20, '读取原图与归一化笔画')
-      try {
-        const result = await createMaskRefinement(source, maskDraft.recipe)
-        reportJob(jobId, createdAt, 'running', 86, '重建全分辨率 Alpha')
-        onApply({
-          kind: 'derived-image',
-          mode,
-          src: result.previewUrl,
-          width: result.width,
-          height: result.height,
-          detail: `${result.recipe.strokes.length} 笔 · Alpha 改变 ${result.changedPercent}%`,
-          maskRecipe: result.recipe,
-        })
-        reportJob(jobId, createdAt, 'completed', 100, `${result.width} × ${result.height} 蒙版结果已创建`)
-      } catch (reason) {
-        const message = reason instanceof Error ? reason.message : '蒙版输出失败'
-        setError(message)
-        reportJob(jobId, createdAt, 'failed', 100, message)
-      } finally {
-        setIsGenerating(false)
-      }
+      await onApply({ kind: 'derived-image', mode, src: maskDraft.previewUrl, width: maskDraft.width, height: maskDraft.height,
+        detail: `${maskDraft.recipe.strokes.length} 笔 · Alpha 改变 ${maskDraft.changedPercent}%`, maskRecipe: maskDraft.recipe })
       return
     }
     if (!previewUrl) return
@@ -765,14 +745,23 @@ export function ImageLab({
         : mode === 'remove-background'
           ? `白底草稿 · 阈值 ${backgroundSettings.threshold}`
           : `${upscaleSettings.scale}× · ${upscaleSettings.smooth ? '平滑' : '最近邻'}`
-    onApply({
+    await onApply({
       kind: 'derived-image',
       mode,
       src: previewUrl,
       width: previewDimensions.width,
       height: previewDimensions.height,
       detail,
+      ...(mode === 'crop' ? { crop } : {}),
     })
+  }
+
+  const applyResult = async () => {
+    setError(null)
+    setIsGenerating(true)
+    try { await applyResultUnchecked() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '效果应用失败，请重试') }
+    finally { setIsGenerating(false) }
   }
 
   const canApply =
@@ -859,6 +848,7 @@ export function ImageLab({
                   <MaskEditor
                     source={source}
                     label={element.name}
+                    initialRecipe={editingStep?.type === 'mask-refine' ? editingStep.maskRecipe : undefined}
                     disabled={isGenerating}
                     onChange={handleMaskChange}
                   />

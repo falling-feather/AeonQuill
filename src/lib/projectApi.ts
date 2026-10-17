@@ -1,3 +1,4 @@
+import { observeCanvasAssetVersions } from './canvasAssets.mjs'
 import type { CanvasDocument } from './canvasCore'
 import type {
   ApprovedCreativePlan,
@@ -452,6 +453,7 @@ export async function saveLocalProject(document: CanvasDocument) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ document }),
   })
+  observeCanvasAssetVersions(payload.project.id, payload.project.assetVersions)
   return payload.project
 }
 
@@ -459,6 +461,7 @@ export async function loadLocalProject(projectId = 'local-project') {
   const payload = await api<{ project: StoredProject | null }>(
     `/api/projects/current?id=${encodeURIComponent(projectId)}`,
   )
+  if (payload.project) observeCanvasAssetVersions(payload.project.id, payload.project.assetVersions)
   return payload.project
 }
 
@@ -492,5 +495,7 @@ export async function importLocalProjectPackage(file: Blob, projectId = 'local-p
   )
   const payload = await response.json().catch(() => null)
   if (!response.ok) throw new Error(payload?.error?.message || `项目包导入返回 HTTP ${response.status}`)
-  return (payload as { project: StoredProject }).project
+  const project = (payload as { project: StoredProject }).project
+  observeCanvasAssetVersions(project.id, project.assetVersions)
+  return project
 }

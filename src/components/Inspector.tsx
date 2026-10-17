@@ -44,6 +44,7 @@ import {
 } from '../types'
 import { VideoStudio } from './VideoStudio'
 import type { CanvasAlignment } from '../lib/canvasSelection.mjs'
+import { ImageEffectsControls } from './ImageEffectsControls'
 
 type InspectorProps = {
   elements: CanvasElement[]
@@ -59,6 +60,15 @@ type InspectorProps = {
   onAlign: (alignment: CanvasAlignment) => void
   onCreateConnection: (id: string) => void
   onDeleteSelection: () => void
+  effectsBusy: boolean
+  effectRecipeSteps: number
+  onEffectAction: (id: string, action: 'up' | 'down' | 'toggle' | 'remove' | 'clear', stepId?: string) => void
+  onEditEffect: (id: string, stepId: string) => void
+  onCopyEffects: (id: string) => void
+  onApplyEffectRecipe: () => void
+  onExportEffectRecipe: () => void
+  onImportEffectRecipe: (file: File) => void
+  onCancelEffects: () => void
   onToggleVisible: (id: string) => void
   onToggleLock: (id: string) => void
   onOpenPixel: (id: string) => void
@@ -233,13 +243,12 @@ function LayerList({
 function ImageCapabilityPanel({
   selected,
   onOpenImageTool,
-  onUpdate,
+  effects,
 }: {
   selected: CanvasElement
   onOpenImageTool: InspectorProps['onOpenImageTool']
-  onUpdate: InspectorProps['onUpdate']
+  effects: Omit<Parameters<typeof ImageEffectsControls>[0], 'element'>
 }) {
-  const stack = selected.processingStack ?? []
   const dimensions =
     selected.naturalWidth && selected.naturalHeight
       ? `${selected.naturalWidth} × ${selected.naturalHeight}`
@@ -284,54 +293,7 @@ function ImageCapabilityPanel({
         </div>
       </section>
 
-      <section className="processing-stack-section">
-        <div className="inspector-section-heading">
-          <span>处理栈</span>
-          {stack.length ? (
-            <button
-              type="button"
-              onClick={() => onUpdate(selected.id, {
-                processingStack: [],
-                adjustments: { brightness: 100, contrast: 100, saturation: 100 },
-                src: selected.sourceSrc ?? selected.src,
-              })}
-            >
-              清空
-            </button>
-          ) : null}
-        </div>
-        {stack.length ? (
-          <div className="processing-stack-list">
-            {stack.map((step, index) => (
-              <div className="processing-stack-row" key={step.id}>
-                <span className="stack-order">{index + 1}</span>
-                <span>
-                  <strong>{step.label}</strong>
-                  <small>{step.detail}</small>
-                </span>
-                <label className="mini-switch" title={step.enabled ? '停用此步骤' : '启用此步骤'}>
-                  <input
-                    type="checkbox"
-                    checked={step.enabled}
-                    aria-label={`${step.enabled ? '停用' : '启用'}${step.label}`}
-                    onChange={(event) => onUpdate(selected.id, {
-                      processingStack: stack.map((item) =>
-                        item.id === step.id ? { ...item, enabled: event.target.checked } : item,
-                      ),
-                    })}
-                  />
-                  <i />
-                </label>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="processing-empty">
-            <Sparkles size={17} />
-            <span>应用处理后，会在这里形成可开关的非破坏步骤。</span>
-          </div>
-        )}
-      </section>
+      <ImageEffectsControls element={selected} {...effects} />
     </>
   )
 }
@@ -673,7 +635,12 @@ export function Inspector(props: InspectorProps) {
                 <ImageCapabilityPanel
                   selected={selected}
                   onOpenImageTool={onOpenImageTool}
-                  onUpdate={onUpdate}
+                  effects={{ busy: props.effectsBusy, recipeSteps: props.effectRecipeSteps,
+                    selectedImageCount: elements.filter((element) => selectedIds.includes(element.id) && element.kind === 'image').length,
+                    onAction: (action, stepId) => props.onEffectAction(selected.id, action, stepId),
+                    onEdit: (stepId) => props.onEditEffect(selected.id, stepId), onCopy: () => props.onCopyEffects(selected.id),
+                    onApplyRecipe: props.onApplyEffectRecipe, onExport: props.onExportEffectRecipe,
+                    onImport: props.onImportEffectRecipe, onCancel: props.onCancelEffects }}
                 />
               ) : null}
 

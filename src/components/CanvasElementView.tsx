@@ -2,6 +2,7 @@ import { memo, type CSSProperties } from 'react'
 import { AlertTriangle, Film, LoaderCircle, Play, Volume2 } from 'lucide-react'
 import { resolveImageResource, type ImageResourceTier } from '../lib/assetVariants'
 import { imageAdjustmentFilter } from '../lib/imageProcessing'
+import { resolveImageProcessingSource } from '../lib/imageEffects.mjs'
 import type { CanvasElement } from '../types'
 
 type PixelSpriteProps = {
@@ -183,12 +184,9 @@ export const CanvasElementView = memo(function CanvasElementView({
       if (!element.src) return null
       {
         const enabledSteps = (element.processingStack ?? []).filter((step) => step.enabled)
-        const derivedSource = [...enabledSteps]
-          .reverse()
-          .find((step) => step.outputSrc)?.outputSrc
-        const hasAdjustmentStep = enabledSteps.some((step) => step.type === 'adjust')
+        const hasAdjustmentStep = enabledSteps.some((step) => step.type === 'adjust' && !step.parameters)
         const resource = resolveImageResource(
-          derivedSource ?? element.sourceSrc ?? element.src,
+          resolveImageProcessingSource(element) ?? element.src,
           imageResourceTier,
         )
         return (

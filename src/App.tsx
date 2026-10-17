@@ -4,6 +4,11 @@ import { CheckCircle2, X } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
 import { CanvasConnectionDialog } from './components/CanvasConnectionDialog'
 import { createCanvasAlignmentUpdates, createCanvasConnection, type CanvasAlignment } from './lib/canvasSelection.mjs'
+import { editableImageProcessingSteps, effectRecipeFromSteps, reorderImageProcessingSteps, resolveImageProcessingSource, normalizeImageEffectParameters,
+  validateImageEffectRecipe, type ImageEffectRecipe } from './lib/imageEffects.mjs'
+import { IMAGE_EFFECT_MAX_CACHED_CHARACTERS, IMAGE_EFFECT_MAX_DOCUMENT_BYTES } from './lib/imageEffects.mjs'
+import { preflightImageEffectBatch, replayImageProcessingStack } from './lib/imageEffectReplay'
+import { canvasLogicalAssetId, reserveCanvasAssetVersion } from './lib/canvasAssets.mjs'
 import { AgentPlanComposer } from './components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from './components/AgentPlanReviewDialog'
 import { ImageLab, type ImageLabResult } from './components/ImageLab'
@@ -86,7 +91,7 @@ function cloneElements(elements: CanvasElement[]) {
     palette: element.palette ? [...element.palette] : undefined,
     adjustments: element.adjustments ? { ...element.adjustments } : undefined,
     crop: element.crop ? { ...element.crop } : undefined,
-    processingStack: element.processingStack?.map((step) => ({ ...step })),
+    processingStack: element.processingStack ? structuredClone(element.processingStack) : undefined,
     jobError: element.jobError ? {
       ...element.jobError,
       suggestions: element.jobError.suggestions ? [...element.jobError.suggestions] : undefined,
@@ -309,6 +314,9 @@ function App({
   const [imageLab, setImageLab] = useState<{
     elementId: string
     mode: ImageLabMode
+    stepId?: string
+    baseRevision: number
+    previewElement?: CanvasElement
   } | null>(null)
   const [jobs, setJobs] = useState<ProcessingJob[]>([])
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
@@ -320,6 +328,10 @@ function App({
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [connectionSourceId, setConnectionSourceId] = useState<string | null>(null)
+  const [effectsBusy, setEffectsBusy] = useState(false)
+  const [effectRecipe, setEffectRecipe] = useState<ImageEffectRecipe | null>(null)
+  const effectsControllerRef = useRef<AbortController | null>(null)
+  useEffect(() => () => effectsControllerRef.current?.abort(), [])
   const [agentPlanReview, setAgentPlanReview] = useState<{
     plan: CreativePlan
     preview: CreativePlanPreview
@@ -510,7 +522,10 @@ function App({
   }, [canvasDocument, onDocumentChange, replaceDocument, showToast, storageKey])
 
   useEffect(() => {
-    setSelectedIds((current) => current.filter((id) => elements.some((element) => element.id === id)))
+    setSelectedIds((current) => {
+      const retained = current.filter((id) => elements.some((element) => element.id === id))
+      return retained.length === current.length ? current : retained
+    })
   }, [elements])
 
   const updateElement = useCallback(
@@ -547,6 +562,119 @@ function App({
     commitCanvasTool('canvas.elements.add', { elements: [connector] }, 'user')
     setSelectedIds([connector.id])
   }, [commitCanvasTool])
+
+  const runImageEffects = useCallback(async (requests: Array<{ id: string; steps: ProcessingStep[] }>) => {
+    if (!requests.length) throw new Error('请先选择图片')
+    effectsControllerRef.current?.abort()
+    const controller = new AbortController()
+    effectsControllerRef.current = controller
+    const base = documentRef.current
+    setEffectsBusy(true)
+    try {
+      const updates: Array<{ id: string; patch: Partial<CanvasElement> }> = []
+      const prepared = requests.map((request) => {
+        if (request.steps.length > 64) throw new Error('每张图片最多 64 个效果步骤，请先删除不再使用的步骤')
+        const image = base.elements.find((element) => element.id === request.id && element.kind === 'image')
+        if (!image?.src || image.locked) throw new Error('图片已移除或锁定，请重新选择')
+        return { ...request, image, source: image.sourceSrc ?? image.src }
+      })
+      await preflightImageEffectBatch(prepared, controller.signal)
+      let cachedCharacters = 0
+      for (const { id, image, source, steps } of prepared) {
+        const output = await replayImageProcessingStack(source, steps, { signal: controller.signal })
+        cachedCharacters += output.steps.reduce((size, step) => size + (step.outputSrc?.startsWith('data:') ? step.outputSrc.length : 0), 0)
+        if (cachedCharacters > IMAGE_EFFECT_MAX_CACHED_CHARACTERS) throw new Error('批量效果缓存超过 16Mi 字符，请减少图片或步骤后分批应用')
+        const resized = [...(image.processingStack ?? []), ...steps].some((step) => step.type === 'crop')
+        updates.push({ id, patch: { processingStack: output.steps, sourceSrc: source, src: output.src,
+          assetVersion: reserveCanvasAssetVersion(base.id, canvasLogicalAssetId(image), image.assetVersion ?? 1),
+          naturalWidth: output.width, naturalHeight: output.height,
+          ...(resized ? { height: image.width * output.height / output.width } : {}),
+        } })
+      }
+      if (controller.signal.aborted) throw new Error('效果处理已取消，正文未修改')
+      if (documentRef.current.revision !== base.revision) throw new Error('处理期间文档已变化，请重新应用效果')
+      const patches = new Map(updates.map((update) => [update.id, update.patch]))
+      const candidate = { ...base, elements: base.elements.map((element) => ({ ...element, ...patches.get(element.id) })) }
+      if (new TextEncoder().encode(JSON.stringify(candidate)).byteLength > IMAGE_EFFECT_MAX_DOCUMENT_BYTES) throw new Error('效果正文超过 24MiB，请先保存项目或缩小图片后分批应用')
+      commitCanvasTool('canvas.elements.patch', { updates }, 'user')
+      showToast(`已更新 ${updates.length} 张图片的效果 · 可一次撤销`)
+    } finally {
+      if (effectsControllerRef.current === controller) { effectsControllerRef.current = null; setEffectsBusy(false) }
+    }
+  }, [commitCanvasTool, showToast])
+
+  const changeImageEffect = useCallback((id: string, action: 'up' | 'down' | 'toggle' | 'remove' | 'clear', stepId?: string) => {
+    const image = elementsRef.current.find((element) => element.id === id)
+    if (!image) return
+    try {
+      const steps = action === 'clear' ? [] : editableImageProcessingSteps(image)
+      const next = action === 'clear' ? []
+        : action === 'up' || action === 'down' ? reorderImageProcessingSteps(steps, stepId ?? '', action)
+        : action === 'remove' ? steps.filter((step) => step.id !== stepId)
+        : steps.map((step) => step.id === stepId ? { ...step, enabled: !step.enabled } : step)
+      void runImageEffects([{ id, steps: next }]).catch((reason) => showToast(reason instanceof Error ? reason.message : '效果处理失败'))
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '效果处理失败') }
+  }, [runImageEffects, showToast])
+
+  const copyImageEffects = useCallback((id: string) => {
+    const image = elementsRef.current.find((element) => element.id === id)
+    if (!image) return
+    try {
+      const recipe = effectRecipeFromSteps(editableImageProcessingSteps(image))
+      if (!recipe.steps.length) throw new Error('当前没有可复制的本地效果')
+      setEffectRecipe(recipe)
+      showToast(`已复制 ${recipe.steps.length} 个效果参数，可应用到所选图片`)
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '效果配方复制失败') }
+  }, [showToast])
+
+  const applyImageEffectRecipe = useCallback(() => {
+    if (!effectRecipe) return
+    try {
+      const recipe = validateImageEffectRecipe(effectRecipe)
+      const targets = elementsRef.current.filter((element) => selectedIds.includes(element.id) && element.kind === 'image')
+      const requests = targets.map((image) => ({ id: image.id, steps: [...editableImageProcessingSteps(image),
+        ...recipe.steps.map((step) => ({ ...structuredClone(step), id: makeId('step'), label: processingLabels[step.type],
+          detail: '复用效果配方', enabled: true, createdAt: Date.now() })),
+      ] }))
+      void runImageEffects(requests).catch((reason) => showToast(reason instanceof Error ? reason.message : '效果配方应用失败'))
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '效果配方无效') }
+  }, [effectRecipe, runImageEffects, selectedIds, showToast])
+
+  const exportImageEffectRecipe = useCallback(() => {
+    if (!effectRecipe) return
+    try {
+      const text = JSON.stringify(validateImageEffectRecipe(effectRecipe), null, 2)
+      if (new TextEncoder().encode(text).byteLength > 1024 * 1024) throw new Error('效果配方超过 1MiB，请减少步骤或蒙版笔画')
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'aeonquill-image-effects.json'
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '配方导出失败') }
+  }, [effectRecipe, showToast])
+
+  const importImageEffectRecipe = useCallback(async (file: File) => {
+    try {
+      if (file.size > 1024 * 1024) throw new Error('效果配方文件超过 1MiB')
+      const recipe = validateImageEffectRecipe(JSON.parse(await file.text()))
+      setEffectRecipe(recipe)
+      showToast(`已载入 ${recipe.steps.length} 步效果配方，选择图片后再应用`)
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '效果配方读取失败') }
+  }, [showToast])
+
+  const editImageEffect = useCallback((id: string, stepId: string) => {
+    const image = elementsRef.current.find((element) => element.id === id && element.kind === 'image')
+    if (!image) return
+    try {
+      const steps = editableImageProcessingSteps(image)
+      const index = steps.findIndex((step) => step.id === stepId)
+      const step = steps[index]
+      if (!step || !['adjust', 'crop', 'mask-refine'].includes(step.type)) throw new Error('该步骤是固定结果，请通过原处理器重新生成')
+      const input = [...steps.slice(0, index)].reverse().find((item) => item.enabled && item.outputSrc)?.outputSrc ?? image.sourceSrc ?? image.src
+      setImageLab({ elementId: id, mode: step.type as ImageLabMode, stepId, baseRevision: documentRef.current.revision, previewElement: { ...image, src: input, processingStack: steps } })
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '无法编辑效果') }
+  }, [showToast])
 
   const duplicateSelection = useCallback(() => {
     if (!selectedIds.length) return
@@ -778,13 +906,12 @@ function App({
         showToast('请先选择一张图片')
         return
       }
-      if (tool === 'more') {
-        setImageLab({ elementId: id, mode: 'adjust' })
-        return
-      }
-      setImageLab({ elementId: id, mode: tool })
+      const legacyAdjustment = tool === 'adjust' ? element.processingStack?.find((step) => step.type === 'adjust' && !step.parameters) : null
+      if (legacyAdjustment) { editImageEffect(id, legacyAdjustment.id); return }
+      setImageLab({ elementId: id, mode: tool === 'more' ? 'adjust' : tool, baseRevision: documentRef.current.revision,
+        previewElement: { ...element, src: resolveImageProcessingSource(element) ?? element.src } })
     },
-    [showToast],
+    [editImageEffect, showToast],
   )
 
   const updateJob = useCallback((job: ProcessingJob) => {
@@ -1222,7 +1349,7 @@ function App({
   }, [showToast])
 
   const applyImageLabResult = useCallback(
-    (result: ImageLabResult) => {
+    async (result: ImageLabResult) => {
       if (!imageLab) return
       const source = elementsRef.current.find((element) => element.id === imageLab.elementId)
       if (!source || source.kind !== 'image') {
@@ -1230,11 +1357,13 @@ function App({
         return
       }
 
+      if (documentRef.current.revision !== imageLab.baseRevision) throw new Error('预览期间文档已变化，请重新打开图像工具')
+      const operation: ImageLabMode = result.kind === 'adjust' ? 'adjust' : result.kind === 'pixel' ? 'pixelate' : result.mode
       const createdAt = Date.now()
       const step: ProcessingStep = {
         id: makeId('step'),
-        type: imageLab.mode,
-        label: processingLabels[imageLab.mode],
+        type: operation,
+        label: processingLabels[operation],
         detail: result.detail,
         enabled: true,
         createdAt,
@@ -1242,24 +1371,22 @@ function App({
         maskRecipe: result.kind === 'derived-image' ? result.maskRecipe : undefined,
       }
 
-      if (result.kind === 'adjust') {
-        commitElements((current) =>
-          current.map((element) =>
-            element.id === source.id
-              ? {
-                  ...element,
-                  adjustments: { ...result.adjustments },
-                  processingStack: [
-                    ...(element.processingStack ?? []).filter((item) => item.type !== 'adjust'),
-                    step,
-                  ],
-                }
-              : element,
-          ),
-        )
+      if (result.kind === 'adjust' || result.kind === 'derived-image' && (result.mode === 'crop' || result.mode === 'mask-refine')) {
+        if (result.kind === 'adjust') step.parameters = normalizeImageEffectParameters({ kind: 'adjust', ...result.adjustments })
+        else if (result.mode === 'crop') step.parameters = normalizeImageEffectParameters({ kind: 'crop', ...result.crop })
+        const steps = editableImageProcessingSteps(source)
+        if (imageLab.stepId) {
+          const index = steps.findIndex((item) => item.id === imageLab.stepId)
+          if (index < 0) throw new Error('原效果步骤已变化，请重新选择')
+          steps[index] = { ...step, id: steps[index].id, createdAt: steps[index].createdAt, enabled: steps[index].enabled }
+        } else steps.push(step)
+        await runImageEffects([{ id: source.id, steps }])
         setSelectedIds([source.id])
-        showToast('色彩调整已作为非破坏步骤应用')
-      } else if (result.kind === 'pixel') {
+        setImageLab(null)
+        return
+      }
+
+      if (result.kind === 'pixel') {
         const existingDerivatives = elementsRef.current.filter(
           (element) => element.sourceElementId === source.id,
         ).length
@@ -1378,7 +1505,7 @@ function App({
 
       setImageLab(null)
     },
-    [commitElements, imageLab, showToast],
+    [commitElements, imageLab, runImageEffects, showToast],
   )
 
   const openAgentPlan = useCallback((plan: CreativePlan) => {
@@ -1670,6 +1797,15 @@ function App({
             onAlign={alignSelection}
             onCreateConnection={setConnectionSourceId}
             onDeleteSelection={deleteSelection}
+            effectsBusy={effectsBusy}
+            effectRecipeSteps={effectRecipe?.steps.length ?? 0}
+            onEffectAction={changeImageEffect}
+            onEditEffect={editImageEffect}
+            onCopyEffects={copyImageEffects}
+            onApplyEffectRecipe={applyImageEffectRecipe}
+            onExportEffectRecipe={exportImageEffectRecipe}
+            onImportEffectRecipe={(file) => void importImageEffectRecipe(file)}
+            onCancelEffects={() => effectsControllerRef.current?.abort()}
             onToggleVisible={toggleVisible}
             onToggleLock={toggleLock}
             onOpenPixel={setPixelEditorId}
@@ -1734,10 +1870,12 @@ function App({
 
       {editingImage && editingImage.kind === 'image' && imageLab ? (
         <ImageLab
-          element={editingImage}
+          key={`${editingImage.id}:${imageLab.stepId ?? 'new'}`}
+          element={imageLab.previewElement ?? editingImage}
           initialMode={imageLab.mode}
+          editingStep={imageLab.previewElement?.processingStack?.find((step) => step.id === imageLab.stepId)}
           projectId={workspaceProjectId}
-          onClose={() => setImageLab(null)}
+          onClose={() => { effectsControllerRef.current?.abort(); setImageLab(null) }}
           onApply={applyImageLabResult}
           onJobUpdate={updateJob}
         />

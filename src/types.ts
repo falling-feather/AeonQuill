@@ -1,5 +1,6 @@
 import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
 import type { LoraBinding } from './lib/loraCompatibility.mjs'
+import type { ImageEffectParameters } from './lib/imageEffects.mjs'
 import type { ImageEditPresetId, ImageEditPresetMaturity } from './lib/imageEditPresets.mjs'
 
 export type ElementKind =
@@ -108,6 +109,7 @@ export type ProcessingStep = {
   createdAt: number
   outputSrc?: string
   maskRecipe?: MaskRecipe
+  parameters?: ImageEffectParameters
 }
 
 export type ImageOperationId =

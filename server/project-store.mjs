@@ -1,3 +1,4 @@
+import { canvasLogicalAssetId } from '../src/lib/canvasAssets.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
@@ -955,9 +956,7 @@ export class ProjectStore {
       const match = /^\/api\/project-assets\/([a-f0-9]{64})$/.exec(renderedReference || '')
       if (!match) continue
       const contentAssetId = match[1]
-      const logicalAssetId = typeof element.assetId === 'string' && element.assetId && !ASSET_ID_PATTERN.test(element.assetId)
-        ? element.assetId
-        : `asset-${element.id}`
+      const logicalAssetId = canvasLogicalAssetId(element)
       const version = Number.isSafeInteger(element.assetVersion) && element.assetVersion > 0
         ? element.assetVersion
         : 1

@@ -2,12 +2,14 @@ import { Eraser, Paintbrush, RotateCcw, Undo2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createEmptyMaskRecipe, createMaskPreview } from '../lib/imageProcessing'
 import { DEFAULT_MASK_MORPHOLOGY } from '../lib/maskMorphology.mjs'
+import { assertMaskRecipe } from '../lib/maskRecipe.mjs'
 import type { MaskBrushMode, MaskDraft, MaskMorphology, MaskPoint, MaskRecipe, MaskStroke } from '../types'
 
 type MaskEditorProps = {
   source: string
   label: string
   disabled?: boolean
+  initialRecipe?: MaskRecipe
   onChange: (draft: MaskDraft | null) => void
 }
 
@@ -86,9 +88,10 @@ export const MaskEditor = memo(function MaskEditor({
   source,
   label,
   disabled = false,
+  initialRecipe,
   onChange,
 }: MaskEditorProps) {
-  const [recipe, setRecipe] = useState<MaskRecipe>(() => createEmptyMaskRecipe())
+  const [recipe, setRecipe] = useState<MaskRecipe>(() => initialRecipe ? structuredClone(assertMaskRecipe(initialRecipe)) : createEmptyMaskRecipe())
   const [preview, setPreview] = useState<MaskDraft | null>(null)
   const [surfaceSize, setSurfaceSize] = useState<SurfaceSize>({ width: 1, height: 1 })
   const [brushMode, setBrushMode] = useState<MaskBrushMode>('remove')
