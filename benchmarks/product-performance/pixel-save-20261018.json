@@ -36,5 +36,10 @@
     "Three preflight samples are not a formal P95 or 30-minute result.",
     "Final linked-Cel/schema integration and continuous latency verification remain under PERF-005.",
     "The lifetime guard has direct cancellation/resource tests; a clean checkpoint build follows the local commit."
-  ]
+  ],
+  "followup": {
+    "functionalTrack": "V0.7.108",
+    "formalValidation": "pixel-latency-20261018.json",
+    "checkpointLimitPreserved": true
+  }
 }

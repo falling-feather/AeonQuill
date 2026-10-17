@@ -477,6 +477,72 @@ function thresholdCheck(id, actual, limit, unit) {
   }
 }
 
+async function measureContinuousStroke(page, canvas) {
+  await canvas.scrollIntoViewIfNeeded()
+  const box = await canvas.boundingBox()
+  assert.ok(box?.width && box?.height, 'Continuous stroke requires a visible canvas')
+  const point = (column) => ({ x: box.x + ((column + 0.5) / 256) * box.width, y: box.y + (240.5 / 256) * box.height })
+  const revisionBefore = await page.locator('.aq-pixel-document-title small').textContent()
+  await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[aria-label^="256 乘 256 像素绘制区"]')
+    if (!canvas) throw new Error('Continuous stroke canvas is missing')
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    const probe = { preview: [], commit: [], unchangedPreviews: 0, active: true }
+    const handle = (event) => {
+      if (event.type === 'pointermove' && event.buttons !== 1) return
+      const at = performance.now()
+      const bounds = canvas.getBoundingClientRect()
+      const x = Math.floor((event.clientX - bounds.left) * canvas.width / bounds.width)
+      const y = Math.floor((event.clientY - bounds.top) * canvas.height / bounds.height)
+      const before = event.type === 'pointerup' ? null : Array.from(context.getImageData(x, y, 1, 1).data).join(',')
+      requestAnimationFrame(() => {
+        if (!probe.active) return
+        const elapsed = Math.max(0, performance.now() - at)
+        if (event.type === 'pointerup') probe.commit.push(elapsed)
+        else {
+          probe.preview.push(elapsed)
+          if (Array.from(context.getImageData(x, y, 1, 1).data).join(',') === before) probe.unchangedPreviews += 1
+        }
+      })
+    }
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) canvas.addEventListener(type, handle, true)
+    globalThis.__pixelContinuousStrokeProbe = probe
+    globalThis.__pixelContinuousStrokeCleanup = () => {
+      probe.active = false
+      for (const type of ['pointerdown', 'pointermove', 'pointerup']) canvas.removeEventListener(type, handle, true)
+      delete globalThis.__pixelContinuousStrokeCleanup
+    }
+  })
+  try {
+    await page.mouse.move(point(80).x, point(80).y)
+    await page.mouse.down()
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    for (let column = 81; column <= 90; column += 1) {
+      await page.mouse.move(point(column).x, point(column).y)
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+    }
+    assert.equal(await page.locator('.aq-pixel-document-title small').textContent(), revisionBefore, 'Preview must not commit document revisions')
+    await page.mouse.up()
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    const probe = await page.evaluate(() => {
+      const result = structuredClone(globalThis.__pixelContinuousStrokeProbe)
+      globalThis.__pixelContinuousStrokeCleanup()
+      delete globalThis.__pixelContinuousStrokeProbe
+      return result
+    })
+    assert.equal(probe.preview.length, 11, 'Each continuous pointer input must reach a frame')
+    assert.equal(probe.unchangedPreviews, 0, 'Every sampled canvas pixel must visibly update before release')
+    assert.equal(probe.commit.length, 1, 'A stroke must produce one release sample')
+    const committed = await waitForPixelRevisionAdvance(page, revisionBefore, Date.now() + 3_000)
+    await clickPixelHistoryButton(page, '撤销', Date.now() + 3_000)
+    await waitForPixelRevisionAdvance(page, committed.text, Date.now() + 3_000)
+    return probe
+  } finally {
+    await page.mouse.up()
+    await page.evaluate(() => globalThis.__pixelContinuousStrokeCleanup?.()).catch(() => undefined)
+  }
+}
+
 async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, persistenceRequests, options = {}) {
   const runPreflightOnly = options.preflightOnly === true
   const collectCpuProfile = options.profileSummary === true
@@ -488,6 +554,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
   const samples = [await collectPerformanceSample(session, soakStartedAt)]
   const inputLatencies = []
   const inputEventToHandlerLatencies = []
+  const continuousPreviewLatencies = []
+  const strokeCommitLatencies = []
   let inputLatencyTimeouts = 0
   let inputLatencyMissingTargets = 0
   const inputLatencyDiagnostics = []
@@ -795,6 +863,9 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
     ])
     if (cancelOutcome === 'cancelled') cancelledComputations += 1
     if (cancelOutcome === 'timeout') cancelTimeouts += 1
+    const stroke = await measureContinuousStroke(page, canvas)
+    continuousPreviewLatencies.push(...stroke.preview)
+    strokeCommitLatencies.push(...stroke.commit)
     await recordDiagnosticEvent(page, 'page-background-start', { target: 'background-page', kind: 'background' })
     await backgroundPage.bringToFront()
     await delay(250)
@@ -858,6 +929,8 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
       thresholdCheck('released-media-elements', releaseState.mediaElements, limits.finalMediaElements, 'elements'),
       thresholdCheck('input-latency-measurement', inputLatencyTimeouts + inputLatencyMissingTargets, 0, 'invalid samples'),
       thresholdCheck('interaction-control-timeouts', cancelTimeouts + undoTimeouts + redoTimeouts, 0, 'timeouts'),
+      thresholdCheck('continuous-preview-p95', summarizeSamples(continuousPreviewLatencies).p95, 50, 'ms'),
+      thresholdCheck('stroke-release-p95', summarizeSamples(strokeCommitLatencies).p95, 250, 'ms'),
     ],
   }
   thresholdAssessment.status = thresholdAssessment.checks.every((check) => check.status === 'passed') ? 'passed' : 'failed'
@@ -883,6 +956,14 @@ async function runPixelSoak(page, context, workerTelemetry, largeMapEditor, pers
       inputPreflight: preflight,
       inputDiagnostics: inputLatencyDiagnostics,
       measurementQuality: inputLatencyTimeouts === 0 && inputLatencyMissingTargets === 0 ? 'passed' : 'failed',
+    },
+    continuousStrokeLatency: {
+      preview: summarizeSamples(continuousPreviewLatencies),
+      release: summarizeSamples(strokeCommitLatencies),
+      strokes: strokeCommitLatencies.length,
+      previewBudgetP95Ms: 50,
+      releaseBudgetP95Ms: 250,
+      evidence: 'Real held mouse strokes; 11 changed canvas pixels per stroke, no revision before release; one revision on release and undo afterwards. RAF includes the actual handlers; preview pixel reads add bounded measurement work.',
     },
     interaction: {
       cycleIntervalMs,

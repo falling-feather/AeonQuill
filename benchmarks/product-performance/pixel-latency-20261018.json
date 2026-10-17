@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "generatedAt": "2026-10-17T21:12:15.684Z",
+  "soakMinutes": 30,
+  "durationMs": 1802753,
+  "cycles": 60,
+  "growth": {
+    "jsHeapUsedBytes": 0,
+    "domNodes": 355,
+    "documents": 0,
+    "eventListeners": 22
+  },
+  "slopes": {
+    "jsHeapUsedBytesPerMinute": 413227.73,
+    "domNodesPerMinute": 0.21,
+    "documentsPerMinute": 0,
+    "eventListenersPerMinute": 0.01
+  },
+  "release": {
+    "modeHosts": 0,
+    "pixelWorkbench": 0,
+    "mediaElements": 0
+  },
+  "inputLatency": {
+    "handlerToFrame": {
+      "count": 63,
+      "min": 57.3,
+      "p50": 115.2,
+      "p95": 132.49,
+      "max": 147.3
+    },
+    "eventToHandler": {
+      "count": 63,
+      "min": 0.6,
+      "p50": 1.9,
+      "p95": 3.57,
+      "max": 8
+    },
+    "validSamples": 63,
+    "timeoutCount": 0,
+    "missingTargetCount": 0,
+    "totalAttempts": 63,
+    "measurementQuality": "passed"
+  },
+  "continuousStrokeLatency": {
+    "preview": {
+      "count": 660,
+      "min": 0.2,
+      "p50": 0.7,
+      "p95": 8.31,
+      "max": 15.8
+    },
+    "release": {
+      "count": 60,
+      "min": 60.3,
+      "p50": 118.8,
+      "p95": 162.7,
+      "max": 181.7
+    },
+    "strokes": 60,
+    "previewBudgetP95Ms": 50,
+    "releaseBudgetP95Ms": 250,
+    "evidence": "Real held mouse strokes; 11 changed canvas pixels per stroke, no revision before release; one revision on release and undo afterwards. RAF includes the actual handlers; preview pixel reads add bounded measurement work."
+  },
+  "interaction": {
+    "cycleIntervalMs": 30000,
+    "cycles": 60,
+    "editedDocuments": 63,
+    "undoRedoPairs": 60,
+    "cancelledComputations": 53,
+    "cancelTimeouts": 0,
+    "undoTimeouts": 0,
+    "redoTimeouts": 0,
+    "revisionVerification": {
+      "drawAdvances": 60,
+      "undoAdvances": 60,
+      "redoAdvances": 60,
+      "failures": 0
+    },
+    "foregroundBackgroundSwitches": 60,
+    "visibilityStates": {
+      "count": 1
+    }
+  },
+  "worker": {
+    "created": 1360,
+    "terminated": 1360,
+    "activeAfterUnload": 0,
+    "createdBeforeUnload": 1360,
+    "terminatedBeforeUnload": 1360,
+    "releasedOnHome": 0
+  },
+  "thresholdAssessment": {
+    "status": "passed",
+    "checks": {
+      "count": 12
+    }
+  },
+  "environment": {
+    "browser": "Microsoft Edge via Playwright",
+    "platform": "win32-10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+    "logicalCpuCount": 22,
+    "totalMemoryBytes": 33844576256,
+    "parallelProcessNote": "Shared host; root may run validation/build/package work concurrently. No resource isolation or threshold relaxation was applied.",
+    "measurement": "CDP Performance.getMetrics with HeapProfiler.collectGarbage before every sample; input latency is pointer dispatch latency from real Playwright canvas input."
+  },
+  "task": "PERF-005",
+  "date": "2026-10-18",
+  "command": "node scripts/validate-pixel-objects-worker-ui.mjs --soak-minutes=30",
+  "sourceScope": "Working frontend with V0.7.95/96 asynchronous-save and v9 pixel integration; installed candidate is verified separately.",
+  "sampledPageHeapPeakBytes": 260248496,
+  "comparison": {
+    "metric": "existing real-click handler to next animation frame P95",
+    "priorMs": 749.83,
+    "currentMs": 132.49,
+    "continuousPreviewIsNewSeparateMetric": true
+  },
+  "boundary": "Shared host, no resource isolation or threshold relaxation; machine timing is not human perceived quality or cross-hardware guarantee."
+}
