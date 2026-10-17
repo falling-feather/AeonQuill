@@ -4,7 +4,12 @@ import { extname, resolve, sep } from 'node:path'
 import { MAX_ASSET_BYTES } from './project-store.mjs'
 import { redactSensitiveText, sanitizePublicPayload } from './security.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION } from './workflow-center.mjs'
-import { assertWorkflowWeightSetCompatible, validateWorkflowWeightSet } from '../src/lib/workflowRecipes.mjs'
+import {
+  assertWorkflowLoraBindingsCompatible,
+  assertWorkflowLoraControlsMatchBindings,
+  assertWorkflowWeightSetCompatible,
+  validateWorkflowWeightSet,
+} from '../src/lib/workflowRecipes.mjs'
 import {
   WORKFLOW_CONTROL_FIELDS,
   validateWorkflowControlValue,
@@ -55,7 +60,7 @@ function assertProject(projectId, workspaceStore) {
 export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflowCenter, projectStore } = {}) {
   const allowed = new Set([
     'customWorkflowId', 'projectId', 'title', 'prompt', 'negativePrompt', 'sourceLibraryItemId',
-    'lastFrameLibraryItemId', 'workflowHash', 'mappingHash', 'sourceContentHash', 'lastFrameContentHash', 'weightSet', ...Object.keys(WORKFLOW_CONTROL_FIELDS),
+    'lastFrameLibraryItemId', 'workflowHash', 'mappingHash', 'sourceContentHash', 'lastFrameContentHash', 'weightSet', 'loraBindings', ...Object.keys(WORKFLOW_CONTROL_FIELDS),
   ])
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw customError('CUSTOM_WORKFLOW_JOB_INVALID', '自定义工作流任务必须是对象')
@@ -66,6 +71,12 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
   const summary = workflowCenter.customExecutionSummary(body.customWorkflowId)
   const weightSet = validateWorkflowWeightSet(summary.weightSet ?? null)
   if (body.weightSet !== undefined) assertWorkflowWeightSetCompatible(body.weightSet, weightSet)
+  let loraBindings
+  try {
+    loraBindings = assertWorkflowLoraBindingsCompatible(body.loraBindings ?? [], summary)
+  } catch (error) {
+    throw customError(error?.code || 'CUSTOM_WORKFLOW_LORA_BINDING_INVALID', error?.message || 'LoRA 绑定与当前工作流不兼容', error?.status || 409, error?.details)
+  }
   assertExpectedHash(body.workflowHash, summary.hash)
   assertExpectedHash(body.mappingHash, summary.mappingHash)
   if (!summary.enabled) throw customError('CUSTOM_WORKFLOW_NOT_ENABLED', '自定义工作流尚未启用', 409)
@@ -81,6 +92,7 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
     workflowHash: summary.hash,
     mappingHash: summary.mappingHash,
     ...(weightSet ? { weightSet } : {}),
+    ...(loraBindings.length ? { loraBindings } : {}),
   }
   const roleFields = {
     negativePrompt: 'negativePrompt',
@@ -120,6 +132,35 @@ export function validateCustomWorkflowJobRequest(body, { workspaceStore, workflo
         : 'CUSTOM_WORKFLOW_PARAMETER_INVALID'
       throw customError(code, error?.message || `${role} 参数无效`)
     }
+  }
+  if (loraBindings.length) {
+    const bindingValues = {
+      ...(request.loraStrength === undefined ? {} : { loraStrength: request.loraStrength }),
+      ...(request.loraClipStrength === undefined ? {} : { loraClipStrength: request.loraClipStrength }),
+    }
+    const strength = loraBindings[0].strength
+    if (new Set(loraBindings.map((binding) => binding.strength)).size !== 1) {
+      throw customError('LORA_STRENGTH_CONFLICT', 'LoRA 绑定的模型强度不一致', 409)
+    }
+    if (bindingValues.loraStrength !== undefined && bindingValues.loraStrength !== strength) {
+      throw customError('LORA_STRENGTH_MISMATCH', '任务 loraStrength 与 LoRA 绑定不一致', 409)
+    }
+    if (bindingValues.loraStrength === undefined) request.loraStrength = strength
+    const clipBindings = loraBindings.filter((binding) => binding.clipStrength !== undefined)
+    if (clipBindings.length) {
+      if (!summary.mappings.loraClipStrength) throw customError('LORA_CLIP_STRENGTH_MAPPING_MISSING', 'LoRA 绑定包含 CLIP 强度，但工作流没有映射', 409)
+      if (new Set(clipBindings.map((binding) => binding.clipStrength)).size !== 1) {
+        throw customError('LORA_CLIP_STRENGTH_CONFLICT', 'LoRA 绑定的 CLIP 强度不一致', 409)
+      }
+      const clipStrength = clipBindings[0].clipStrength
+      if (bindingValues.loraClipStrength !== undefined && bindingValues.loraClipStrength !== clipStrength) {
+        throw customError('LORA_CLIP_STRENGTH_MISMATCH', '任务 loraClipStrength 与 LoRA 绑定不一致', 409)
+      }
+      if (bindingValues.loraClipStrength === undefined) request.loraClipStrength = clipStrength
+    } else if (bindingValues.loraClipStrength !== undefined) {
+      throw customError('LORA_CLIP_STRENGTH_MISMATCH', '任务提供了 CLIP 强度，但 LoRA 绑定没有对应强度', 409)
+    }
+    assertWorkflowLoraControlsMatchBindings(loraBindings, request)
   }
   if (summary.mappings.sourceImage) {
     request.sourceLibraryItemId = assertLibraryItemId(body.sourceLibraryItemId, 'sourceImage')
@@ -255,6 +296,7 @@ export class CustomWorkflowExecutor {
     managedComfyInputRoot,
     deliverOutput = async () => undefined,
     scheduleRuntimeIdleStop = async () => undefined,
+    verifyLoraBindings = null,
   } = {}) {
     Object.assign(this, {
       workflowCenter,
@@ -266,6 +308,7 @@ export class CustomWorkflowExecutor {
       managedComfyInputRoot,
       deliverOutput,
       scheduleRuntimeIdleStop,
+      verifyLoraBindings,
     })
   }
 
@@ -317,6 +360,41 @@ export class CustomWorkflowExecutor {
       assertExpectedHash(job.request.workflowHash, summary.hash)
       assertExpectedHash(job.request.mappingHash, summary.mappingHash)
       assertWorkflowWeightSetCompatible(job.request.weightSet ?? null, summary.weightSet ?? null)
+      let verifiedLoraBindings = null
+      if (job.request.loraBindings?.length) {
+        if (typeof this.verifyLoraBindings !== 'function') {
+          throw customError('CUSTOM_WORKFLOW_LORA_VERIFIER_UNAVAILABLE', '当前任务没有提供 LoRA 文件复核器', 409)
+        }
+        const normalized = assertWorkflowLoraBindingsCompatible(job.request.loraBindings, summary)
+        const values = {
+          ...(job.request.loraStrength === undefined ? {} : { loraStrength: job.request.loraStrength }),
+          ...(job.request.loraClipStrength === undefined ? {} : { loraClipStrength: job.request.loraClipStrength }),
+        }
+        assertWorkflowLoraControlsMatchBindings(normalized, values)
+        verifiedLoraBindings = await this.verifyLoraBindings(job.request)
+        if (!Array.isArray(verifiedLoraBindings) || verifiedLoraBindings.length !== normalized.length) {
+          throw customError('CUSTOM_WORKFLOW_LORA_VERIFY_FAILED', 'LoRA 文件复核结果数量不匹配', 409)
+        }
+        const names = summary.loraRequirements?.names || []
+        const seenNames = new Set()
+        const requestedById = new Map(normalized.map((binding) => [binding.id, binding]))
+        for (const record of verifiedLoraBindings) {
+          const requested = requestedById.get(record?.binding?.id)
+          if (!requested || record?.binding?.sha256 !== requested.sha256 || record?.binding?.family !== requested.family
+            || record?.binding?.role !== requested.role || record?.binding?.strength !== requested.strength
+            || record?.binding?.clipStrength !== requested.clipStrength) {
+            throw customError('CUSTOM_WORKFLOW_LORA_BINDING_CHANGED', 'LoRA 绑定文件或参数已经变化', 409)
+          }
+          const modelName = record?.modelName
+          if (typeof modelName !== 'string' || !names.includes(modelName)) {
+            throw customError('CUSTOM_WORKFLOW_LORA_NOT_REFERENCED', 'LoRA 绑定文件没有被当前工作流引用', 409)
+          }
+          if (seenNames.has(modelName)) {
+            throw customError('CUSTOM_WORKFLOW_LORA_NAME_AMBIGUOUS', '当前工作流存在同名 LoRA 绑定歧义', 409)
+          }
+          seenNames.add(modelName)
+        }
+      }
       await this.runtimeManager.ensureReady({ reason: `custom-workflow:${jobId}` })
       const runtime = await this.inspectRuntime(true)
       if (!runtime.connected) throw customError('CUSTOM_WORKFLOW_RUNTIME_UNAVAILABLE', runtime.message || 'ComfyUI 无法连接', 409)
@@ -346,10 +424,15 @@ export class CustomWorkflowExecutor {
         values,
         registeredNodeTypes: objectInfo,
         executionId: job.id,
+        loraBindings: job.request.loraBindings,
       })
       if (verifiedWeightSet) {
         prepared.metadata.weightSet = verifiedWeightSet
         prepared.metadata.weightsVerified = true
+      }
+      if (verifiedLoraBindings) {
+        prepared.metadata.loraBindings = verifiedLoraBindings
+        prepared.metadata.loraBindingsVerified = true
       }
       await this.store.update(jobId, {
         workflowVersion: CUSTOM_WORKFLOW_EXECUTION_VERSION,
@@ -397,6 +480,7 @@ export class CustomWorkflowExecutor {
           outputNodeId: prepared.metadata.outputNodeId,
           parameterRoles: prepared.metadata.parameterRoles,
           ...(verifiedWeightSet ? { weightSet: verifiedWeightSet } : {}),
+          ...(verifiedLoraBindings ? { loraBindings: verifiedLoraBindings } : {}),
         },
       })
       const storedAsset = this.projectStore.getAsset(libraryAsset.version.assetId)

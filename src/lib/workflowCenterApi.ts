@@ -2,6 +2,19 @@ import { ensureLocalSession } from './videoApi'
 import type { CustomWorkflowJobRequest, ProcessingJob } from '../types'
 import type { WorkflowRecipe, WorkflowRecipeCatalog, WorkflowRecipeInput, WorkflowWeightSet } from './workflowRecipes.mjs'
 import type { WorkflowControlRole } from './workflowControls.mjs'
+import type { LoraBinding, LoraBaseFamily } from './loraCompatibility.mjs'
+
+export type ManagedLoraModel = { id: string; name: string; bytes: number }
+export type ManagedLoraBinding = { binding: LoraBinding; modelName: string; createdAt: number }
+export type ManagedLoraInspection = {
+  model: ManagedLoraModel
+  inspection: {
+    sha256: string; bytes: number; format: 'safetensors'; family: LoraBaseFamily | null; familyEvidence: string[]
+    tensorCount: number; rank: { min: number; max: number } | null; metadata: Record<string, string>
+    compatibility: 'compatible' | 'incompatible' | 'unverified'; warnings: string[]
+  }
+}
+export type ManagedLoraCatalog = { models: ManagedLoraModel[]; warnings: string[]; bindings: ManagedLoraBinding[] }
 
 export type WorkflowArtifactStatus = {
   id: string
@@ -120,6 +133,7 @@ export type CustomWorkflowSummary = {
   nodeTypes: string[]
   models: string[]
   weightSet?: WorkflowWeightSet | null
+  loraRequirements?: { family: LoraBaseFamily | null; names: string[] }
   mappings: CustomWorkflowMappings
   mappingHash: string
   enabled: boolean
@@ -285,6 +299,22 @@ export async function cancelCustomWorkflowJob(jobId: string) {
 
 export function fetchWorkflowRecipes() {
   return api<WorkflowRecipeCatalog>('/api/workflow-center/recipes')
+}
+
+export function fetchLoraCatalog() {
+  return api<ManagedLoraCatalog>('/api/workflow-center/loras')
+}
+export function inspectLoraModel(modelId: string, expectedFamily: LoraBaseFamily) {
+  return api<ManagedLoraInspection>('/api/workflow-center/loras/inspect', jsonRequest({ modelId, expectedFamily }))
+}
+export function saveLoraModelBinding(input: {
+  modelId: string; role: 'style' | 'character'; expectedFamily: LoraBaseFamily; strength: number
+  clipStrength?: number; triggerWords?: string[]
+}) {
+  return api<ManagedLoraBinding>('/api/workflow-center/loras/bindings', jsonRequest(input))
+}
+export function resolveLoraModelBinding(id: string, family: LoraBaseFamily) {
+  return api<ManagedLoraBinding>(`/api/workflow-center/loras/bindings/${encodeURIComponent(id)}/resolve`, jsonRequest({ family }))
 }
 
 export async function saveWorkflowRecipe(input: WorkflowRecipeInput) {

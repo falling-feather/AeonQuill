@@ -48,7 +48,10 @@ import {
   type CustomWorkflowMappings,
   type WorkflowCenterCatalog,
   type WorkflowPack,
+  type ManagedLoraBinding,
 } from '../../lib/workflowCenterApi'
+import { LoraBindingsPanel } from './LoraBindingsPanel'
+import type { LoraBinding } from '../../lib/loraCompatibility.mjs'
 import { listLibraryAssets, type LibraryAsset } from '../../lib/libraryApi'
 import type { ProcessingJob } from '../../types'
 import { validateWorkflowRecipeInput, type WorkflowRecipeSummary, type WorkflowParameterKey, type WorkflowWeightSet } from '../../lib/workflowRecipes.mjs'
@@ -64,7 +67,7 @@ interface WorkflowCenterDialogProps {
   activeProjectId?: string
 }
 
-type WorkflowTab = 'tasks' | 'recipes' | 'builtin' | 'custom'
+type WorkflowTab = 'tasks' | 'recipes' | 'builtin' | 'custom' | 'loras'
 type WorkflowCategory = 'all' | 'video' | 'image'
 
 const CUSTOM_NUMERIC_FIELDS = WORKFLOW_CONTROL_FIELDS
@@ -175,6 +178,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
   const [customRunJob, setCustomRunJob] = useState<ProcessingJob | null>(null)
   const [customRunAssetsLoading, setCustomRunAssetsLoading] = useState(false)
   const [recipes, setRecipes] = useState<WorkflowRecipeSummary[]>([])
+  const [activeLoraBindings, setActiveLoraBindings] = useState<LoraBinding[]>([])
   const [recipeName, setRecipeName] = useState('')
   const [customHistory, setCustomHistory] = useState<ProcessingJob[]>([])
 
@@ -426,6 +430,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
   }
 
   const openCustomRunner = (workflow: NonNullable<WorkflowCenterCatalog['customWorkflows'][number]>) => {
+    setActiveLoraBindings([])
     setSelectedCustomId(workflow.id)
     setCustomRunTitle(`${workflow.title} 输出`.slice(0, 120))
     setCustomRunPrompt('')
@@ -445,6 +450,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
       const input = validateWorkflowRecipeInput({
         name: recipeName, workflowId: selectedCustom.id, workflowHash: selectedCustom.hash,
         mappingHash: selectedCustom.mappingHash, parameters: numericParameters(customRunNumbers),
+        ...(activeLoraBindings.length ? { loraBindings: activeLoraBindings } : {}),
       }, selectedCustom)
       await saveWorkflowRecipe(input)
     }, '配方已保存。下次可复用参数，并选择新的项目素材。')
@@ -460,6 +466,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
       openCustomRunner(workflow)
       setCustomRunNumbers(Object.fromEntries(Object.entries(recipe.parameters).map(([key, value]) => [key, String(value)])))
       setRecipeName(recipe.name)
+      setActiveLoraBindings(recipe.loraBindings ?? [])
       setMessage('配方已应用，请填写本次内容并选择输入素材。')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '配方应用失败')
@@ -478,6 +485,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
         workflowHash: selectedCustom.hash,
         mappingHash: selectedCustom.mappingHash,
         weightSet: selectedCustom.weightSet ?? null,
+        ...(activeLoraBindings.length ? { loraBindings: activeLoraBindings } : {}),
         projectId: customRunProjectId,
         title: customRunTitle,
         prompt: customRunPrompt,
@@ -552,6 +560,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
           <button type="button" role="tab" aria-selected={tab === 'recipes'} className={tab === 'recipes' ? 'is-active' : ''} onClick={() => setTab('recipes')}><Workflow size={15} />我的配方{recipes.length ? ` · ${recipes.length}` : ''}</button>
           <button type="button" role="tab" aria-selected={tab === 'builtin'} className={tab === 'builtin' ? 'is-active' : ''} onClick={() => setTab('builtin')}><Box size={15} />内置能力包</button>
           <button type="button" role="tab" aria-selected={tab === 'custom'} className={tab === 'custom' ? 'is-active' : ''} onClick={() => setTab('custom')}><FileJson2 size={15} />自定义 ComfyUI JSON</button>
+          <button type="button" role="tab" aria-selected={tab === 'loras'} className={tab === 'loras' ? 'is-active' : ''} onClick={() => setTab('loras')}>LoRA 与参考配方</button>
         </div>
 
         {tab === 'builtin' ? (
@@ -671,6 +680,23 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
               <div className="aq-workflow-task-grid">{recipes.map((recipe) => <article key={recipe.id} className="aq-workflow-recipe-card"><h4>{recipe.name}</h4><p>{catalog?.customWorkflows.find(({ id }) => id === recipe.workflowId)?.title ?? '工作流已移除'}</p><small>{Object.entries(recipe.parameters).map(([key, value]) => `${PARAMETER_LABELS[key as WorkflowParameterKey]} ${value}`).join(' · ') || '使用工作流默认参数'}</small><FixedWeightsSummary weightSet={recipe.weightSet} />{recipe.reason ? <p role="status">{recipe.reason}</p> : null}<footer><button type="button" className="is-primary" onClick={() => void applyRecipe(recipe.id)} disabled={Boolean(busy) || recipe.availability !== 'ready'}>应用配方</button><button type="button" aria-label={`删除配方 ${recipe.name}`} onClick={() => void run(`remove-recipe:${recipe.id}`, () => removeWorkflowRecipe(recipe.id), '配方已删除。')} disabled={Boolean(busy)}><Trash2 size={14} /></button></footer></article>)}</div>
               {!recipes.length ? <p className="aq-workflow-center__empty">运行面板中的“保存配方”可以保存当前参数。</p> : null}
             </section> : null}
+            {tab === 'loras' ? <LoraBindingsPanel onUseBinding={(record: ManagedLoraBinding) => {
+              if (!selectedCustom?.mappings.loraStrength) {
+                setError('请先打开已映射 LoRA 强度的自定义工作流，再选择绑定')
+                return
+              }
+              const requirements = selectedCustom.loraRequirements
+              if (!requirements?.family || requirements.family !== record.binding.family || !requirements.names.includes(record.modelName)) {
+                setError('当前工作流的底模或 LoRA 文件与此绑定不一致，请先导入匹配的受控工作流')
+                return
+              }
+              setActiveLoraBindings([record.binding])
+              setCustomRunNumbers((current) => ({ ...current, loraStrength: String(record.binding.strength),
+                ...(selectedCustom.mappings.loraClipStrength && record.binding.clipStrength !== undefined ? { loraClipStrength: String(record.binding.clipStrength) } : {}) }))
+              if (record.binding.triggerWords?.length) setCustomRunPrompt((current) => [current, ...record.binding.triggerWords!].filter(Boolean).join(' '))
+              setTab('custom')
+              setMessage('LoRA 身份与参数已带入当前配方；提交执行前还会重新核对文件')
+            }} /> : null}
             {tab === 'custom' ? <>
             <section className="aq-custom-workflow__import">
               <header><div><h3>导入受控 API 工作流</h3><p>只接受 ComfyUI“保存（API 格式）”；界面 JSON、未知节点与任意路径会被拒绝。</p></div><ShieldCheck size={19} /></header>
@@ -755,6 +781,7 @@ export function WorkflowCenterDialog({ open, onClose, onOpenRuntimeSettings, pro
                   ))}
                 </div>
                 <FixedWeightsSummary weightSet={selectedCustom.weightSet} />
+                {activeLoraBindings.length ? <div className="aq-workflow-recipe-save" aria-label="当前 LoRA 绑定"><span>{activeLoraBindings.map((binding) => `${binding.role === 'style' ? '风格' : '角色'} · ${binding.family} · ${binding.sha256.slice(0, 12)}… · 强度 ${binding.strength}`).join(' / ')}</span><button type="button" onClick={() => setActiveLoraBindings([])} disabled={Boolean(busy)}>移除 LoRA 绑定</button><small>修改强度后请重新检查并保存绑定。</small></div> : null}
                 <div className="aq-workflow-recipe-save"><label>配方名称<input aria-label="配方名称" value={recipeName} maxLength={80} onChange={(event) => setRecipeName(event.target.value)} /></label><button type="button" onClick={() => void saveCurrentRecipe()} disabled={Boolean(busy) || !recipeName.trim()}>保存配方</button><small>保存工作流与数值参数，素材和描述由每次任务提供。</small></div>
                 {customRunJob ? (
                   <div className={`aq-custom-runner__job is-${customRunJob.status}`}>

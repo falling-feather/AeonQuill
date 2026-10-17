@@ -104,6 +104,9 @@ import {
 } from './sound-renderer.mjs'
 import { CUSTOM_WORKFLOW_EXECUTION_VERSION, WorkflowCenterService } from './workflow-center.mjs'
 import { WorkflowRecipeStore } from './workflow-recipe-store.mjs'
+import { LoraCatalog } from './lora-catalog.mjs'
+import { verifyWorkflowLoraBindings } from './lora-verification.mjs'
+import { validateWorkflowRecipeInput } from '../src/lib/workflowRecipes.mjs'
 import { SpeechAlignmentJobService } from './speech-alignment-jobs.mjs'
 import { probeSpeechAlignment } from './speech-alignment.mjs'
 import { prepareMediaJobEnvelope } from './media-job-binding.mjs'
@@ -192,6 +195,32 @@ const workflowRecipes = new WorkflowRecipeStore(join(dataDirectory, 'workflow-ce
     }
   },
 })
+let loraCatalogKey = ''
+let loraCatalogPromise = null
+async function currentLoraCatalog() {
+  const registry = await workflowCenter.runtimeRegistry()
+  const roots = registry.modelRoots.filter((root) => root.category === 'loras').map((root) => root.path)
+  if (!registry.configured || !roots.length) {
+    throw Object.assign(new Error('请先配置 ComfyUI 与 LoRA 模型目录'), { code: 'LORA_RUNTIME_UNCONFIGURED', status: 409 })
+  }
+  const key = JSON.stringify(roots)
+  if (!loraCatalogPromise || loraCatalogKey !== key) {
+    loraCatalogKey = key
+    const catalog = new LoraCatalog({ roots, storeRoot: join(dataDirectory, 'workflow-center', 'lora-bindings') })
+    loraCatalogPromise = catalog.open().then(() => catalog).catch((error) => {
+      if (loraCatalogKey === key) loraCatalogPromise = null
+      throw error
+    })
+  }
+  return loraCatalogPromise
+}
+
+async function verifyCurrentLoraBindings(request, workflow = null) {
+  if (!request.loraBindings?.length) return []
+  const summary = workflow ?? workflowCenter.customExecutionSummary(request.customWorkflowId ?? request.workflowId)
+  return verifyWorkflowLoraBindings(await currentLoraCatalog(), request.loraBindings, summary, request.parameters ?? request)
+}
+
 const runtimeRegistryMigration = new RuntimeRegistryMigrationService({
   rootDirectory: join(dataDirectory, 'runtime-registry-migrations'),
   getRegistry: () => workflowCenter.runtimeRegistry(),
@@ -3369,6 +3398,7 @@ async function createCustomWorkflowJob(body, retrySource, options = {}) {
     : hashRequest('custom-workflow', request)
   const existing = existingIdempotentJob(CUSTOM_WORKFLOW_JOB_KIND, idempotencyKey, requestHashValue)
   if (existing) return { job: store.publicJob(existing), reused: true }
+  await verifyCurrentLoraBindings(request, validated.workflow)
   await assertStorageCapacity(runtimeDirectory, 320 * 1024 * 1024)
   const job = newCustomWorkflowJob(request, validated.workflow, {
     mediaBinding: options.mediaBinding,
@@ -3860,6 +3890,13 @@ const customWorkflowExecutor = new CustomWorkflowExecutor({
   managedComfyInputRoot: managedComfyLaunch.directories.input,
   deliverOutput: deliverConfiguredOutput,
   scheduleRuntimeIdleStop,
+  verifyLoraBindings: async (request) => {
+    const bindings = await verifyCurrentLoraBindings(request)
+    if (bindings.some(({ binding }) => binding.family === 'qwen-image-edit')) {
+      await workflowCenter.verifyRegisteredArtifacts(['qwen-image-edit-2511-int8-convrot'])
+    }
+    return bindings
+  },
 })
 
 const semanticImageExecutor = new SemanticImageExecutor({
@@ -4338,6 +4375,29 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/api/workflow-center/jobs') {
       return sendJson(response, 200, { jobs: workflowCenter.jobs() })
     }
+    if (request.method === 'GET' && pathname === '/api/workflow-center/loras') {
+      const catalog = await currentLoraCatalog()
+      const [models, bindings] = await Promise.all([catalog.list(), catalog.listBindings()])
+      return sendJson(response, 200, sanitizePublicPayload({ ...models, ...bindings }))
+    }
+    if (request.method === 'POST' && pathname === '/api/workflow-center/loras/inspect') {
+      const body = await readJsonBody(request, 8 * 1024)
+      if (!body || Object.keys(body).some((key) => !['modelId', 'expectedFamily'].includes(key))) {
+        throw Object.assign(new Error('LoRA 检查请求字段无效'), { code: 'LORA_REQUEST_INVALID', status: 400 })
+      }
+      return sendJson(response, 200, sanitizePublicPayload(await (await currentLoraCatalog()).inspect(body)))
+    }
+    if (request.method === 'POST' && pathname === '/api/workflow-center/loras/bindings') {
+      return sendJson(response, 201, sanitizePublicPayload(await (await currentLoraCatalog()).saveBinding(await readJsonBody(request, 8 * 1024))))
+    }
+    const loraResolveMatch = /^\/api\/workflow-center\/loras\/bindings\/([^/]+)\/resolve$/u.exec(pathname)
+    if (request.method === 'POST' && loraResolveMatch) {
+      const body = await readJsonBody(request, 4 * 1024)
+      if (!body || Object.keys(body).join(',') !== 'family') {
+        throw Object.assign(new Error('LoRA 兼容复核请求字段无效'), { code: 'LORA_REQUEST_INVALID', status: 400 })
+      }
+      return sendJson(response, 200, sanitizePublicPayload(await (await currentLoraCatalog()).resolveBinding(decodeURIComponent(loraResolveMatch[1]), body.family)))
+    }
     if (request.method === 'GET' && pathname === '/api/workflow-center/recipes') {
       return sendJson(response, 200, workflowRecipes.list())
     }
@@ -4354,7 +4414,11 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, await speechAlignmentJobs.result(decodeURIComponent(alignmentResultMatch[1])))
     }
     if (request.method === 'POST' && pathname === '/api/workflow-center/recipes') {
-      const recipe = await workflowRecipes.create(await readJsonBody(request, 16 * 1024))
+      const body = await readJsonBody(request, 16 * 1024)
+      const workflow = body && typeof body.workflowId === 'string' ? workflowCenter.customExecutionSummary(body.workflowId) : null
+      const input = validateWorkflowRecipeInput(body, workflow)
+      await verifyCurrentLoraBindings(input, workflow)
+      const recipe = await workflowRecipes.create(input)
       return sendJson(response, 201, { recipe })
     }
     const recipeResolveMatch = /^\/api\/workflow-center\/recipes\/([^/]+)\/resolve$/u.exec(pathname)
@@ -4363,7 +4427,9 @@ const server = createServer(async (request, response) => {
       if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).length) {
         return sendError(response, 400, 'INVALID_WORKFLOW_RECIPE', '应用配方请求必须是空对象')
       }
-      return sendJson(response, 200, { recipe: workflowRecipes.resolve(decodeURIComponent(recipeResolveMatch[1])) })
+      const recipe = workflowRecipes.resolve(decodeURIComponent(recipeResolveMatch[1]))
+      await verifyCurrentLoraBindings(recipe)
+      return sendJson(response, 200, { recipe })
     }
     const recipeDeleteMatch = /^\/api\/workflow-center\/recipes\/([^/]+)$/u.exec(pathname)
     if (request.method === 'DELETE' && recipeDeleteMatch) {

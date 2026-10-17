@@ -1,4 +1,5 @@
 import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
+import type { LoraBinding } from './lib/loraCompatibility.mjs'
 import type { ImageEditPresetId, ImageEditPresetMaturity } from './lib/imageEditPresets.mjs'
 
 export type ElementKind =
@@ -465,6 +466,7 @@ export type CustomWorkflowJobRequest = {
   sourceContentHash?: string
   lastFrameContentHash?: string
   weightSet?: WorkflowWeightSet | null
+  loraBindings?: LoraBinding[]
   projectId: string
   title: string
   prompt: string

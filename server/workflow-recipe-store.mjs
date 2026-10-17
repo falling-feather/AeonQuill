@@ -25,7 +25,7 @@ export class WorkflowRecipeStore {
       if ((await stat(this.path)).size > MAX_BYTES) throw new Error('oversized recipe store')
       const saved = JSON.parse(await readFile(this.path, 'utf8'))
       if (!saved || Object.keys(saved).sort().join(',') !== 'recipes,revision,schemaVersion'
-        || ![1, WORKFLOW_RECIPE_SCHEMA_VERSION].includes(saved.schemaVersion) || !Number.isSafeInteger(saved.revision) || saved.revision < 0
+        || ![1, 2, WORKFLOW_RECIPE_SCHEMA_VERSION].includes(saved.schemaVersion) || !Number.isSafeInteger(saved.revision) || saved.revision < 0
         || !Array.isArray(saved.recipes) || saved.recipes.length > MAX_RECIPES) throw new Error('invalid recipe store')
       const recipes = saved.recipes.map((recipe) => migrateWorkflowRecipeRecord(recipe, saved.schemaVersion))
       if (new Set(recipes.map(({ id }) => id)).size !== recipes.length) throw new Error('duplicate recipe')

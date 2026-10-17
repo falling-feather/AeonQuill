@@ -1,10 +1,13 @@
 import { WORKFLOW_CONTROL_FIELDS, validateWorkflowControlValue } from './workflowControls.mjs'
-export const WORKFLOW_RECIPE_SCHEMA_VERSION = 2
+import { normalizeLoraBinding } from './loraCompatibility.mjs'
+export const WORKFLOW_RECIPE_SCHEMA_VERSION = 3
 const LEGACY_INPUT_FIELDS = ['name', 'workflowId', 'workflowHash', 'mappingHash', 'parameters']
-const INPUT_FIELDS = [...LEGACY_INPUT_FIELDS, 'weightSet']
+const INPUT_FIELDS = [...LEGACY_INPUT_FIELDS, 'weightSet', 'loraBindings']
 const RECORD_FIELDS = ['id', ...INPUT_FIELDS, 'createdAt', 'updatedAt']
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/u
 const HASH = /^[a-f0-9]{64}$/u
+const LORA_FAMILIES = new Set(['sd15', 'sdxl', 'flux', 'qwen-image-edit', 'minimax-h3'])
+const LORA_ROLES = new Set(['style', 'character'])
 
 function fail(code, message, status = 400) { throw Object.assign(new Error(message), { code, status }) }
 function record(value, keys, label, required = keys, code = 'INVALID_WORKFLOW_RECIPE') {
@@ -47,6 +50,66 @@ export function assertWorkflowWeightSetCompatible(actual, expected) {
   }
 }
 
+export function normalizeWorkflowLoraBindings(input) {
+  if (input === undefined || input === null) return []
+  if (!Array.isArray(input) || input.length > 2) fail('INVALID_LORA_BINDINGS', '最多保存两个 LoRA 绑定')
+  const bindings = input.map((value) => normalizeLoraBinding(value))
+  const ids = new Set()
+  const roles = new Set()
+  let family = null
+  for (const binding of bindings) {
+    if (!LORA_FAMILIES.has(binding.family)) fail('INVALID_LORA_BINDINGS', 'LoRA 家族无效')
+    if (!LORA_ROLES.has(binding.role) || roles.has(binding.role)) fail('INVALID_LORA_BINDINGS', 'style/character 角色不能重复')
+    if (ids.has(binding.id)) fail('INVALID_LORA_BINDINGS', 'LoRA 绑定 ID 不能重复')
+    if (family !== null && family !== binding.family) fail('INVALID_LORA_BINDINGS', '同一配方的 LoRA 必须属于同一底模家族')
+    ids.add(binding.id)
+    roles.add(binding.role)
+    family = binding.family
+  }
+  return bindings.slice().sort((left, right) => left.role.localeCompare(right.role) || left.id.localeCompare(right.id))
+}
+
+export function assertWorkflowLoraBindingsCompatible(input, workflow) {
+  const bindings = normalizeWorkflowLoraBindings(input)
+  if (!bindings.length) return bindings
+  const requirements = workflow?.loraRequirements
+  if (!requirements || !Array.isArray(requirements.names) || !requirements.family || !LORA_FAMILIES.has(requirements.family)) {
+    fail('LORA_BASE_FAMILY_UNPROVEN', '当前工作流没有可证明的 LoRA 底模家族', 409)
+  }
+  if (!workflow?.mappings?.loraStrength) fail('LORA_STRENGTH_MAPPING_MISSING', '当前工作流没有映射 loraStrength，不能绑定用户 LoRA', 409)
+  if (bindings.some((binding) => binding.family !== requirements.family)) {
+    fail('LORA_FAMILY_MISMATCH', 'LoRA 绑定家族与当前工作流底模不匹配', 409)
+  }
+  if (bindings.some((binding) => binding.clipStrength !== undefined) && !workflow?.mappings?.loraClipStrength) {
+    fail('LORA_CLIP_STRENGTH_MAPPING_MISSING', 'LoRA 绑定包含 CLIP 强度，但当前工作流没有映射 loraClipStrength', 409)
+  }
+  if (requirements.names.length < bindings.length) fail('LORA_MAPPING_TARGET_MISSING', '当前工作流的 LoRA 节点不足以承载绑定', 409)
+  return bindings
+}
+
+export function assertWorkflowLoraControlsMatchBindings(bindings, values = {}) {
+  const normalized = normalizeWorkflowLoraBindings(bindings)
+  if (!normalized.length) return normalized
+  const strengths = new Set(normalized.map((binding) => binding.strength))
+  if (strengths.size !== 1) fail('LORA_STRENGTH_CONFLICT', '多个 LoRA 绑定的模型强度不一致', 409)
+  const strength = normalized[0].strength
+  if (values.loraStrength !== undefined && values.loraStrength !== strength) {
+    fail('LORA_STRENGTH_MISMATCH', '任务 loraStrength 与 LoRA 绑定不一致', 409)
+  }
+  const clipBindings = normalized.filter((binding) => binding.clipStrength !== undefined)
+  if (clipBindings.length) {
+    const clipStrengths = new Set(clipBindings.map((binding) => binding.clipStrength))
+    if (clipStrengths.size !== 1) fail('LORA_CLIP_STRENGTH_CONFLICT', '多个 LoRA 绑定的 CLIP 强度不一致', 409)
+    const clipStrength = clipBindings[0].clipStrength
+    if (values.loraClipStrength !== undefined && values.loraClipStrength !== clipStrength) {
+      fail('LORA_CLIP_STRENGTH_MISMATCH', '任务 loraClipStrength 与 LoRA 绑定不一致', 409)
+    }
+  } else if (values.loraClipStrength !== undefined) {
+    fail('LORA_CLIP_STRENGTH_MISMATCH', '任务提供了 CLIP 强度，但绑定没有对应强度', 409)
+  }
+  return normalized
+}
+
 function normalizeInput(input) {
   record(input, INPUT_FIELDS, '配方', LEGACY_INPUT_FIELDS)
   const name = typeof input.name === 'string' ? input.name.trim() : ''
@@ -65,7 +128,15 @@ function normalizeInput(input) {
     try { parameters[key] = validateWorkflowControlValue(key, value) }
     catch (error) { fail('RECIPE_PARAMETER_RANGE', error.message) }
   }
-  return { name, workflowId: input.workflowId, workflowHash: input.workflowHash, mappingHash: input.mappingHash, parameters, weightSet: validateWorkflowWeightSet(input.weightSet ?? null) }
+  return {
+    name,
+    workflowId: input.workflowId,
+    workflowHash: input.workflowHash,
+    mappingHash: input.mappingHash,
+    parameters,
+    weightSet: validateWorkflowWeightSet(input.weightSet ?? null),
+    loraBindings: normalizeWorkflowLoraBindings(input.loraBindings),
+  }
 }
 
 export function assertWorkflowRecipeCompatible(recipe, workflow) {
@@ -75,6 +146,7 @@ export function assertWorkflowRecipeCompatible(recipe, workflow) {
   }
   if (!workflow.enabled) fail('WORKFLOW_RECIPE_DISABLED', '请先启用配方对应的工作流', 409)
   assertWorkflowWeightSetCompatible(recipe.weightSet ?? null, workflow.weightSet ?? null)
+  assertWorkflowLoraBindingsCompatible(recipe.loraBindings ?? [], workflow)
   for (const key of Object.keys(recipe.parameters)) {
     if (!workflow.mappings?.[key]) fail('RECIPE_PARAMETER_NOT_MAPPED', `当前工作流没有 ${key} 参数映射`)
   }
@@ -100,9 +172,12 @@ export function validateWorkflowRecipeRecord(input) {
 }
 
 export function migrateWorkflowRecipeRecord(input, schemaVersion) {
-  if (schemaVersion === 1) {
-    record(input, ['id', ...LEGACY_INPUT_FIELDS, 'createdAt', 'updatedAt'], '旧配方记录')
-    return validateWorkflowRecipeRecord({ ...input, weightSet: null })
+  if (schemaVersion === 1 || schemaVersion === 2) {
+    const legacyKeys = schemaVersion === 1
+      ? ['id', ...LEGACY_INPUT_FIELDS, 'createdAt', 'updatedAt']
+      : ['id', ...INPUT_FIELDS.filter((key) => key !== 'loraBindings'), 'createdAt', 'updatedAt']
+    record(input, legacyKeys, '旧配方记录')
+    return validateWorkflowRecipeRecord({ ...input, weightSet: input.weightSet ?? null, loraBindings: [] })
   }
   if (schemaVersion !== WORKFLOW_RECIPE_SCHEMA_VERSION) fail('INVALID_WORKFLOW_RECIPE', '配方版本无效')
   return validateWorkflowRecipeRecord(input)

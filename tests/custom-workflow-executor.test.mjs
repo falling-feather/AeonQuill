@@ -297,6 +297,157 @@ test('custom workflow request validation binds execution to an active project an
   )
 })
 
+test('custom workflow summary proves Qwen LoRA family only through a connected registered base loader', async (t) => {
+  const target = await fixture(t)
+  const qwenObjectInfo = {
+    ...objectInfo,
+    UNETLoader: { input: { required: { unet_name: [['qwen_image_edit_2511_int8_convrot.safetensors']] } } },
+    LoraLoaderModelOnly: { input: { required: { model: ['MODEL', {}], lora_name: [['sub/style.safetensors']], strength_model: ['FLOAT', {}] } } },
+  }
+  const qwenWorkflow = {
+    1: { class_type: 'UNETLoader', inputs: { unet_name: 'qwen_image_edit_2511_int8_convrot.safetensors' } },
+    2: { class_type: 'LoraLoaderModelOnly', inputs: { model: ['1', 0], lora_name: 'sub/style.safetensors', strength_model: 1 } },
+    3: { class_type: 'CLIPTextEncode', inputs: { text: 'original' } },
+    4: { class_type: 'SaveImage', inputs: { images: ['3', 0] } },
+  }
+  const mappings = {
+    prompt: { nodeId: '3', inputName: 'text' },
+    loraStrength: { nodeId: '2', inputName: 'strength_model' },
+    output: { nodeId: '4' },
+  }
+  const imported = await target.workflowCenter.importCustom({
+    title: 'Qwen LoRA 绑定',
+    workflow: qwenWorkflow,
+    mappings,
+    registeredNodeTypes: qwenObjectInfo,
+  })
+  await target.workflowCenter.setCustomEnabled(imported.id, true, qwenObjectInfo)
+  const summary = target.workflowCenter.customExecutionSummary(imported.id)
+  assert.deepEqual(summary.loraRequirements, { family: 'qwen-image-edit', names: ['sub/style.safetensors'] })
+
+  const orphan = structuredClone(qwenWorkflow)
+  orphan[2].inputs.model = ['99', 0]
+  const orphanImported = await target.workflowCenter.importCustom({
+    title: '孤立 Qwen LoRA',
+    workflow: orphan,
+    mappings,
+    registeredNodeTypes: qwenObjectInfo,
+  })
+  await target.workflowCenter.setCustomEnabled(orphanImported.id, true, qwenObjectInfo)
+  assert.deepEqual(target.workflowCenter.customExecutionSummary(orphanImported.id).loraRequirements, {
+    family: null,
+    names: ['sub/style.safetensors'],
+  })
+})
+
+test('custom workflow job canonicalizes binding strength and rejects missing mappings', async (t) => {
+  const target = await fixture(t)
+  const original = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => {
+    const summary = original(id)
+    return {
+      ...summary,
+      mappings: { ...summary.mappings, loraStrength: { nodeId: '1', inputName: 'strength_model' } },
+      loraRequirements: { family: 'sd15', names: ['style.safetensors'] },
+    }
+  }
+  const binding = { id: 'binding-style', family: 'sd15', sha256: 'a'.repeat(64), role: 'style', strength: 0.75 }
+  const body = {
+    ...executionJob('lora-validation', target.imported.id).request,
+    loraBindings: [binding],
+  }
+  const validated = validateCustomWorkflowJobRequest(body, target)
+  assert.equal(validated.request.loraStrength, 0.75)
+  assert.deepEqual(validated.request.loraBindings, [binding])
+  target.workflowCenter.customExecutionSummary = (id) => {
+    const summary = original(id)
+    return { ...summary, loraRequirements: { family: 'sd15', names: ['style.safetensors'] } }
+  }
+  assert.throws(() => validateCustomWorkflowJobRequest(body, target), { code: 'LORA_STRENGTH_MAPPING_MISSING' })
+})
+
+test('executor rejects a LoRA job before waking runtime when verifier is absent', async (t) => {
+  const target = await fixture(t)
+  const original = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => {
+    const summary = original(id)
+    return {
+      ...summary,
+      mappings: { ...summary.mappings, loraStrength: { nodeId: '1', inputName: 'strength_model' } },
+      loraRequirements: { family: 'sd15', names: ['style.safetensors'] },
+    }
+  }
+  const job = executionJob('lora-no-verifier', target.imported.id)
+  job.request.loraBindings = [{ id: 'binding-style', family: 'sd15', sha256: 'a'.repeat(64), role: 'style', strength: 1 }]
+  job.request.loraStrength = 1
+  await target.store.add(job)
+  let ensureReadyCalls = 0
+  const comfy = fakeComfy({ outputs: { 2: { images: [{ filename: 'result.png', type: 'output' }] } } })
+  const executor = new CustomWorkflowExecutor({
+    ...target,
+    comfy,
+    runtimeManager: { async ensureReady() { ensureReadyCalls += 1 } },
+    inspectRuntime: async () => ({ connected: true }),
+    managedComfyInputRoot: target.inputRoot,
+  })
+  await executor.run(job.id, { signal: new AbortController().signal })
+  assert.equal(ensureReadyCalls, 0)
+  assert.equal(comfy.capture.queuedWorkflow, null)
+  assert.equal(target.store.get(job.id).error.code, 'CUSTOM_WORKFLOW_LORA_VERIFIER_UNAVAILABLE')
+})
+
+test('executor records verified LoRA bindings in workflow metadata and output provenance', async (t) => {
+  const target = await fixture(t)
+  const originalSummary = target.workflowCenter.customExecutionSummary.bind(target.workflowCenter)
+  target.workflowCenter.customExecutionSummary = (id) => {
+    const summary = originalSummary(id)
+    return {
+      ...summary,
+      mappings: { ...summary.mappings, loraStrength: { nodeId: '1', inputName: 'strength_model' } },
+      loraRequirements: { family: 'sd15', names: ['style.safetensors'] },
+    }
+  }
+  const binding = { id: 'binding-style', family: 'sd15', sha256: 'a'.repeat(64), role: 'style', strength: 1 }
+  const job = executionJob('lora-verified', target.imported.id)
+  job.request.loraBindings = [binding]
+  job.request.loraStrength = 1
+  await target.store.add(job)
+  const preparedWorkflow = structuredClone(workflow)
+  const originalPrepare = target.workflowCenter.prepareCustomExecution.bind(target.workflowCenter)
+  target.workflowCenter.prepareCustomExecution = () => ({
+    workflow: preparedWorkflow,
+    metadata: {
+      version: 'aeonquill-custom-workflow-execution-v1',
+      customWorkflowId: target.imported.id,
+      customWorkflowTitle: target.imported.title,
+      workflowHash: target.imported.hash,
+      mappingHash: target.imported.mappingHash,
+      outputNodeId: '2',
+      outputNodeType: 'SaveImage',
+      parameterRoles: ['loraStrength', 'prompt'],
+      nodeCount: 2,
+      weightSet: null,
+    },
+  })
+  t.after(() => { target.workflowCenter.prepareCustomExecution = originalPrepare })
+  const record = { binding: structuredClone(binding), modelName: 'style.safetensors', createdAt: 1 }
+  const comfy = fakeComfy({ outputs: { 2: { images: [{ filename: 'result.png', type: 'output' }] } } })
+  const executor = new CustomWorkflowExecutor({
+    ...target,
+    comfy,
+    verifyLoraBindings: async () => [record],
+    runtimeManager: { async ensureReady() {} },
+    inspectRuntime: async () => ({ connected: true }),
+    managedComfyInputRoot: target.inputRoot,
+  })
+  await executor.run(job.id, { signal: new AbortController().signal })
+  const completed = target.store.get(job.id)
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.workflowMetadata.loraBindingsVerified, true)
+  assert.deepEqual(completed.workflowMetadata.loraBindings, [record])
+  assert.deepEqual(completed.outputVersion.provenance.loraBindings, [record])
+})
+
 test('custom image input only accepts project-visible assets and injects a managed ComfyUI filename', async (t) => {
   const target = await fixture(t)
   const imageWorkflow = {

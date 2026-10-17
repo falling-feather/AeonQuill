@@ -57,6 +57,22 @@ test('recipes round-trip supported fractional controls without accepting numeric
   assert.throws(() => validateWorkflowRecipeInput({ ...input(), workflowId: 123 }, controls), hasCode('INVALID_WORKFLOW_RECIPE'))
 })
 
+test('schema 3 recipes canonicalize compatible style and character bindings and reject unsafe combinations', () => {
+  const loraWorkflow = {
+    ...workflow,
+    mappings: { ...workflow.mappings, loraStrength: { nodeId: '4', inputName: 'strength_model' } },
+    loraRequirements: { family: 'sd15', names: ['style.safetensors', 'character.safetensors'] },
+  }
+  const style = { id: 'binding-style', family: 'sd15', sha256: 'a'.repeat(64), role: 'style', strength: 1 }
+  const character = { id: 'binding-character', family: 'sd15', sha256: 'b'.repeat(64), role: 'character', strength: 1 }
+  const recipe = validateWorkflowRecipeInput({ ...input(), loraBindings: [character, style] }, loraWorkflow)
+  assert.deepEqual(recipe.loraBindings.map(({ role }) => role), ['character', 'style'])
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), loraBindings: [{ ...style, family: 'sdxl' }] }, loraWorkflow), hasCode('LORA_FAMILY_MISMATCH'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), loraBindings: [style, { ...style, id: 'binding-style-2' }] }, loraWorkflow), hasCode('INVALID_LORA_BINDINGS'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), loraBindings: [style, { ...character, role: 'style' }] }, loraWorkflow), hasCode('INVALID_LORA_BINDINGS'))
+  assert.throws(() => validateWorkflowRecipeInput({ ...input(), loraBindings: [style] }, { ...loraWorkflow, mappings: workflow.mappings }), hasCode('LORA_STRENGTH_MAPPING_MISSING'))
+})
+
 test('recipe store serializes concurrent writes and persists independent immutable values across reopen', () => isolated(async (root) => {
   const store = new WorkflowRecipeStore(root, { getWorkflow: () => workflow })
   await store.open()
@@ -125,12 +141,23 @@ test('v1 records migrate explicitly without inventing historical weight evidence
   assert.equal(await readFile(join(root, 'recipes.json'), 'utf8'), serialized)
   await store.create(input('绑定当前权重'))
   const saved = JSON.parse(await readFile(join(root, 'recipes.json'), 'utf8'))
-  assert.equal(saved.schemaVersion, 2)
+  assert.equal(saved.schemaVersion, 3)
   assert.equal(saved.recipes[0].weightSet, null)
+  assert.deepEqual(saved.recipes[0].loraBindings, [])
   assert.deepEqual(saved.recipes[1].weightSet, weightSet)
+  assert.deepEqual(saved.recipes[1].loraBindings, [])
   const reopened = new WorkflowRecipeStore(root, { getWorkflow: () => ({ ...workflow, weightSet }) })
   await reopened.open()
   assert.deepEqual(reopened.resolve(saved.recipes[1].id).parameters, legacy.parameters)
+}))
+
+test('v2 records migrate to schema 3 with an empty LoRA binding list', () => isolated(async (root) => {
+  const legacy = { id: 'legacy-v2', ...input(), weightSet: null, createdAt: 1, updatedAt: 1 }
+  await writeFile(join(root, 'recipes.json'), JSON.stringify({ schemaVersion: 2, revision: 4, recipes: [legacy] }), 'utf8')
+  const store = new WorkflowRecipeStore(root, { getWorkflow: () => workflow })
+  await store.open()
+  assert.deepEqual(store.get(legacy.id).loraBindings, [])
+  assert.equal(store.list().revision, 4)
 }))
 
 test('failed atomic persistence does not publish a recipe or increment the in-memory revision', () => isolated(async (root) => {

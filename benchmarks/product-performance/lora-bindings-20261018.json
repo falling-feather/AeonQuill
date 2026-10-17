@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "lora-bindings-api-contract",
+  "qualityScope": "fixture-contract-only; no model quality claim",
+  "browser": {
+    "status": "passed",
+    "issues": [],
+    "desktop": true,
+    "mobile": true,
+    "jobSubmitted": true,
+    "gpuWakeAvoided": true
+  },
+  "gpu": {
+    "started": false,
+    "used": false
+  },
+  "checks": {
+    "emptyDirectory": {
+      "status": "empty-with-guidance",
+      "warnings": 1
+    },
+    "catalog": {
+      "modelCount": 4,
+      "bindingCount": 0,
+      "warnings": 0
+    },
+    "inspect": {
+      "compatible": true,
+      "wrongFamily": "incompatible",
+      "unknown": "unverified"
+    },
+    "binding": {
+      "role": "character",
+      "family": "qwen-image-edit",
+      "triggerWords": [
+        "青色角色"
+      ]
+    },
+    "recipeAndJob": {
+      "recipeIdPresent": true,
+      "jobStatus": "failed",
+      "loraVerifiedBeforeBaseGate": true,
+      "gpuWakeAvoided": true
+    },
+    "changedFile": {
+      "resolve": "LORA_SHA256_MISMATCH",
+      "recipe": "LORA_SHA256_MISMATCH",
+      "job": "LORA_SHA256_MISMATCH",
+      "gpuWakeAvoided": true
+    },
+    "sameNameRoots": {
+      "rejected": "CUSTOM_WORKFLOW_LORA_NAME_AMBIGUOUS"
+    }
+  },
+  "status": "passed",
+  "sourceScope": "Working-tree integration; final clean release validation is separate.",
+  "unitTests": {
+    "total": 45,
+    "passed": 44,
+    "skipped": 1,
+    "reason": "Windows test symlink creation unavailable"
+  },
+  "qualityClaim": "Static format/family screening and fixture engineering chain only; real LoRA output and training were not executed."
+}

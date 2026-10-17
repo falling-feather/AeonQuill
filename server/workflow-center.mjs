@@ -26,6 +26,9 @@ import {
 } from '../src/lib/workflowControls.mjs'
 import {
   assertWorkflowWeightSetCompatible,
+  assertWorkflowLoraBindingsCompatible,
+  assertWorkflowLoraControlsMatchBindings,
+  normalizeWorkflowLoraBindings,
   validateWorkflowWeightSet,
 } from '../src/lib/workflowRecipes.mjs'
 import {
@@ -1076,8 +1079,54 @@ export class WorkflowCenterService {
     return this.getVideoWeightSet(profile.id, samplingMode)
   }
 
+  _customLoraRequirementsForWorkflow(workflow, weightSet = null, mappings = null) {
+    const entries = Object.entries(workflow || {})
+    const loraEntries = []
+    for (const [nodeId, node] of entries) {
+      if (!['LoraLoader', 'LoraLoaderModelOnly'].includes(node?.class_type)) continue
+      const value = node?.inputs?.lora_name
+      if (typeof value !== 'string' || !value.trim()) continue
+      const normalized = value.replace(/\\/gu, '/').replace(/^\/+/u, '')
+      if (normalized && !normalized.split('/').some((part) => part === '.' || part === '..')) {
+        loraEntries.push([nodeId, node, normalized])
+      }
+    }
+    const names = [...new Set(loraEntries.map(([, , name]) => name))]
+    if (!loraEntries.length) return null
+    let family = weightSet?.family || null
+    if (!family) {
+      const qwenBaseNodes = new Set(entries
+        .filter(([, node]) => node?.class_type === 'UNETLoader'
+          && registeredArtifactMatchesValue(ARTIFACTS.qwenImageEdit2511Int8, node?.inputs?.unet_name))
+        .map(([nodeId]) => nodeId))
+      const mappedStrengthNodeId = mappings?.loraStrength?.nodeId
+      const references = collectModelReferences(workflow)
+      const connectedQwenLora = loraEntries.some(([nodeId, node]) => (
+        nodeId === mappedStrengthNodeId
+          && node?.inputs?.strength_model !== undefined
+          && Array.isArray(node?.inputs?.model)
+          && qwenBaseNodes.has(node.inputs.model[0])
+      ))
+      if (connectedQwenLora && references.some(({ value }) => registeredArtifactMatchesValue(ARTIFACTS.qwenImageEdit2511Int8, value))) {
+        family = 'qwen-image-edit'
+      }
+    }
+    return { family, names: names.sort() }
+  }
+
   getCustomWeightSet(customId) {
     return this._customWeightSetForWorkflow(this.#custom(customId).workflow)
+  }
+
+  customLoraRequirements(customId) {
+    const entry = this.#custom(customId)
+    let weightSet = null
+    try {
+      weightSet = this._customWeightSetForWorkflow(entry.workflow)
+    } catch {
+      weightSet = null
+    }
+    return clone(this._customLoraRequirementsForWorkflow(entry.workflow, weightSet, entry.mappings))
   }
 
   async verifyRegisteredArtifacts(artifactIds, { signal } = {}) {
@@ -1646,10 +1695,17 @@ export class WorkflowCenterService {
     } catch (error) {
       weightError = { code: error.code || 'CUSTOM_WORKFLOW_WEIGHT_INCOMPATIBLE', message: error.message }
     }
-    return clone({ ...summary, outputMediaKind, weightSet, ...(weightError ? { weightError } : {}) })
+    const loraRequirements = this._customLoraRequirementsForWorkflow(workflow, weightSet, summary.mappings)
+    return clone({
+      ...summary,
+      outputMediaKind,
+      weightSet,
+      ...(loraRequirements ? { loraRequirements } : {}),
+      ...(weightError ? { weightError } : {}),
+    })
   }
 
-  prepareCustomExecution(customId, { values, registeredNodeTypes, executionId } = {}) {
+  prepareCustomExecution(customId, { values, registeredNodeTypes, executionId, loraBindings } = {}) {
     const entry = this.#custom(customId)
     if (!entry.enabled) throw workflowError('自定义工作流尚未启用', 'CUSTOM_WORKFLOW_NOT_ENABLED', 409)
     if (typeof executionId !== 'string' || !SAFE_ID.test(executionId)) {
@@ -1670,7 +1726,19 @@ export class WorkflowCenterService {
     if (JSON.stringify(weightSet) !== JSON.stringify(entry.weightSet ?? null)) {
       throw workflowError('工作流固定权重身份已经变化，本次执行已拒绝', 'CUSTOM_WORKFLOW_WEIGHT_RECHECK_REQUIRED', 409, { weightSet })
     }
-    const normalizedValues = normalizeExecutionValues(values, entry.mappings)
+    const loraRequirements = this._customLoraRequirementsForWorkflow(entry.workflow, weightSet, entry.mappings)
+    const normalizedLoraBindings = assertWorkflowLoraBindingsCompatible(loraBindings ?? [], {
+      mappings: entry.mappings,
+      loraRequirements,
+    })
+    const executionValues = { ...(values || {}) }
+    if (normalizedLoraBindings.length) {
+      if (executionValues.loraStrength === undefined) executionValues.loraStrength = normalizedLoraBindings[0].strength
+      const clipBindings = normalizedLoraBindings.filter((binding) => binding.clipStrength !== undefined)
+      if (clipBindings.length && executionValues.loraClipStrength === undefined) executionValues.loraClipStrength = clipBindings[0].clipStrength
+      assertWorkflowLoraControlsMatchBindings(normalizedLoraBindings, executionValues)
+    }
+    const normalizedValues = normalizeExecutionValues(executionValues, entry.mappings)
     const prepared = clone(entry.workflow)
     for (const [role, value] of Object.entries(normalizedValues)) {
       const mapping = entry.mappings[role]
@@ -1694,6 +1762,7 @@ export class WorkflowCenterService {
         parameterRoles: Object.keys(normalizedValues).sort(),
         nodeCount: entry.nodeCount,
         weightSet,
+        ...(normalizedLoraBindings.length ? { loraBindings: normalizedLoraBindings } : {}),
       },
     }
   }
