@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.qa.pixel-round-two-ui",
+  "status": "passed",
+  "generatedAt": "2026-10-17T20:25:43.252Z",
+  "browser": "Microsoft Edge via Playwright",
+  "sourceScope": "Working-tree integration; final clean release validation is separate.",
+  "pureTests": 11,
+  "phases": [
+    {
+      "name": "mouse-draw-selection-transform-undo-redo-lock",
+      "status": "passed",
+      "draw": {
+        "revisionBefore": 0,
+        "revisionAfter": 6,
+        "pathPixels": 6,
+        "mouseGestures": 6
+      },
+      "selection": {
+        "width": 3,
+        "height": 2
+      },
+      "candidates": [
+        {
+          "width": 4,
+          "height": 3,
+          "angle": 90,
+          "revisionUnchanged": true
+        },
+        {
+          "width": 3,
+          "height": 2,
+          "angle": 180,
+          "revisionUnchanged": true
+        },
+        {
+          "width": 4,
+          "height": 3,
+          "angle": 37,
+          "revisionUnchanged": true
+        }
+      ],
+      "cancelRevision": 6,
+      "applied": {
+        "revision": 7,
+        "selection": "2×3",
+        "frameHash": "84ec0a0f9b8d4c18"
+      },
+      "undo": 8,
+      "redo": 9,
+      "lockRejected": {
+        "revision": 10,
+        "statusObserved": true
+      },
+      "unlockedRevision": 11
+    },
+    {
+      "name": "linked-cel-fanout-json-reopen-unlink-lock",
+      "status": "passed",
+      "relationCreated": {
+        "layerId": "layer-1",
+        "frameIds": [
+          "frame-1",
+          "frame-2"
+        ],
+        "celLinkCount": 1
+      },
+      "mousePaintFanout": {
+        "point": {
+          "x": 1,
+          "y": 0
+        },
+        "linkedColorId": "color-1",
+        "sourceAndTargetEqual": true
+      },
+      "undoRedo": {
+        "undoRevision": 18,
+        "redoRevision": 19,
+        "relationRetained": true,
+        "pixelsRetained": true
+      },
+      "jsonDownload": {
+        "filename": "pixel-round-two-manual.aeonpixel.json",
+        "bytes": 2460,
+        "celLinkCount": 1
+      },
+      "linkedReopen": {
+        "revision": 19,
+        "relationRetained": true,
+        "documentIdPreserved": true
+      },
+      "unlink": {
+        "revision": 20,
+        "currentFrameIndependent": true,
+        "pixelPreserved": true
+      },
+      "independentPaint": {
+        "revision": 21,
+        "sourceColor": "color-2",
+        "targetStayed": "color-1"
+      },
+      "lockRejection": {
+        "revision": 23,
+        "linkDisabled": true,
+        "unlinkDisabled": true
+      },
+      "finalReopen": {
+        "revision": 25,
+        "relationCount": 0,
+        "documentIdPreserved": true
+      }
+    },
+    {
+      "name": "aseprite-import-warning-unsupported-cancel-apply-undo-redo",
+      "status": "passed",
+      "unsupportedRejectedWithoutMutation": true,
+      "unknownChunkWarningVisible": true,
+      "cancelRevision": 11,
+      "applied": {
+        "revision": 12,
+        "frameCount": 2,
+        "durations": [
+          80,
+          120
+        ],
+        "frameHash": "377c81c7ffba1de2",
+        "renderHashes": [
+          "58691257ed9a66f5664eac95c6d1916f37f90bcbf2636a54c1cbb50e249b6486",
+          "58691257ed9a66f5664eac95c6d1916f37f90bcbf2636a54c1cbb50e249b6486"
+        ]
+      },
+      "undoRevision": 13,
+      "redoRevision": 14
+    },
+    {
+      "name": "aseprite-export-download-decode-persistence-reopen",
+      "status": "passed",
+      "warningVisible": true,
+      "filename": "pixel-round-two-manual.aseprite",
+      "bytes": 388,
+      "sha256": "3949ac22b172de153e46a26237e6b94459ed80e774531f906364e4e144cb4cdb",
+      "decoded": {
+        "frameCount": 2,
+        "durations": [
+          80,
+          120
+        ],
+        "frameHash": "377c81c7ffba1de2",
+        "renderHashes": [
+          "58691257ed9a66f5664eac95c6d1916f37f90bcbf2636a54c1cbb50e249b6486",
+          "58691257ed9a66f5664eac95c6d1916f37f90bcbf2636a54c1cbb50e249b6486"
+        ]
+      },
+      "saveReopen": {
+        "status": "passed",
+        "revision": 15,
+        "id": "document-pixel-88c91281-93ab-44ef-88e1-612850d81739"
+      }
+    },
+    {
+      "name": "responsive-layout",
+      "status": "passed",
+      "desktop": {
+        "viewport": 1440,
+        "documentScrollWidth": 1440,
+        "bodyScrollWidth": 1440
+      },
+      "mobile": {
+        "viewport": 390,
+        "documentScrollWidth": 390,
+        "bodyScrollWidth": 390
+      }
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "nativeEditor": {
+    "installed": false,
+    "validated": false
+  },
+  "officialSpec": "https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md",
+  "fixes": [
+    "Missing Cel is transparent; only explicit links reuse pixels.",
+    "Indexed palettes are frozen per frame.",
+    "Equivalent explicit linked Cels preserve schema9 relations; unequal materialized pixels warn."
+  ]
+}

@@ -149,6 +149,7 @@ import {
   downloadPixelTerrainPreviewExportBundle,
   downloadPixelTerrainMapExportBundle,
   downloadPixelText,
+  downloadPixelBlob,
   readPixelProjectFile,
 } from './pixelBrowser'
 import { PixelComputationClient } from '../../lib/pixel/pixelComputationClient.mjs'
@@ -484,6 +485,12 @@ export function PixelModeWorkbench({
   const [systemClipboardBusy, setSystemClipboardBusy] = useState(false)
   const systemClipboardRequestRef = useRef(0)
   useEffect(() => () => { systemClipboardRequestRef.current += 1 }, [])
+  const [aseImportCandidate, setAseImportCandidate] = useState<{
+    document: PixelDocument; warnings: string[]; baseDocumentId: string; baseRevision: number
+  } | null>(null)
+  const [aseExportCandidate, setAseExportCandidate] = useState<{
+    bytes: Uint8Array; warnings: string[]; filename: string
+  } | null>(null)
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
@@ -954,6 +961,17 @@ export function PixelModeWorkbench({
     setIsImporting(true)
     setStatus('正在校验像素项目 schemaVersion…')
     try {
+      if (/\.(ase|aseprite)$/iu.test(file.name)) {
+        if (!file.size || file.size > 32 * 1024 * 1024) throw new Error('Aseprite 文件必须介于 1B 与 32MiB 之间')
+        const current = historyRef.current.document
+        const { decodeAseprite } = await import('../../lib/pixel/pixelAseprite.mjs')
+        const decoded = await decodeAseprite(await file.arrayBuffer(), {
+          documentId: current.id, documentName: file.name.replace(/\.(ase|aseprite)$/iu, '').slice(0, 120) || 'Aseprite 导入',
+        })
+        setAseImportCandidate({ ...decoded, baseDocumentId: current.id, baseRevision: current.revision })
+        setStatus('Aseprite 已解析，请检查导入预览与格式提示后应用')
+        return
+      }
       const nextDocument = await readPixelProjectFile(file)
       importedSourceRef.current = null
       setImportSourceSummary(null)
@@ -965,6 +983,36 @@ export function PixelModeWorkbench({
       setIsImporting(false)
     }
   }, [installDocument])
+
+  const applyAseImport = useCallback(() => {
+    const candidate = aseImportCandidate
+    const current = historyRef.current.document
+    if (!candidate) return
+    if (current.id !== candidate.baseDocumentId || current.revision !== candidate.baseRevision) {
+      setAseImportCandidate(null)
+      setStatus('文档已变化，请重新选择 Aseprite 文件')
+      return
+    }
+    try {
+      const next = migratePixelDocument({ ...candidate.document, id: current.id, revision: current.revision + 1 })
+      installDocument(next, 'Aseprite 导入已应用 · 保留当前项目身份 · 可一次撤销', createPixelDocumentHistoryEntry(current))
+      importedSourceRef.current = null
+      setImportSourceSummary(null)
+      setAseImportCandidate(null)
+    } catch (error) { setStatus(readablePixelError(error, 'Aseprite 导入无法应用')) }
+  }, [aseImportCandidate, installDocument])
+
+  const prepareAseExport = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const current = historyRef.current.document
+      const { encodeAseprite } = await import('../../lib/pixel/pixelAseprite.mjs')
+      const result = await encodeAseprite(current)
+      setAseExportCandidate({ ...result, filename: `${safePixelFilename(current.name)}.aseprite` })
+      setStatus('Aseprite 导出已准备，请检查格式保留范围后下载')
+    } catch (error) { setStatus(readablePixelError(error, 'Aseprite 导出失败')) }
+    finally { setIsExporting(false) }
+  }, [])
 
   useEffect(() => {
     onDocumentChange?.(document)
@@ -2831,7 +2879,7 @@ export function PixelModeWorkbench({
             <FolderOpen size={16} /> 打开项目
             <input
               type="file"
-              accept=".aeonpixel.json,.pixel.json,application/json"
+              accept=".aeonpixel.json,.pixel.json,.ase,.aseprite,application/json"
               disabled={isImporting}
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0]
@@ -2843,6 +2891,7 @@ export function PixelModeWorkbench({
           <button type="button" className="aq-pixel-project-export" onClick={() => void exportPixelProject()} disabled={isExporting} aria-label="仅导出像素项目 JSON">
             <Download size={16} /> 项目
           </button>
+          <button type="button" onClick={() => void prepareAseExport()} disabled={isExporting} aria-label="导出 Aseprite 文件"><Download size={16} /> Aseprite</button>
           <button type="button" className="aq-pixel-export" onClick={() => void exportPixelBundle()} disabled={isExporting}>
             <Download size={16} /> 成套导出
           </button>
@@ -4385,7 +4434,23 @@ export function PixelModeWorkbench({
         onApprove={approveAgentPlanReview}
         onReject={rejectAgentPlan}
       />
-
+      {aseImportCandidate ? <section role="dialog" aria-label="Aseprite 导入预览" className="aq-pixel-transform-panel">
+        <header><strong>Aseprite 导入预览</strong><button type="button" onClick={() => setAseImportCandidate(null)} aria-label="取消 Aseprite 导入">×</button></header>
+        <p>{aseImportCandidate.document.width} × {aseImportCandidate.document.height} · {aseImportCandidate.document.frames.length} 帧 · {aseImportCandidate.document.layers.length} 图层 · {aseImportCandidate.document.palette.length} 色</p>
+        <p>应用后替换当前像素内容，保留项目身份并可一次撤销。源文件保持不变。</p>
+        {aseImportCandidate.warnings.length ? <ul>{aseImportCandidate.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : <p>该文件内容均在当前支持范围内。</p>}
+        <footer><button type="button" onClick={() => setAseImportCandidate(null)}>取消</button><button type="button" onClick={applyAseImport}>应用 Aseprite 导入</button></footer>
+      </section> : null}
+      {aseExportCandidate ? <section role="dialog" aria-label="Aseprite 导出提示" className="aq-pixel-transform-panel">
+        <header><strong>Aseprite 导出</strong><button type="button" onClick={() => setAseExportCandidate(null)} aria-label="取消 Aseprite 导出">×</button></header>
+        <p>保留像素、图层、帧时长与支持的动画标签。建议同时保留完整项目 JSON。</p>
+        {aseExportCandidate.warnings.length ? <ul>{aseExportCandidate.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : <p>没有检测到不可表达的内容。</p>}
+        <footer><button type="button" onClick={() => setAseExportCandidate(null)}>取消</button><button type="button" onClick={() => {
+          downloadPixelBlob(new Blob([new Uint8Array(aseExportCandidate.bytes)], { type: 'application/octet-stream' }), aseExportCandidate.filename)
+          setAseExportCandidate(null)
+          setStatus('Aseprite 文件已下载')
+        }}>下载 .aseprite</button></footer>
+      </section> : null}
     </section>
   )
 }
