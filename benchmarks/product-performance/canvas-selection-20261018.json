@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "task": "FE-005-canvas-selection-ui",
+  "status": "passed",
+  "command": "node scripts/validate-canvas-selection-ui.mjs",
+  "browser": "Microsoft Edge headless",
+  "bridge": "isolated local bridge with manual ComfyUI policy",
+  "checks": [
+    "real creation of three ordinary shape elements",
+    "real Shift multi-select and rotated visual AABB alignment",
+    "one revision for alignment, undo and redo restoration",
+    "mixed locked selection disables alignment",
+    "connection dialog creation, duplicate same-direction rejection and self-endpoint exclusion",
+    "clickable connector selection and Inspector direction swap, lock/unlock and delete",
+    "connector port path follows endpoint position and rotation changes",
+    "canvas save and reopen restoration",
+    "canvas compatibility package export/import round trip",
+    "endpoint deletion cascades connector removal",
+    "real image fixture opens 图像处理实验室 through 全部工具",
+    "1440 and 390 viewport overflow checks"
+  ],
+  "issues": [],
+  "artifacts": [
+    ".runtime/qa/canvas-selection-ui-desktop.png",
+    ".runtime/qa/canvas-selection-ui-mobile.png"
+  ],
+  "qualityBoundary": [
+    "The PNG is a local fixture used only to open the image lab.",
+    "No ComfyUI queue, model execution, GPU task or image quality claim was made."
+  ],
+  "sourceScope": "Working-tree FE-005 integration; final clean release validation is separate."
+}

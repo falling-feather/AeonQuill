@@ -1,7 +1,6 @@
 import {
   BringToFront,
   Copy,
-  Ellipsis,
   Link2,
   Lock,
   Trash2,
@@ -17,6 +16,7 @@ type SelectionToolbarProps = {
   onToggleLock: () => void
   onBringToFront: () => void
   onDelete: () => void
+  onCreateConnection: () => void
 }
 
 export function SelectionToolbar({
@@ -26,6 +26,7 @@ export function SelectionToolbar({
   onToggleLock,
   onBringToFront,
   onDelete,
+  onCreateConnection,
 }: SelectionToolbarProps) {
   return (
     <div
@@ -48,14 +49,11 @@ export function SelectionToolbar({
       <IconButton label="移到最前" onClick={onBringToFront}>
         <BringToFront size={17} strokeWidth={1.75} />
       </IconButton>
-      <IconButton label="创建连接" onClick={() => undefined} disabled>
+      <IconButton label="创建连接" onClick={onCreateConnection}>
         <Link2 size={17} strokeWidth={1.75} />
       </IconButton>
       <IconButton label="删除" onClick={onDelete}>
         <Trash2 size={17} strokeWidth={1.75} />
-      </IconButton>
-      <IconButton label="更多" onClick={() => undefined} disabled>
-        <Ellipsis size={17} strokeWidth={1.75} />
       </IconButton>
     </div>
   )

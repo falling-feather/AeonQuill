@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './styles.css'
 import { CheckCircle2, X } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
+import { CanvasConnectionDialog } from './components/CanvasConnectionDialog'
+import { createCanvasAlignmentUpdates, createCanvasConnection, type CanvasAlignment } from './lib/canvasSelection.mjs'
 import { AgentPlanComposer } from './components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from './components/AgentPlanReviewDialog'
 import { ImageLab, type ImageLabResult } from './components/ImageLab'
@@ -317,6 +319,7 @@ function App({
   const [saveStatus, setSaveStatus] = useState<'saving' | 'saved'>('saved')
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [connectionSourceId, setConnectionSourceId] = useState<string | null>(null)
   const [agentPlanReview, setAgentPlanReview] = useState<{
     plan: CreativePlan
     preview: CreativePlanPreview
@@ -529,6 +532,21 @@ function App({
     commitCanvasTool('canvas.elements.remove', { ids: deletableIds }, 'user')
     setSelectedIds([])
   }, [commitCanvasTool, selectedIds, showToast])
+
+  const alignSelection = useCallback((alignment: CanvasAlignment) => {
+    try {
+      const updates = createCanvasAlignmentUpdates(elementsRef.current, selectedIds, alignment)
+      if (!updates.length) { showToast('所选元件已对齐'); return }
+      commitCanvasTool('canvas.elements.patch', { updates }, 'user')
+      showToast(`已对齐 ${selectedIds.length} 个元件 · 可一次撤销`)
+    } catch (reason) { showToast(reason instanceof Error ? reason.message : '对齐失败') }
+  }, [commitCanvasTool, selectedIds, showToast])
+
+  const connectElements = useCallback((fromId: string, toId: string) => {
+    const connector = createCanvasConnection(elementsRef.current, { id: makeId('connector'), fromId, toId })
+    commitCanvasTool('canvas.elements.add', { elements: [connector] }, 'user')
+    setSelectedIds([connector.id])
+  }, [commitCanvasTool])
 
   const duplicateSelection = useCallback(() => {
     if (!selectedIds.length) return
@@ -761,7 +779,7 @@ function App({
         return
       }
       if (tool === 'more') {
-        showToast('更多处理器将通过统一能力注册表接入')
+        setImageLab({ elementId: id, mode: 'adjust' })
         return
       }
       setImageLab({ elementId: id, mode: tool })
@@ -1622,6 +1640,7 @@ function App({
             onBringToFront={bringToFront}
             onOpenPixel={setPixelEditorId}
             onImageDrop={addImageFile}
+            onCreateConnection={setConnectionSourceId}
           />
           <div className="agent-plan-canvas-launch" data-ui-overlay>
             <AgentPlanComposer
@@ -1648,6 +1667,9 @@ function App({
             videoSubmitError={videoSubmitError}
             onSelect={(id) => setSelectedIds([id])}
             onUpdate={updateElement}
+            onAlign={alignSelection}
+            onCreateConnection={setConnectionSourceId}
+            onDeleteSelection={deleteSelection}
             onToggleVisible={toggleVisible}
             onToggleLock={toggleLock}
             onOpenPixel={setPixelEditorId}
@@ -1695,6 +1717,8 @@ function App({
           event.target.value = ''
         }}
       />
+
+      {connectionSourceId ? <CanvasConnectionDialog elements={elements} sourceId={connectionSourceId} onCreate={connectElements} onClose={() => setConnectionSourceId(null)} /> : null}
 
       {editingPixel && editingPixel.kind === 'pixel' ? (
         <PixelEditor

@@ -43,6 +43,7 @@ import {
   type VideoJobRequest,
 } from '../types'
 import { VideoStudio } from './VideoStudio'
+import type { CanvasAlignment } from '../lib/canvasSelection.mjs'
 
 type InspectorProps = {
   elements: CanvasElement[]
@@ -55,6 +56,9 @@ type InspectorProps = {
   videoSubmitError: string | null
   onSelect: (id: string) => void
   onUpdate: (id: string, patch: Partial<CanvasElement>) => void
+  onAlign: (alignment: CanvasAlignment) => void
+  onCreateConnection: (id: string) => void
+  onDeleteSelection: () => void
   onToggleVisible: (id: string) => void
   onToggleLock: (id: string) => void
   onOpenPixel: (id: string) => void
@@ -104,7 +108,7 @@ const imageTools: Array<{
   { id: 'upscale', label: '超分放大', hint: 'Real-ESRGAN / Lanczos / 草稿', icon: ImageUp },
   { id: 'sharpen', label: '细节锐化', hint: '本机确定性处理', icon: Sparkles },
   { id: 'alpha-cleanup', label: '透明边缘', hint: 'Alpha 噪点清理', icon: Eraser },
-  { id: 'more', label: '更多', hint: '能力注册表', icon: MoreHorizontal },
+  { id: 'more', label: '全部工具', hint: '打开图像实验室', icon: MoreHorizontal },
 ]
 
 function NumberField({
@@ -600,6 +604,9 @@ export function Inspector(props: InspectorProps) {
     videoSubmitError,
     onSelect,
     onUpdate,
+    onAlign,
+    onCreateConnection,
+    onDeleteSelection,
     onToggleVisible,
     onToggleLock,
     onOpenPixel,
@@ -620,6 +627,8 @@ export function Inspector(props: InspectorProps) {
   >>()
   const selected = elements.find((element) => element.id === selectedIds[0])
   const selectedImage = selected?.kind === 'image' ? selected : undefined
+  const alignmentSelection = elements.filter((element) => selectedIds.includes(element.id) && element.kind !== 'connector')
+  const alignmentDisabled = !alignmentSelection.length || alignmentSelection.some((element) => element.locked)
 
   useEffect(() => {
     if (selectedIds.length) {
@@ -686,15 +695,16 @@ export function Inspector(props: InspectorProps) {
                   <em>°</em>
                 </div>
                 <div className="alignment-row" aria-label="画布对齐">
-                  <span>对齐</span>
-                  <button type="button" aria-label="左对齐画布" title="左对齐画布" onClick={() => update({ x: 0 })}>
+                  <span>{alignmentSelection.length > 1 ? `对齐所选 ${alignmentSelection.length} 项` : '对齐画板'}</span>
+                  <button type="button" disabled={alignmentDisabled} aria-label={alignmentSelection.length > 1 ? '左对齐所选' : '左对齐画布'} title="左对齐" onClick={() => onAlign('left')}>
                     <AlignGlyph type="left" />
                   </button>
                   <button
                     type="button"
                     aria-label="水平居中"
                     title="水平居中"
-                    onClick={() => update({ x: Math.round((1200 - selected.width) / 2) })}
+                    disabled={alignmentDisabled}
+                    onClick={() => onAlign('center-x')}
                   >
                     <AlignGlyph type="center-x" />
                   </button>
@@ -702,19 +712,24 @@ export function Inspector(props: InspectorProps) {
                     type="button"
                     aria-label="垂直居中"
                     title="垂直居中"
-                    onClick={() => update({ y: Math.round((800 - selected.height) / 2) })}
+                    disabled={alignmentDisabled}
+                    onClick={() => onAlign('center-y')}
                   >
                     <AlignGlyph type="center-y" />
                   </button>
                   <button
                     type="button"
-                    aria-label="右对齐画布"
-                    title="右对齐画布"
-                    onClick={() => update({ x: Math.round(1200 - selected.width) })}
+                    aria-label={alignmentSelection.length > 1 ? '右对齐所选' : '右对齐画布'}
+                    title="右对齐"
+                    disabled={alignmentDisabled}
+                    onClick={() => onAlign('right')}
                   >
                     <AlignGlyph type="right" />
                   </button>
+                  <button type="button" disabled={alignmentDisabled} aria-label="顶部对齐" title="顶部对齐" onClick={() => onAlign('top')}>上</button>
+                  <button type="button" disabled={alignmentDisabled} aria-label="底部对齐" title="底部对齐" onClick={() => onAlign('bottom')}>下</button>
                 </div>
+                <button type="button" className="aq-canvas-connect-open" onClick={() => onCreateConnection(selected.id)}>创建连接</button>
               </details>
 
               <details className="inspector-section" open>
@@ -791,6 +806,14 @@ export function Inspector(props: InspectorProps) {
                 ) : null}
               </details>
             </>
+          ) : selected?.kind === 'connector' ? (
+            <section className="inspector-section aq-canvas-connection-details" aria-label="连接关系">
+              <h3>连接关系</h3>
+              <p>{elements.find((element) => element.id === selected.fromId)?.name ?? '起点已移除'} → {elements.find((element) => element.id === selected.toId)?.name ?? '终点已移除'}</p>
+              <button type="button" disabled={selected.locked || elements.some((element) => element.id !== selected.id && element.kind === 'connector' && element.fromId === selected.toId && element.toId === selected.fromId)} onClick={() => onUpdate(selected.id, { fromId: selected.toId, toId: selected.fromId })}>交换连接方向</button>
+              <button type="button" onClick={() => onToggleLock(selected.id)}>{selected.locked ? '解锁连接' : '锁定连接'}</button>
+              <button type="button" disabled={selected.locked} onClick={onDeleteSelection}>删除连接</button>
+            </section>
           ) : (
             <div className="inspector-empty">
               <MousePointerGlyph />

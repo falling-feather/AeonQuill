@@ -30,6 +30,7 @@ import {
 } from '../lib/canvasSpatialIndex.mjs'
 import { CanvasElementView } from './CanvasElementView'
 import { SelectionToolbar } from './SelectionToolbar'
+import { canvasConnectorPorts } from '../lib/canvasSelection.mjs'
 import { IconButton } from './ui/IconButton'
 
 type Point = { x: number; y: number }
@@ -84,6 +85,7 @@ type CanvasWorkspaceProps = {
   onBringToFront: (id: string) => void
   onOpenPixel: (id: string) => void
   onImageDrop: (file: File, point: Point) => void
+  onCreateConnection: (id: string) => void
 }
 
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
@@ -110,6 +112,7 @@ export function CanvasWorkspace({
   onBringToFront,
   onOpenPixel,
   onImageDrop,
+  onCreateConnection,
 }: CanvasWorkspaceProps) {
   const gestureRef = useRef<Gesture | null>(null)
   const cameraFrameRef = useRef<number | null>(null)
@@ -553,7 +556,7 @@ export function CanvasWorkspace({
         data-rendered-elements={renderedRegularElements.length}
         style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}
       >
-        <svg className="connector-layer" width="2400" height="1600" aria-hidden="true">
+        <svg className="connector-layer" width="2400" height="1600">
           <defs>
             <marker id="connector-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
               <path d="M0,0 L8,4 L0,8 Z" fill="#34363a" />
@@ -563,18 +566,19 @@ export function CanvasWorkspace({
             const from = elementsById.get(connector.fromId ?? '')
             const to = elementsById.get(connector.toId ?? '')
             if (!from || !to) return null
-            const x1 = from.x + from.width
-            const y1 = from.y + from.height / 2
-            const x2 = to.x
-            const y2 = to.y + to.height / 2
+            const { x1, y1, x2, y2 } = canvasConnectorPorts(from, to)
             const curve = Math.max(60, Math.abs(x2 - x1) * 0.42)
             return (
-              <g key={connector.id} opacity={connector.opacity}>
+              <g key={connector.id} opacity={connector.opacity} role="button" tabIndex={0} aria-label={`连接 ${from.name} 到 ${to.name}`}
+                onPointerDown={(event) => { event.stopPropagation(); onSelect([connector.id]) }}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect([connector.id]) } }}>
+                <path d={`M${x1} ${y1} C${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`} fill="none" stroke="transparent" strokeWidth="14" style={{ pointerEvents: 'stroke', cursor: 'pointer' }} />
                 <path
                   d={`M${x1} ${y1} C${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`}
                   fill="none"
                   stroke={connector.stroke}
-                  strokeWidth="2"
+                  strokeWidth={selectedIds.includes(connector.id) ? 3 : connector.strokeWidth ?? 2}
+                  style={{ pointerEvents: 'none' }}
                   markerEnd="url(#connector-arrow)"
                 />
                 <circle cx={x1} cy={y1} r="5" fill="#fff" stroke={connector.stroke} strokeWidth="2" />
@@ -651,6 +655,7 @@ export function CanvasWorkspace({
                   onToggleLock={() => onToggleLock(element.id)}
                   onBringToFront={() => onBringToFront(element.id)}
                   onDelete={onDeleteSelection}
+                  onCreateConnection={() => onCreateConnection(element.id)}
                 />
               ) : null}
             </div>
