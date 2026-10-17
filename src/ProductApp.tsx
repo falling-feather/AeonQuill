@@ -1752,8 +1752,16 @@ export default function ProductApp() {
     if (catalogDocumentId && !agentCommit) unsavedPixelDraftsRef.current.set(catalogDocumentId, pendingDraft)
     setPixelDraft(agentCommit ? { ...pendingDraft, backedByWorkspace: true } : pendingDraft)
     try {
-      const { serializePixelDocumentOffThread } = await import('./lib/pixel/pixelPersistence.mjs')
-      const serialized = await serializePixelDocumentOffThread(next)
+      const preparation = import('./lib/pixel/pixelPersistence.mjs')
+        .then(({ serializePixelDocumentOffThread }) => serializePixelDocumentOffThread(next))
+      // Reserve the write attempt before yielding to the serializer. A clean GET
+      // finishing during preparation must not replace this edit's conflict base.
+      const pendingWorkspaceSave = catalogDocumentId && activeWorkspaceProjectId && !agentCommit && bridgeReadyRef.current
+        ? saveWorkspaceModeDocument({ projectId: activeWorkspaceProjectId, documentId: catalogDocumentId,
+          modeId: 'pixel', revision: next.revision, value: preparation, reason: 'pixel-autosave' })
+        : null
+      void pendingWorkspaceSave?.catch(() => undefined)
+      const serialized = await preparation
       if (pixelSerializationAttemptsRef.current.get(storageKey) !== serializationAttempt) return
       if (catalogDocumentId && !agentCommit
         && unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document !== next) return
@@ -1791,14 +1799,14 @@ export default function ProductApp() {
           unsavedPixelDraftsRef.current.delete(catalogDocumentId)
           commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
         } else if (bridgeReadyRef.current) {
-          void saveWorkspaceModeDocument({
+          void (pendingWorkspaceSave ?? saveWorkspaceModeDocument({
             projectId: activeWorkspaceProjectId,
             documentId: catalogDocumentId,
             modeId: 'pixel',
             revision: next.revision,
             value: serialized,
             reason: 'pixel-autosave',
-          }).then(() => {
+          })).then(() => {
             if (unsavedPixelDraftsRef.current.get(catalogDocumentId)?.document === next) {
               unsavedPixelDraftsRef.current.delete(catalogDocumentId)
             }

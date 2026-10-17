@@ -266,7 +266,7 @@ export function saveWorkspaceModeDocument(input: {
   documentId: string
   modeId: WorkspaceModeDocument['modeId']
   revision: number
-  value: string
+  value: string | Promise<string>
   reason?: string
   forceRecovery?: boolean
 }) {
@@ -279,7 +279,9 @@ export function saveWorkspaceModeDocument(input: {
         : null
       const { documentId, ...body } = input
       const { prepareWorkspaceRequestBody } = await import('./workspaceRequestBody.mjs')
-      const requestBody = await prepareWorkspaceRequestBody({ ...body, baseRevision })
+      const value = await body.value
+      if (typeof value !== 'string') throw new Error('工作区正文编码结果无效')
+      const requestBody = await prepareWorkspaceRequestBody({ ...body, value, baseRevision })
       const payload = await api<{ document: WorkspaceModeDocument }>(
         `/api/workspace/documents/${encodeURIComponent(documentId)}`,
         {

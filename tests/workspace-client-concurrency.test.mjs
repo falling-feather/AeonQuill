@@ -88,6 +88,31 @@ test('large workspace uploads use a reusable Blob with exact JSON UTF-8 bytes an
   assert.equal(saved.revision, 8)
 })
 
+test('async preparation marks the write dirty before a late clean read can replace its base revision', async (t) => {
+  const api = await loadApi('async-preparation-late-read')
+  const preparation = deferred()
+  const lateRead = deferred()
+  let reads = 0
+  const writes = []
+  installFetchMock(t, async (_pathname, options) => {
+    if (options.method === undefined) return ++reads === 1 ? jsonResponse({ document: document(7) }) : lateRead.promise
+    const body = JSON.parse(typeof options.body === 'string' ? options.body : await options.body.text())
+    writes.push(body)
+    return jsonResponse({ document: document(8, body.value) })
+  })
+  await api.loadWorkspaceModeDocument('project-1', 'document-1', 'balanced')
+  const reading = api.loadWorkspaceModeDocument('project-1', 'document-1', 'balanced')
+  const saving = api.saveWorkspaceModeDocument({ projectId: 'project-1', documentId: 'document-1', modeId: 'balanced', revision: 8, value: preparation.promise })
+  lateRead.resolve(jsonResponse({ document: document(99) }))
+  await reading
+  const prematureWrites = writes.length
+  preparation.resolve('prepared-value')
+  await saving
+  assert.equal(prematureWrites, 0)
+  assert.equal(writes[0].baseRevision, 7)
+  assert.equal(writes[0].value, 'prepared-value')
+})
+
 test('late read after a failed write cannot replace the retry base revision', async (t) => {
   const api = await loadApi('late-read-after-failed-write')
   const firstPutSeen = deferred()
