@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "status": "local-engineering-passed",
+  "date": "2026-10-18",
+  "source": {
+    "cleanCommit": "45a068767cc76ce9e14403f5b0cbfc4e0be7cb45",
+    "functionalTrack": "V0.7.110",
+    "productVersion": "0.7.1",
+    "generatedFileSemanticChanges": 0
+  },
+  "install": {
+    "directory": "D:/AEONQUILL/App",
+    "binaries": [
+      {
+        "filename": "aeonquill-desktop.exe",
+        "bytes": 13223936,
+        "sha256": "ba00a9d3369854ee6781f97c99602df591f42ec3c0bc38df30c13f0c9bdf1a1a"
+      },
+      {
+        "filename": "aeonquill-bridge.exe",
+        "bytes": 61161969,
+        "sha256": "b6426ee72a585b068f6e4981085200bfee0ad9874a9bd36dd6aae80c158e978e"
+      }
+    ]
+  },
+  "sidecar": {
+    "status": "passed",
+    "systemNodeRequired": false,
+    "readyMs": 712,
+    "exitCode": 0,
+    "portClosed": true
+  },
+  "native": {
+    "status": "passed",
+    "timeline": {
+      "tauriReadyMs": 149,
+      "bridgeSpawnedMs": 232,
+      "bridgeReadyMs": 1295,
+      "windowLoadedMs": 3551,
+      "rendererProbedMs": 3677,
+      "windowCloseRequestedMs": 4289,
+      "shutdownFinishedMs": 4734
+    },
+    "rendererProbe": {
+      "tauriGlobalType": "undefined",
+      "processType": "undefined",
+      "requireType": "undefined",
+      "documentReadyState": "complete"
+    },
+    "shutdown": {
+      "requested": true,
+      "exited": true,
+      "exitCode": 0,
+      "forced": false,
+      "portClosed": true
+    }
+  },
+  "singleInstance": {
+    "status": "passed",
+    "attempts": 4,
+    "desktopCount": 1,
+    "bridgeCount": 1,
+    "secondaryExitCodes": [
+      0,
+      0,
+      0
+    ],
+    "transport": "isolated copy of installed binaries"
+  },
+  "userData": {
+    "status": "passed",
+    "checkedFiles": 77,
+    "modifiedExistingFiles": 0,
+    "baselineGeneratedAt": "2026-10-17T21:46:50.7688769Z"
+  },
+  "existingDataRead": {
+    "schemaVersion": 1,
+    "status": "passed",
+    "scope": "Isolated copies of existing project/workspace metadata; no user jobs or configuration are copied.",
+    "databases": 2,
+    "projects": 7,
+    "existingBodies": 6,
+    "missingBodies": 1,
+    "checks": {
+      "balanced": 2,
+      "pixel": 2,
+      "videoJson": 2
+    },
+    "originalFilesUnchanged": true,
+    "sourceCommit": "45a068767cc76ce9e14403f5b0cbfc4e0be7cb45"
+  },
+  "installedUi": {
+    "status": "passed",
+    "transport": "Microsoft Edge to the installed self-contained bridge; native WebView lifecycle validated separately",
+    "reports": [
+      "pixel-round-two-ui.json",
+      "pixel-system-clipboard-ui.json",
+      "image-effects-ui.json",
+      "canvas-draft-ui-report.json",
+      "pixel-20261018-preflight-installed-diagnostic.json",
+      "pixel-draft-release-installed.json"
+    ],
+    "coverage": [
+      "linked Cels/selection transforms/ASE",
+      "system clipboard and permission recovery",
+      "effect replay/recipes/cancel/conflict/undo",
+      "failed canvas save and complete package export",
+      "large pixel preflight and 96-frame failure/reopen/conflict recovery"
+    ]
+  },
+  "loraPackagedUi": {
+    "status": "passed",
+    "transport": "same self-contained bridge payload before installation",
+    "payloadSha256MatchesInstalled": true,
+    "modelQualityClaim": false
+  },
+  "sourceGates": {
+    "fullUnit": {
+      "total": 575,
+      "passed": 574,
+      "skipped": 1
+    },
+    "baseline": {
+      "checks": 171,
+      "continuation": "Final legacy mask assertion updated to the approved in-place stack, then resumed successfully"
+    },
+    "p7Phases": 6,
+    "pixelFormal": "pixel-latency-20261018.json"
+  },
+  "boundary": [
+    "The 30-minute pixel timing is a source-frontend run; the installed build has separate preflight and failure-recovery checks.",
+    "Real model samples, assistant visual checks and user blind review remain separate.",
+    "No LoRA trainer, training UI or actual training is claimed; AI-008 is deferred pending meaningful topic/data.",
+    "Existing metadata has one original registration without a body; no replacement body was fabricated.",
+    "This update replaces local application binaries and does not create a new public installer."
+  ]
+}
