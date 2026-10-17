@@ -210,14 +210,14 @@ export type SemanticWorkflowManifest = {
 
 export type SemanticElementExtractRequest = {
   workflowId: 'element-extract'
-  sourceImageDataUrl: string
+  projectId?: string
   sourceElementId?: string
   params: {
     positivePoints: SemanticPoint[]
     negativePoints: SemanticPoint[]
     threshold: number
   }
-}
+} & ({ sourceImageDataUrl: string; sourceAssetId?: never } | { sourceAssetId: string; sourceImageDataUrl?: never })
 
 export type SemanticRegionEditRequest = {
   workflowId: 'region-edit'

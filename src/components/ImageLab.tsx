@@ -48,6 +48,7 @@ import { MaskEditor } from './MaskEditor'
 import { SemanticPointEditor } from './SemanticPointEditor'
 import { ImageComparison } from './ImageComparison'
 import { IMAGE_EDIT_PRESETS, type ImageEditPresetId } from '../lib/imageEditPresets.mjs'
+import { managedImageAssetId } from '../lib/assetVariants'
 
 export type ImageLabResult =
   | {
@@ -632,9 +633,11 @@ export function ImageLab({
       setProgress(52)
       let job: ProcessingJob
       if (remoteOperation === 'semantic-element-extract') {
+        const sourceAssetId = projectId ? managedImageAssetId(source) : null
         job = await createSemanticImageJob({
             workflowId: 'element-extract',
-            sourceImageDataUrl,
+            ...(projectId ? { projectId } : {}),
+            ...(sourceAssetId ? { sourceAssetId } : { sourceImageDataUrl }),
             sourceElementId: element.id,
             params: {
               positivePoints: semanticPoints.positivePoints,

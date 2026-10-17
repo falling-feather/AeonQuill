@@ -782,6 +782,7 @@ async function inspectSemanticWorkflows(force = false) {
   }
   return probeSemanticWorkflowCatalog({
     comfyRoot: localRuntimeConfig.comfyRoot,
+    runtimeRegistry: await workflowCenter.runtimeRegistry(),
     objectInfo,
     runtime,
   })
@@ -1484,6 +1485,8 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
       '-vf', 'format=rgba',
       normalizedInputPath,
     ], 2 * 60_000, signal)
+    const verifiedArtifacts = await workflowCenter.verifyRegisteredArtifacts(['sam-vit-b'], { signal })
+    if (signal?.aborted || store.get(jobId)?.cancelRequested) return
     await store.update(jobId, { progress: 22, detail: '上传受管图片到本机 SAM' })
     const imageReference = await comfy.uploadImage(normalizedInputPath, managedUploadFilename, signal)
     await comfy.prepareSamImage(imageReference, signal)
@@ -1528,7 +1531,33 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
     if (latest?.cancelRequested) return
 
     await store.update(jobId, { phase: 'saving', progress: 94, detail: '登记蒙版与透明元素版本' })
-    const outputVersion = await describeOutputVersion(job, outputPath, 'image/png')
+    if (outputInfo.size > 64 * 1024 * 1024) throw Object.assign(new Error('SAM 输出超过 64MiB 上限'), { code: 'SEMANTIC_OUTPUT_TOO_LARGE' })
+    const provenance = {
+      jobId, workflowId: 'element-extract', workflowVersion: job.request.workflowVersion,
+      sourceElementId: job.sourceElementId, sourceAssetId: job.request.sourceAssetId,
+      sourceContentHash: job.request.sourceContentHash, verifiedArtifacts,
+      positivePoints: job.request.params.positivePoints, negativePoints: job.request.params.negativePoints,
+      threshold: job.request.params.threshold,
+    }
+    const maskLibraryAsset = await projectStore.createLibraryAsset({
+      scope: job.request.projectId ? 'project' : 'global',
+      ...(job.request.projectId ? { projectId: job.request.projectId } : {}),
+      title: `${job.label || 'SAM 元素提取'} · 蒙版`, description: 'SAM 点击提示生成的不可变灰度蒙版',
+      tags: ['semantic-mask', 'element-extract', 'sam-vit-b'], collectionIds: [],
+      dataUrl: `data:image/png;base64,${maskBytes.toString('base64')}`,
+    }, { source: 'semantic-sam-mask', provenance })
+    const libraryAsset = await projectStore.createLibraryAsset({
+      scope: job.request.projectId ? 'project' : 'global',
+      ...(job.request.projectId ? { projectId: job.request.projectId } : {}),
+      title: job.label || 'SAM 元素提取', description: 'SAM ViT-B · 点击提取透明元素',
+      tags: ['semantic-edit', 'element-extract', 'sam-vit-b'], collectionIds: [],
+      dataUrl: `data:image/png;base64,${(await readFile(outputPath)).toString('base64')}`,
+    }, { source: 'semantic-sam-element-extract', provenance: { ...provenance,
+      maskAssetId: maskLibraryAsset.version.assetId, maskVersionId: maskLibraryAsset.version.id,
+    } })
+    const outputVersion = { id: libraryAsset.version.id, logicalAssetId: libraryAsset.id, version: libraryAsset.version.version,
+      assetId: libraryAsset.version.assetId, mimeType: libraryAsset.version.mimeType,
+      bytes: libraryAsset.version.bytes, provenance: libraryAsset.version.provenance }
     const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
     await store.log(jobId, 'success', `SAM 已提取 ${output.width}×${output.height} 透明元素`)
     await store.update(jobId, {
@@ -1536,8 +1565,8 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
       phase: 'completed',
       progress: 100,
       detail: '元素提取完成，可以回填画布并继续修边',
-      outputUrl: `/api/assets/${encodeURIComponent(outputFilename)}`,
-      maskUrl: `/api/assets/${encodeURIComponent(maskFilename)}`,
+      outputUrl: libraryAsset.version.url,
+      maskUrl: maskLibraryAsset.version.url,
       output: {
         filename: outputFilename,
         maskFilename,
@@ -1552,8 +1581,11 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
         positivePoints: job.request.params.positivePoints.length,
         negativePoints: job.request.params.negativePoints.length,
         threshold: job.request.params.threshold,
+        verifiedArtifacts,
       },
       outputVersion,
+      libraryAsset,
+      maskLibraryAsset,
       delivery,
       completedAt: Date.now(),
       temporaryOutputPath: undefined,

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, rm, truncate, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
   evaluateSemanticWorkflowCatalog,
+  probeLocalSemanticCapabilities,
+  probeSemanticWorkflowCatalog,
   SEMANTIC_ELEMENT_EXTRACT_OPERATION,
   SEMANTIC_POINT_EDIT_OPERATION,
   SEMANTIC_PORTRAIT_ADJUST_OPERATION,
@@ -10,9 +14,34 @@ import {
   validateElementExtractRequest,
   validateSemanticImageRequest,
 } from '../server/semantic-workflow-registry.mjs'
+import { discoverRuntimeRegistry } from '../server/runtime-registry.mjs'
 
 const sourceImageDataUrl = 'data:image/png;base64,AAAA'
 const maskImageDataUrl = 'data:image/png;base64,AQID'
+
+function portablePath(pathname) {
+  return pathname.replace(/\\/gu, '/')
+}
+
+async function semanticSharedFixture() {
+  const root = await mkdtemp(join(process.cwd(), '.runtime', 'test-temp', 'semantic-shared-roots-'))
+  const comfyRoot = join(root, 'main', 'ComfyUI')
+  const sharedRoot = join(root, 'shared', 'ComfyUI')
+  await Promise.all([
+    mkdir(join(comfyRoot, 'custom_nodes', 'ComfyUI-Impact-Pack'), { recursive: true }),
+    mkdir(join(sharedRoot, 'models', 'sams'), { recursive: true }),
+  ])
+  const samPath = join(sharedRoot, 'models', 'sams', 'sam_vit_b_01ec64.pth')
+  await writeFile(samPath, Buffer.alloc(0))
+  await truncate(samPath, 375_042_383)
+  await writeFile(join(comfyRoot, 'extra_model_paths.yaml'), [
+    'shared:',
+    `  base_path: ${portablePath(sharedRoot)}`,
+    '  sams: models/sams',
+    '',
+  ].join('\n'), 'utf8')
+  return { root, comfyRoot, sharedRoot, samPath }
+}
 
 test('semantic workflow catalog exposes four stable, unique workflows', () => {
   const definitions = semanticWorkflowDefinitions()
@@ -268,4 +297,80 @@ test('generative semantic requests reject invalid masks, parameters and ambiguou
     }),
     (error) => error.code === 'INVALID_SEMANTIC_SEED',
   )
+})
+
+test('semantic capability probing resolves registered shared model roots and preserves stopped/node gates', async () => {
+  const fixture = await semanticSharedFixture()
+  try {
+    const registry = await discoverRuntimeRegistry({ comfyRoot: fixture.comfyRoot, modelCategories: ['custom_nodes', 'sams'] })
+    const local = await probeLocalSemanticCapabilities(fixture.comfyRoot, { runtimeRegistry: registry })
+    assert.equal(local.artifacts.has('sam-vit-b'), true)
+    assert.equal(local.extensions.has('impact-pack'), true)
+
+    const stopped = await probeSemanticWorkflowCatalog({
+      comfyRoot: join(fixture.root, 'main', 'missing-comfy-root'),
+      runtimeRegistry: registry,
+      runtime: { connected: false, lifecycle: { state: 'stopped' } },
+    })
+    const stoppedWorkflow = stopped.workflows.find((item) => item.id === 'element-extract')
+    assert.equal(stoppedWorkflow.installed, true)
+    assert.equal(stoppedWorkflow.available, false)
+    assert.equal(stoppedWorkflow.status, 'runtime-stopped')
+
+    const connected = await probeSemanticWorkflowCatalog({
+      comfyRoot: fixture.comfyRoot,
+      runtimeRegistry: registry,
+      objectInfo: { LoadImage: {}, MaskToImage: {}, SaveImage: {} },
+      runtime: { connected: true, lifecycle: { state: 'external' } },
+    })
+    const nodeMismatch = connected.workflows.find((item) => item.id === 'element-extract')
+    assert.equal(nodeMismatch.installed, true)
+    assert.equal(nodeMismatch.available, false)
+    assert.equal(nodeMismatch.status, 'node-mismatch')
+    assert.deepEqual(nodeMismatch.missingNodes, ['SAMLoader'])
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('semantic probing does not match same-named artifacts in unregistered roots or malformed roots', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.runtime', 'test-temp', 'semantic-shared-roots-unregistered-'))
+  try {
+    const comfyRoot = join(root, 'main', 'ComfyUI')
+    const unregisteredRoot = join(root, 'unregistered', 'ComfyUI', 'models', 'sams')
+    await mkdir(join(comfyRoot, 'custom_nodes', 'ComfyUI-Impact-Pack'), { recursive: true })
+    await mkdir(unregisteredRoot, { recursive: true })
+    const unregisteredSam = join(unregisteredRoot, 'sam_vit_b_01ec64.pth')
+    await writeFile(unregisteredSam, Buffer.alloc(0))
+    await truncate(unregisteredSam, 375_042_383)
+    const registry = await discoverRuntimeRegistry({ comfyRoot, modelCategories: ['custom_nodes', 'sams'] })
+    const unregistered = await probeLocalSemanticCapabilities(comfyRoot, { runtimeRegistry: registry })
+    assert.equal(unregistered.extensions.has('impact-pack'), true)
+    assert.equal(unregistered.artifacts.has('sam-vit-b'), false)
+
+    const malformedRoot = join(root, 'malformed', 'ComfyUI')
+    const malformedShared = join(root, 'malformed-shared', 'ComfyUI', 'models', 'sams')
+    await mkdir(join(malformedRoot, 'custom_nodes', 'ComfyUI-Impact-Pack'), { recursive: true })
+    await mkdir(malformedShared, { recursive: true })
+    const malformedSam = join(malformedShared, 'sam_vit_b_01ec64.pth')
+    await writeFile(malformedSam, Buffer.alloc(0))
+    await truncate(malformedSam, 375_042_383)
+    await writeFile(join(malformedRoot, 'extra_model_paths.yaml'), 'shared: [unterminated', 'utf8')
+    const malformedRegistry = await discoverRuntimeRegistry({ comfyRoot: malformedRoot, modelCategories: ['custom_nodes', 'sams'] })
+    assert.equal(malformedRegistry.configFiles[0].status, 'invalid')
+    const malformed = await probeLocalSemanticCapabilities(malformedRoot, { runtimeRegistry: malformedRegistry })
+    assert.equal(malformed.extensions.has('impact-pack'), true)
+    assert.equal(malformed.artifacts.has('sam-vit-b'), false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('semantic probing keeps empty and missing-root behavior fail-closed', async () => {
+  const empty = await probeLocalSemanticCapabilities(undefined)
+  assert.deepEqual([...empty.extensions], [])
+  assert.deepEqual([...empty.artifacts], [])
+  const missing = await probeLocalSemanticCapabilities(join(process.cwd(), '.runtime', 'test-temp', 'semantic-root-does-not-exist'))
+  assert.deepEqual([...missing.extensions], [])
+  assert.deepEqual([...missing.artifacts], [])
 })

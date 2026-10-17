@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.sam-local-validation",
+  "status": "engineering-passed",
+  "date": "2026-10-18",
+  "sourceCheckpoint": "4678be4 plus AI-001 working-tree changes",
+  "input": {
+    "file": "src/assets/sample-summer-character.png",
+    "sha256": "77837adfabf31e37d9c7ef142a284b6c6f7e14954b45861743a5b19f86d73ff2",
+    "scope": "Repository software fixture; not a training dataset"
+  },
+  "model": {
+    "rootId": "root-4e4c975776f04eb7",
+    "category": "sams",
+    "shared": true,
+    "source": "extra-model-path",
+    "bytes": 375042383,
+    "expectedSha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+    "observedSha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+    "sha256Matches": true
+  },
+  "environment": {
+    "comfyVersion": "0.31.0",
+    "pythonVersion": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+    "pytorchVersion": "2.12.1+cu130",
+    "device": "cuda:0 NVIDIA GeForce RTX 4060 Laptop GPU : cudaMallocAsync",
+    "vramTotalBytes": 8585216000,
+    "vramFreeBytes": 7383810048,
+    "vramUsedBytes": 1201405952
+  },
+  "samples": [
+    {
+      "mode": "single-point",
+      "file": "single-point.png",
+      "bytes": 1115435,
+      "sha256": "c65499cda597c39aa6fbbf5bc0683cc36e863de62fcb0ad34218ae8922da20f6",
+      "alpha": {
+        "width": 1254,
+        "height": 1254,
+        "pixels": 1572516,
+        "alphaMin": 0,
+        "alphaMax": 255,
+        "alphaZero": 1396653,
+        "alphaOpaque": 175863,
+        "alphaPartial": 0
+      },
+      "outputVersionMatches": true,
+      "elapsedMs": 11102
+    },
+    {
+      "mode": "six-positive-points",
+      "file": "multi-point.png",
+      "bytes": 1114237,
+      "sha256": "8f5662eb6cf585dc7821a782562d981957464787728c8ac0cd6eb9335d05e87a",
+      "alpha": {
+        "width": 1254,
+        "height": 1254,
+        "pixels": 1572516,
+        "alphaMin": 0,
+        "alphaMax": 255,
+        "alphaZero": 1191626,
+        "alphaOpaque": 380890,
+        "alphaPartial": 0
+      },
+      "outputVersionMatches": true,
+      "elapsedMs": 11092
+    }
+  ],
+  "assistantVisualReview": {
+    "humanBlindReview": false,
+    "comparison": "comparison.png",
+    "finding": "One positive point leaves large holes in hat, hair and shorts. Six positive points substantially improve subject coverage; small defects remain on the right hat brim. This is one repository image, not a general quality recommendation."
+  },
+  "libraryRegistration": {
+    "single": {
+      "libraryItemId": "library-040f9d88-5b23-45ae-909d-9de34e589ed5",
+      "assetId": "c65499cda597c39aa6fbbf5bc0683cc36e863de62fcb0ad34218ae8922da20f6",
+      "version": 1,
+      "versionCount": 1,
+      "relationship": "project-owned"
+    },
+    "multi": {
+      "libraryItemId": "library-75b7a9ed-40cc-4590-9f6b-078857c2e997",
+      "assetId": "8f5662eb6cf585dc7821a782562d981957464787728c8ac0cd6eb9335d05e87a",
+      "version": 1,
+      "versionCount": 1,
+      "relationship": "project-owned"
+    }
+  },
+  "trainingPerformed": false,
+  "weightsCopied": false,
+  "finalContractValidation": {
+    "sourceCheckpoint": "2ba4279 plus AI-001 working-tree changes",
+    "elapsedMs": 11207,
+    "immutableOutput": {
+      "libraryItemId": "library-7be7f076-65eb-4c79-9f0e-76bea1f96215",
+      "assetId": "8f5662eb6cf585dc7821a782562d981957464787728c8ac0cd6eb9335d05e87a",
+      "version": 1,
+      "versionCount": 1,
+      "relationship": "project-owned"
+    },
+    "immutableMask": {
+      "assetId": "a221fce1621c10a64b3b18a43042b538fa36b28089bb51401c46dbc3f3596b0a",
+      "bytes": 13253,
+      "version": 1,
+      "relationship": "project-owned",
+      "sourceAssetIdMatches": true
+    },
+    "projectOwnership": true,
+    "maskVersionLinkedInOutputProvenance": true,
+    "ownedRuntimeStopped": true,
+    "humanBlindReview": false
+  },
+  "uiRequestValidation": {
+    "command": "node scripts/validate-semantic-sam-ui.mjs",
+    "status": "passed",
+    "managedSourceProjectIdAndAssetId": true,
+    "uploadSourceProjectIdAndDataUrl": true,
+    "gpuUsed": false
+  }
+}

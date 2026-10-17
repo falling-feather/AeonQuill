@@ -1,5 +1,4 @@
 import { stat } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
 import {
   QWEN_SEMANTIC_WORKFLOW_VERSION,
 } from './semantic-image-workflow.mjs'
@@ -8,6 +7,10 @@ import {
   IMAGE_EDIT_PRESETS,
 } from '../src/lib/imageEditPresets.mjs'
 import { ARTIFACTS as REGISTERED_ARTIFACTS } from './workflow-artifacts.mjs'
+import {
+  discoverRuntimeRegistry,
+  registeredArtifactCandidates,
+} from './runtime-registry.mjs'
 
 export const SEMANTIC_WORKFLOW_CATALOG_VERSION = 'semantic-image-v2'
 export const SEMANTIC_ELEMENT_EXTRACT_OPERATION = 'semantic-element-extract'
@@ -259,17 +262,6 @@ function clone(value) {
   return structuredClone(value)
 }
 
-function assertInsideRoot(rootDirectory, relativePath) {
-  const root = resolve(rootDirectory)
-  const candidate = resolve(root, relativePath)
-  if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) {
-    throw Object.assign(new Error('Semantic workflow capability path escaped the ComfyUI root'), {
-      code: 'SEMANTIC_CAPABILITY_PATH_INVALID',
-    })
-  }
-  return candidate
-}
-
 async function directoryExists(pathname) {
   try {
     return (await stat(pathname)).isDirectory()
@@ -287,25 +279,32 @@ async function artifactExists(pathname, minBytes) {
   }
 }
 
-export async function probeLocalSemanticCapabilities(comfyRoot) {
+export async function probeLocalSemanticCapabilities(comfyRoot, { runtimeRegistry } = {}) {
   const extensions = new Set()
   const artifacts = new Set()
-  if (typeof comfyRoot !== 'string' || !comfyRoot) return { extensions, artifacts }
+  const registry = runtimeRegistry ?? await discoverRuntimeRegistry({ comfyRoot })
+  if (!registry?.configured) return { extensions, artifacts }
+
+  const registeredCandidates = (relativePath) => registeredArtifactCandidates({ relativePath }, registry)
 
   await Promise.all([
     ...Object.entries(EXTENSIONS).map(async ([id, candidates]) => {
       for (const relativePath of candidates) {
-        if (await directoryExists(assertInsideRoot(comfyRoot, relativePath))) {
-          extensions.add(id)
-          return
+        for (const candidate of registeredCandidates(relativePath)) {
+          if (await directoryExists(candidate.targetPath)) {
+            extensions.add(id)
+            return
+          }
         }
       }
     }),
     ...Object.entries(ARTIFACTS).map(async ([id, descriptor]) => {
       for (const relativePath of descriptor.candidates) {
-        if (await artifactExists(assertInsideRoot(comfyRoot, relativePath), descriptor.minBytes)) {
-          artifacts.add(id)
-          return
+        for (const candidate of registeredCandidates(relativePath)) {
+          if (await artifactExists(candidate.targetPath, descriptor.minBytes)) {
+            artifacts.add(id)
+            return
+          }
         }
       }
     }),
@@ -425,8 +424,8 @@ export function evaluateSemanticWorkflowCatalog({
   }
 }
 
-export async function probeSemanticWorkflowCatalog({ comfyRoot, objectInfo, runtime } = {}) {
-  const local = await probeLocalSemanticCapabilities(comfyRoot)
+export async function probeSemanticWorkflowCatalog({ comfyRoot, objectInfo, runtime, runtimeRegistry } = {}) {
+  const local = await probeLocalSemanticCapabilities(comfyRoot, { runtimeRegistry })
   return evaluateSemanticWorkflowCatalog({ ...local, objectInfo, runtime })
 }
 
