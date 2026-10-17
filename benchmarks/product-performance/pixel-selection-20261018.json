@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.qa.pixel-system-clipboard-ui",
+  "status": "passed",
+  "generatedAt": "2026-10-17T20:20:52.216Z",
+  "browser": "Microsoft Edge executable via Playwright",
+  "phases": [
+    {
+      "name": "png-and-text-system-write-read",
+      "status": "passed",
+      "projectId": "project-f02ece7f-12bb-49d6-b942-16167ce4c074",
+      "sourceRevision": 1,
+      "clipboardTypes": [
+        "text/plain",
+        "image/png"
+      ],
+      "textCharacters": 133,
+      "payload": {
+        "width": 2,
+        "height": 2,
+        "colors": [
+          "#e66b4dff"
+        ],
+        "pixels": [
+          0,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "name": "cross-project-rgba-identity-and-no-selection-target",
+      "status": "passed",
+      "sourceColor": "#e66b4dff",
+      "sameIdColor": "#00ff00ff",
+      "pastedColor": "#e66b4dff",
+      "pastedId": "ember",
+      "target": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "name": "selection-target-one-snapshot-undo-redo",
+      "status": "passed",
+      "beforeRevision": 2,
+      "pasteRevision": 3,
+      "undoRevision": 4,
+      "redoRevision": 5,
+      "paletteRestoredOnUndo": true
+    },
+    {
+      "name": "png-only-external-half-transparent-and-transparent",
+      "status": "passed",
+      "clipboardTypes": [
+        "image/png"
+      ],
+      "revision": 6,
+      "colors": [
+        "#ff000080",
+        "#0000ffff"
+      ]
+    },
+    {
+      "name": "over-256-png-rejection-is-atomic-memory-clipboard-stays-usable",
+      "status": "passed",
+      "revisionUnchanged": true,
+      "memoryCopyStatus": "passed"
+    },
+    {
+      "name": "refresh-and-project-reopen-persistence",
+      "status": "passed",
+      "revision": 6
+    },
+    {
+      "name": "permission-denial-fallback",
+      "status": "passed"
+    }
+  ],
+  "responsive": {
+    "desktop": {
+      "viewport": 1440,
+      "documentScrollWidth": 1440,
+      "bodyScrollWidth": 1440
+    },
+    "mobile": {
+      "viewport": 390,
+      "documentScrollWidth": 390,
+      "bodyScrollWidth": 390
+    }
+  },
+  "persistence": {
+    "finalRevision": 6,
+    "refreshReopen": "passed",
+    "workspacePutCount": 10
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "denial": {
+    "status": "passed",
+    "deniedSystemCopyDidNotRevise": true,
+    "memoryCopyAfterDenial": true
+  },
+  "sourceScope": "Working-tree integration; final clean release validation is separate.",
+  "transform": {
+    "pureTests": 9,
+    "realUi": "Preview/cancel/apply/undo/redo/lock passed in round-two Edge validation."
+  }
+}

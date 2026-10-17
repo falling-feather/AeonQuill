@@ -32,6 +32,7 @@ import {
   Plus,
   PackageOpen,
   Redo2,
+  RotateCw,
   Settings2,
   Scissors,
   Square,
@@ -154,6 +155,10 @@ import { PixelComputationClient } from '../../lib/pixel/pixelComputationClient.m
 import { createPixelComputationSnapshot } from '../../lib/pixel/pixelComputation.mjs'
 import type { PixelComputationConversionResult, PixelComputationFramesResult, PixelComputationOperation, PixelComputationRequest } from '../../lib/pixel/pixelComputation.mjs'
 import './pixel-mode.css'
+import { PixelSelectionTransformPanel } from './PixelSelectionTransformPanel'
+import { createPixelSystemClipboard, pastePixelSystemClipboard } from '../../lib/pixel/pixelSystemClipboard.mjs'
+import { readPixelSystemClipboard, writePixelSystemClipboard } from '../../lib/pixel/pixelSystemClipboardBrowser'
+import { transformPixelSelection, type PixelTransformOptions } from '../../lib/pixel/pixelTransform.mjs'
 
 type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
 
@@ -475,6 +480,10 @@ export function PixelModeWorkbench({
   const [selectionClipboard, setSelectionClipboard] = useState<PixelSelectionClipboard | null>(null)
   const [selectionPasteMode, setSelectionPasteMode] = useState<PixelSelectionPasteMode>('replace')
   const [linkedTargetFrameId, setLinkedTargetFrameId] = useState('')
+  const [selectionTransformOpen, setSelectionTransformOpen] = useState(false)
+  const [systemClipboardBusy, setSystemClipboardBusy] = useState(false)
+  const systemClipboardRequestRef = useRef(0)
+  useEffect(() => () => { systemClipboardRequestRef.current += 1 }, [])
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
@@ -1515,6 +1524,32 @@ export function PixelModeWorkbench({
     }
   }, [apply, selection])
 
+  const applySelectionTransform = useCallback((options: PixelTransformOptions, revision: number) => {
+    const current = historyRef.current.document
+    if (!selection || current.revision !== revision) {
+      setStatus('选区或文档已变化，请检查新预览后再应用')
+      return
+    }
+    try {
+      const layer = current.layers.find(({ id }) => id === current.activeLayerId)
+      const group = layer?.groupId ? current.layerGroups.find(({ id }) => id === layer.groupId) : null
+      if (!layer || layer.locked || group?.locked || group?.visible === false) {
+        setStatus('当前图层或图层组已锁定/隐藏，不能应用选区变换')
+        return
+      }
+      const frame = current.frames.find(({ id }) => id === current.activeFrameId)
+      if (!frame) return
+      const result = transformPixelSelection(frame.cels[current.activeLayerId], current.width, current.height, selection, options)
+      if (result.pixels.length && apply('pixels.patch', { frameId: current.activeFrameId, layerId: current.activeLayerId, pixels: result.pixels })) {
+        setSelection(result.selection)
+        setSelectionTransformOpen(false)
+        setStatus(`选区变换已应用 · ${result.pixels.length} 像素 · 可一次撤销`)
+      }
+    } catch (error) {
+      setStatus(readablePixelError(error, '选区变换失败'))
+    }
+  }, [apply, selection])
+
   const captureSelectionClipboard = useCallback((cut: boolean) => {
     if (!selection) {
       setStatus('请先框选要复制的像素区域')
@@ -1604,6 +1639,44 @@ export function PixelModeWorkbench({
       return false
     }
   }, [apply, selection, selectionClipboard, selectionPasteMode])
+
+  const copySystemSelection = useCallback(async () => {
+    if (!selection) return
+    const request = ++systemClipboardRequestRef.current
+    const current = historyRef.current.document
+    try {
+      const payload = createPixelSystemClipboard(current, selection)
+      captureSelectionClipboard(false)
+      setSystemClipboardBusy(true)
+      const format = await writePixelSystemClipboard(payload)
+      if (request === systemClipboardRequestRef.current) setStatus(format === 'png-and-text'
+        ? '已复制 PNG 与精确像素数据到系统剪贴板，可跨项目或粘贴到其他绘图软件'
+        : '已复制精确像素文本到系统剪贴板；当前浏览器不支持 PNG 写入')
+    } catch (error) {
+      if (request === systemClipboardRequestRef.current) setStatus(`${readablePixelError(error, '系统复制失败')} · 内存剪贴板仍可使用`)
+    } finally { if (request === systemClipboardRequestRef.current) setSystemClipboardBusy(false) }
+  }, [captureSelectionClipboard, selection])
+
+  const pasteSystemSelection = useCallback(async (data?: DataTransfer) => {
+    const request = ++systemClipboardRequestRef.current
+    const base = historyRef.current.document
+    const target = selection ? { x: selection.x, y: selection.y } : { x: 0, y: 0 }
+    setSystemClipboardBusy(true)
+    try {
+      const payload = await readPixelSystemClipboard(data)
+      if (request !== systemClipboardRequestRef.current) return
+      const current = historyRef.current
+      if (current.document !== base) throw new Error('读取剪贴板期间文档已变化，请重新粘贴')
+      const result = pastePixelSystemClipboard(base, payload, target, { mode: selectionPasteMode })
+      if (!result.changedPixels) { setStatus('剪贴板内容与目标一致，没有产生修订'); return }
+      stopPlayback()
+      replaceHistory({ document: result.document, undo: [...current.undo, createPixelDocumentHistoryEntry(base)], redo: [] })
+      setSelection(result.selection)
+      setStatus(`系统剪贴板已粘贴 ${payload.width}×${payload.height} · 新增 ${result.addedColors.length} 色 · 1 个撤销单元`)
+    } catch (error) {
+      if (request === systemClipboardRequestRef.current) setStatus(`${readablePixelError(error, '系统粘贴失败')} · 可继续使用内存剪贴板`)
+    } finally { if (request === systemClipboardRequestRef.current) setSystemClipboardBusy(false) }
+  }, [replaceHistory, selection, selectionPasteMode, stopPlayback])
 
   const selectedLayer = document.layers.find((layer) => layer.id === document.activeLayerId) ?? document.layers[0]
   const selectedLayerGroup = selectedLayer.groupId === null
@@ -2654,10 +2727,27 @@ export function PixelModeWorkbench({
     <section
       className={`aq-pixel-mode ${className}`.trim()}
       aria-label="光阴砚像素模式工作台"
+      onPaste={(event) => {
+        const target = event.target
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+          || target instanceof HTMLElement && target.isContentEditable) return
+        const data = event.clipboardData
+        if (![...data.items].some((item) => item.type === 'image/png')
+          && !data.getData('text/plain').includes('aeonquill.pixel-system-clipboard')) return
+        event.preventDefault()
+        void pasteSystemSelection(data)
+      }}
       onKeyDown={(event) => {
-        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement
+          || event.target instanceof HTMLElement && event.target.isContentEditable) return
         const key = event.key.toLowerCase()
         if (event.ctrlKey || event.metaKey) {
+          if (event.shiftKey && (key === 'c' || key === 'v')) {
+            event.preventDefault()
+            if (key === 'c') void copySystemSelection()
+            else void pasteSystemSelection()
+            return
+          }
           if (key === 'c' && selection) {
             event.preventDefault()
             captureSelectionClipboard(false)
@@ -3244,7 +3334,6 @@ export function PixelModeWorkbench({
                 />
               ) : null}
             </div>
-            {selection || selectionClipboard ? (
               <div className="aq-pixel-selection-actions" aria-label="区域变换与跨帧剪贴板">
                 {selection ? (
                   <>
@@ -3257,6 +3346,7 @@ export function PixelModeWorkbench({
                     <button type="button" title="复制并向右移动一像素" onClick={() => applySelectionOperation('copy', { dx: 1 })}><Copy size={14} /></button>
                     <button type="button" title="水平翻转" onClick={() => applySelectionOperation('flip-horizontal')}><FlipHorizontal2 size={14} /></button>
                     <button type="button" title="垂直翻转" onClick={() => applySelectionOperation('flip-vertical')}><FlipVertical2 size={14} /></button>
+                    <button type="button" title="旋转与缩放选区" aria-label="旋转与缩放选区" onClick={() => setSelectionTransformOpen(true)}><RotateCw size={14} /></button>
                     <button type="button" className="is-danger" title="清除选区" onClick={() => applySelectionOperation('clear')}><Trash2 size={14} /></button>
                     <span className="aq-pixel-control-divider" />
                   </>
@@ -3288,18 +3378,22 @@ export function PixelModeWorkbench({
                   disabled={!selectionClipboard}
                   onClick={pasteSelectionClipboard}
                 ><ClipboardPaste size={14} /></button>
+                <button type="button" aria-label="复制到系统剪贴板" title="复制选区 PNG 与精确像素数据（Ctrl+Shift+C）" disabled={!selection || systemClipboardBusy} onClick={() => void copySystemSelection()}><ClipboardCopy size={14} />系统复制</button>
+                <button type="button" aria-label="粘贴系统剪贴板" title="粘贴精确像素数据或 PNG（Ctrl+Shift+V）" disabled={systemClipboardBusy || selectedLayer.locked || Boolean(selectedLayerGroup?.locked) || selectedLayerGroup?.visible === false} onClick={() => void pasteSystemSelection()}><ClipboardPaste size={14} />系统粘贴</button>
                 <button
                   type="button"
                   className={selectionPasteMode === 'replace' ? 'is-active' : ''}
                   aria-label={selectionPasteMode === 'replace' ? '粘贴模式：透明像素覆盖' : '粘贴模式：仅不透明像素'}
                   aria-pressed={selectionPasteMode === 'replace'}
                   title="切换粘贴时是否用透明像素覆盖目标"
-                  disabled={!selectionClipboard}
                   onClick={() => setSelectionPasteMode((value) => value === 'replace' ? 'opaque-only' : 'replace')}
                 ><span>{selectionPasteMode === 'replace' ? '覆盖透明' : '仅不透明'}</span></button>
               </div>
-            ) : null}
           </div>
+
+          {selectionTransformOpen && selection ? <PixelSelectionTransformPanel
+            document={document} selection={selection} onClose={() => setSelectionTransformOpen(false)} onApply={applySelectionTransform}
+          /> : null}
 
           <section className="aq-pixel-timeline" aria-label="动画帧">
             <div className="aq-pixel-panel-heading">
@@ -4291,6 +4385,7 @@ export function PixelModeWorkbench({
         onApprove={approveAgentPlanReview}
         onReject={rejectAgentPlan}
       />
+
     </section>
   )
 }
