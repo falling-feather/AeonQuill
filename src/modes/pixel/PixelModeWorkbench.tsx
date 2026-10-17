@@ -156,10 +156,10 @@ import { PixelComputationClient } from '../../lib/pixel/pixelComputationClient.m
 import { createPixelComputationSnapshot } from '../../lib/pixel/pixelComputation.mjs'
 import type { PixelComputationConversionResult, PixelComputationFramesResult, PixelComputationOperation, PixelComputationRequest } from '../../lib/pixel/pixelComputation.mjs'
 import './pixel-mode.css'
-import { PixelSelectionTransformPanel } from './PixelSelectionTransformPanel'
+import type { PixelSelectionTransformPanel } from './PixelSelectionTransformPanel'
 import { createPixelSystemClipboard, pastePixelSystemClipboard } from '../../lib/pixel/pixelSystemClipboard.mjs'
 import { readPixelSystemClipboard, writePixelSystemClipboard } from '../../lib/pixel/pixelSystemClipboardBrowser'
-import { transformPixelSelection, type PixelTransformOptions } from '../../lib/pixel/pixelTransform.mjs'
+import type { PixelTransformResult } from '../../lib/pixel/pixelTransform.mjs'
 
 type PixelTool = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rectangle' | 'marquee'
 
@@ -482,6 +482,19 @@ export function PixelModeWorkbench({
   const [selectionPasteMode, setSelectionPasteMode] = useState<PixelSelectionPasteMode>('replace')
   const [linkedTargetFrameId, setLinkedTargetFrameId] = useState('')
   const [selectionTransformOpen, setSelectionTransformOpen] = useState(false)
+  const [SelectionTransformPanel, setSelectionTransformPanel] = useState<typeof PixelSelectionTransformPanel | null>(null)
+  useEffect(() => {
+    if (!selectionTransformOpen || SelectionTransformPanel) return
+    let disposed = false
+    void import('./PixelSelectionTransformPanel').then((module) => {
+      if (!disposed) setSelectionTransformPanel(() => module.PixelSelectionTransformPanel)
+    }).catch(() => {
+      if (disposed) return
+      setSelectionTransformOpen(false)
+      setStatus('选区变换未能载入，当前编辑保留；请先保存或导出，再重新载入应用')
+    })
+    return () => { disposed = true }
+  }, [selectionTransformOpen, SelectionTransformPanel])
   const [systemClipboardBusy, setSystemClipboardBusy] = useState(false)
   const systemClipboardRequestRef = useRef(0)
   useEffect(() => () => { systemClipboardRequestRef.current += 1 }, [])
@@ -1572,7 +1585,7 @@ export function PixelModeWorkbench({
     }
   }, [apply, selection])
 
-  const applySelectionTransform = useCallback((options: PixelTransformOptions, revision: number) => {
+  const applySelectionTransform = useCallback((result: PixelTransformResult, revision: number) => {
     const current = historyRef.current.document
     if (!selection || current.revision !== revision) {
       setStatus('选区或文档已变化，请检查新预览后再应用')
@@ -1585,9 +1598,6 @@ export function PixelModeWorkbench({
         setStatus('当前图层或图层组已锁定/隐藏，不能应用选区变换')
         return
       }
-      const frame = current.frames.find(({ id }) => id === current.activeFrameId)
-      if (!frame) return
-      const result = transformPixelSelection(frame.cels[current.activeLayerId], current.width, current.height, selection, options)
       if (result.pixels.length && apply('pixels.patch', { frameId: current.activeFrameId, layerId: current.activeLayerId, pixels: result.pixels })) {
         setSelection(result.selection)
         setSelectionTransformOpen(false)
@@ -3440,9 +3450,12 @@ export function PixelModeWorkbench({
               </div>
           </div>
 
-          {selectionTransformOpen && selection ? <PixelSelectionTransformPanel
+          {selectionTransformOpen && selection ? SelectionTransformPanel ? <SelectionTransformPanel
             document={document} selection={selection} onClose={() => setSelectionTransformOpen(false)} onApply={applySelectionTransform}
-          /> : null}
+          /> : <section className="aq-pixel-transform-panel" role="dialog" aria-label="正在载入选区变换">
+            <p role="status">正在载入选区变换…</p>
+            <button type="button" onClick={() => setSelectionTransformOpen(false)}>取消载入</button>
+          </section> : null}
 
           <section className="aq-pixel-timeline" aria-label="动画帧">
             <div className="aq-pixel-panel-heading">

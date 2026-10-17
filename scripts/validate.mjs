@@ -94,6 +94,7 @@ try {
     await run('deterministic image processors', process.execPath, ['server/validate-image-tools.mjs'])
     await run('video delivery quality gate', process.execPath, ['scripts/validate-video-delivery-quality.mjs'])
     await run('isolated local API', process.execPath, ['scripts/validate-api.mjs'])
+    await run('canonical canvas read and partial-sync retry', process.execPath, ['scripts/validate-canvas-authority-api.mjs'])
     await run('durable job archive API', process.execPath, ['scripts/validate-job-archive-api.mjs'])
     await run('lazy job archive browser vertical', process.execPath, ['scripts/validate-job-archive-ui.mjs'])
     await run('redacted diagnostic bundle API', process.execPath, ['scripts/validate-diagnostic-bundle-api.mjs'])
@@ -106,6 +107,15 @@ try {
     await run('fixed image edit preset browser contract', process.execPath, ['scripts/validate-image-edit-presets-ui.mjs'])
     await run('authoritative workspace recovery browser regression', process.execPath, ['scripts/validate-workspace-recovery-ui.mjs'])
     await run('pixel-perfect stroke and image conversion browser vertical', process.execPath, ['scripts/validate-pixel-first-round-ui.mjs'])
+    await run('linked cel, selection transform and Aseprite round trip', process.execPath, ['scripts/validate-pixel-round-two-ui.mjs'])
+    await run('system pixel clipboard and permission recovery', process.execPath, ['scripts/validate-pixel-system-clipboard-ui.mjs'])
+    await run('canvas connections and visual multi-alignment', process.execPath, ['scripts/validate-canvas-selection-ui.mjs'])
+    await run('local image effect replay and atomic batch recipes', process.execPath, ['scripts/validate-image-effects-ui.mjs'])
+    await run('balanced canvas failed-save and draft recovery', process.execPath, ['scripts/validate-canvas-draft-ui.mjs'])
+    await run('managed LoRA bindings and recipe verification', process.execPath, ['scripts/validate-lora-bindings-ui.mjs', '--ui'])
+    await run('SAM project and managed-source request binding', process.execPath, ['scripts/validate-semantic-sam-ui.mjs'])
+    await run('refreshable cross-media proposal inputs', process.execPath, ['scripts/validate-media-supervisor-ui.mjs'])
+    await run('local sound remix failure retry and cancellation', process.execPath, ['scripts/validate-audio-remix-ui.mjs'])
     await run('isolated browser smoke', process.execPath, ['scripts/validate-browser.mjs'], {
       env: { MIAOHUI_QA_SKIP_BUILD: '1' },
     })

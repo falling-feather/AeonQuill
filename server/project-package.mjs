@@ -632,23 +632,6 @@ export class ProjectPackageService {
     assertId(projectId, 'projectId')
     const workspace = this.workspaceSnapshot(projectId)
     const balancedProjects = workspace.documents.filter(({ modeId, value }) => modeId === 'balanced' && value !== null).map((entry) => {
-      const stored = this.projectStore.getProject(entry.documentId)
-      if (stored) {
-        return {
-          documentId: stored.id,
-          title: stored.title,
-          schemaVersion: stored.schemaVersion,
-          revision: stored.revision,
-          document: stored.document,
-          createdAt: stored.createdAt,
-          updatedAt: stored.updatedAt,
-          assetVersions: stored.assetVersions.map((version) => ({
-            ...version,
-            parentVersionId: version.parentVersionId ?? null,
-            sourceElementId: version.sourceElementId ?? null,
-          })),
-        }
-      }
       const document = JSON.parse(entry.value)
       return {
         documentId: entry.documentId,
@@ -658,7 +641,11 @@ export class ProjectPackageService {
         document,
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
-        assetVersions: [],
+        assetVersions: this.projectStore.listProjectAssetVersions(entry.documentId).map((version) => ({
+          ...version,
+          parentVersionId: version.parentVersionId ?? null,
+          sourceElementId: version.sourceElementId ?? null,
+        })),
       }
     })
     const library = this.librarySnapshot(projectId)

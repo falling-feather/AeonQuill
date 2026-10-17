@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
 import { startIsolatedBridge } from './qa-runtime.mjs'
@@ -37,6 +38,7 @@ let importGate
 let failedPutCount = 0
 let projectId
 let documentId
+const dialogs = []
 
 function deferred() {
   let resolve
@@ -87,6 +89,10 @@ await page.route('**/api/projects/import*', async (route) => {
 })
 
 page.on('pageerror', (error) => issues.push('pageerror: ' + error.message))
+page.on('dialog', async (dialog) => {
+  dialogs.push({ type: dialog.type(), message: dialog.message().slice(0, 240) })
+  await dialog.accept()
+})
 page.on('console', (message) => {
   const injected503 = failCanvasWrites
     && message.type() === 'error'
@@ -211,6 +217,35 @@ async function openFirstProject(title) {
   await waitCanvas()
 }
 
+async function exportFullProjectFromHome(title) {
+  await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
+  const actionButton = page.getByRole('button', { name: `打开${title}项目操作`, exact: true })
+  await actionButton.waitFor({ state: 'visible', timeout: 12_000 })
+  await actionButton.click()
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 })
+  await page.getByRole('button', { name: '导出完整项目包', exact: true }).click()
+  const download = await downloadPromise
+  const packagePath = await download.path()
+  assert.ok(packagePath)
+  const envelope = JSON.parse(gunzipSync(await readFile(packagePath)).toString('utf8'))
+  assert.equal(envelope.magic, 'AEONQUILL_PROJECT_PACKAGE')
+  assert.equal(envelope.packageSchemaVersion, 1)
+  const payload = envelope.payload
+  assert.ok(payload && typeof payload === 'object')
+  const registration = payload.project.documents.find((document) => document.id === documentId)
+  const documentEntry = payload.documents.find((document) => document.documentId === documentId)
+  const balanced = payload.balancedProjects.find((document) => document.documentId === documentId)
+  assert.ok(registration)
+  assert.ok(documentEntry)
+  assert.ok(balanced)
+  assert.equal(registration.revision, documentEntry.revision)
+  assert.equal(documentEntry.revision, balanced.revision)
+  assert.equal(JSON.parse(documentEntry.value).revision, documentEntry.revision)
+  assert.equal(balanced.document.revision, balanced.revision)
+  assert.equal(issues.some((issue) => issue.includes('SOURCE_CORRUPT')), false)
+  return { payload, registration, documentEntry, balanced, bytes: (await readFile(packagePath)).length }
+}
+
 async function setFailureMode({ server, browser }) {
   failCanvasWrites = server
   quotaEnabled = browser
@@ -273,6 +308,15 @@ try {
   assert.equal(afterReload.elements.find((element) => element.id === shapeId)?.x, 520)
   checks.push('successful retry and reload restored the SQLite document')
 
+  await setShapeX(shapeId, 605)
+  await page.getByRole('button', { name: '返回光阴砚主页', exact: true }).click()
+  const immediateFullExport = await exportFullProjectFromHome(title)
+  const immediateFullExportElement = immediateFullExport.balanced.document.elements.find((element) => element.id === shapeId)
+  assert.equal(immediateFullExportElement?.x, 605)
+  assert.equal(immediateFullExport.registration.revision, immediateFullExport.balanced.revision)
+  checks.push('edit followed by immediate Home navigation exported a complete package with the new element and matching catalog/document revisions')
+
+  await openFirstProject(title)
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: '导出画布', exact: true }).click()
   const download = await downloadPromise
@@ -296,6 +340,16 @@ try {
   assert.ok(afterConcurrentImport.revision > persistedAfterRetry.revision)
   checks.push('import delayed behind a concurrent edit and preserved the newer revision')
 
+  delayImport = false
+  await importInput.setInputFiles(packagePath)
+  await page.getByText('均衡画布兼容包已校验并导入').waitFor({ state: 'visible', timeout: 15_000 })
+  await page.getByRole('button', { name: '返回光阴砚主页', exact: true }).click()
+  const postCompatImportFullExport = await exportFullProjectFromHome(title)
+  const postCompatImportElement = postCompatImportFullExport.balanced.document.elements.find((element) => element.id === shapeId)
+  assert.equal(postCompatImportElement?.x, 605)
+  assert.equal(postCompatImportFullExport.registration.revision, postCompatImportFullExport.balanced.revision)
+  checks.push('compatibility import followed by immediate Home navigation exported a complete package with matching catalog/document revisions')
+
   await page.setViewportSize({ width: 390, height: 844 })
   assert.equal(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth), true)
   await page.screenshot({ path: join(artifactDirectory, 'canvas-draft-ui-mobile.png'), fullPage: true })
@@ -309,6 +363,8 @@ try {
     status: 'passed',
     immediateLeaveMs,
     failedPutCount,
+    fullExportRevisions: [immediateFullExport.balanced.revision, postCompatImportFullExport.balanced.revision],
+    dialogCount: dialogs.length,
     checks,
     issues,
     artifacts: [

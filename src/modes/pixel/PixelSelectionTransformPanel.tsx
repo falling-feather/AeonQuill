@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PixelDocument } from '../../lib/pixel/pixelCore.mjs'
 import type { PixelRect } from '../../lib/pixel/pixelTools.mjs'
-import { transformPixelSelection, type PixelTransformOptions } from '../../lib/pixel/pixelTransform.mjs'
+import { transformPixelSelection, type PixelTransformResult } from '../../lib/pixel/pixelTransform.mjs'
 
 type Props = {
   document: PixelDocument
   selection: PixelRect
   onClose(): void
-  onApply(options: PixelTransformOptions, revision: number): void
+  onApply(result: PixelTransformResult, revision: number): void
 }
 
 export function PixelSelectionTransformPanel({ document, selection, onClose, onApply }: Props) {
@@ -66,6 +66,6 @@ export function PixelSelectionTransformPanel({ document, selection, onClose, onA
       <canvas ref={canvasRef} aria-label="选区变换预览" />
       <p>{candidate.result?.selection.width} × {candidate.result?.selection.height} 可见区域 · {candidate.result?.pixels.length} 像素变化 · 裁剪 {candidate.result?.report.clippedPixels} 像素</p>
     </>}
-    <footer><button type="button" onClick={onClose}>取消</button><button type="button" disabled={!candidate.result?.pixels.length} onClick={() => onApply(options, document.revision)}>应用变换</button></footer>
+    <footer><button type="button" onClick={onClose}>取消</button><button type="button" disabled={!candidate.result?.pixels.length} onClick={() => { if (candidate.result) onApply(candidate.result, document.revision) }}>应用变换</button></footer>
   </section>
 }

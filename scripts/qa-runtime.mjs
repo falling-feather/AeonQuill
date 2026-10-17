@@ -69,14 +69,28 @@ export async function startIsolatedBridge(label = 'qa', options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`
   const stdout = []
   const stderr = []
+  const suppliedEnvironment = options.environment ?? {}
+  const isolatedRuntime = suppliedEnvironment.AEONQUILL_RUNTIME_DIR ?? suppliedEnvironment.MIAOHUI_RUNTIME_DIR ?? runtimeDirectory
+  const isolatedData = suppliedEnvironment.AEONQUILL_DATA_DIR ?? suppliedEnvironment.MIAOHUI_DATA_DIR ?? isolatedRuntime
+  const isolatedConfig = suppliedEnvironment.AEONQUILL_CONFIG ?? suppliedEnvironment.MIAOHUI_CONFIG ?? join(runtimeDirectory, 'no-local-config.json')
+  const isolatedComfyPolicy = suppliedEnvironment.AEONQUILL_COMFY_POLICY ?? suppliedEnvironment.MIAOHUI_COMFY_POLICY ?? options.comfyPolicy ?? 'manual'
   const bridgeEnvironment = {
     ...process.env,
-    MIAOHUI_RUNTIME_DIR: runtimeDirectory,
+    AEONQUILL_RUNTIME_DIR: isolatedRuntime,
+    MIAOHUI_RUNTIME_DIR: isolatedRuntime,
+    AEONQUILL_DATA_DIR: isolatedData,
+    MIAOHUI_DATA_DIR: isolatedData,
+    AEONQUILL_CACHE_DIR: join(runtimeDirectory, 'cache'),
+    AEONQUILL_LOG_DIR: join(runtimeDirectory, 'logs'),
     AEONQUILL_DEFAULT_OUTPUT_DIR: join(runtimeDirectory, 'output'),
-    MIAOHUI_CONFIG: join(runtimeDirectory, 'no-local-config.json'),
+    MIAOHUI_CONFIG: isolatedConfig,
+    AEONQUILL_CONFIG: isolatedConfig,
     MIAOHUI_PORT: String(port),
     MIAOHUI_HOST: '127.0.0.1',
-    MIAOHUI_COMFY_POLICY: options.comfyPolicy || 'manual',
+    AEONQUILL_PORT: String(port),
+    AEONQUILL_HOST: '127.0.0.1',
+    AEONQUILL_COMFY_POLICY: isolatedComfyPolicy,
+    MIAOHUI_COMFY_POLICY: isolatedComfyPolicy,
     COMFY_URL: options.comfyUrl || `http://127.0.0.1:${unavailableComfyPort}`,
     ...(options.environment || {}),
   }

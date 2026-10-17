@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -42,7 +42,9 @@ function canvasDocument(id = 'document-balanced') {
 }
 
 async function stores(t, prefix = 'aeonquill-package-') {
-  const root = await mkdtemp(join(tmpdir(), prefix))
+  const temporaryRoot = fileURLToPath(new URL('../.runtime/test-temp/', import.meta.url))
+  await mkdir(temporaryRoot, { recursive: true })
+  const root = await mkdtemp(join(temporaryRoot, prefix))
   const projectStore = await new ProjectStore(join(root, 'projects')).open()
   const workspaceStore = await new WorkspaceStore(join(root, 'workspaces')).open()
   const service = new ProjectPackageService({ projectStore, workspaceStore })
@@ -121,6 +123,25 @@ async function populateThreeModeProject(target) {
     documentId: 'document-video', reason: 'package-fixture-video', now: 3_300,
   })
 }
+
+test('complete package uses the workspace canvas body when the asset projection trails an approved change', async (t) => {
+  const source = await stores(t)
+  await populateThreeModeProject(source)
+  const prior = source.workspaceStore.getModeDocument('document-balanced')
+  const document = { ...JSON.parse(prior.value), title: 'Approved workspace canvas', revision: 2, updatedAt: 3_600 }
+  source.workspaceStore.saveModeDocument({ projectId: 'project-wuxia-ad', documentId: document.id,
+    modeId: 'balanced', baseRevision: 1, revision: 2, value: JSON.stringify(document) })
+  const catalog = source.workspaceStore.getCatalog().catalog
+  source.workspaceStore.saveCatalog(touchProjectDocument(catalog, 'project-wuxia-ad', document.id,
+    { title: document.title, revision: 2 }), { baseRevision: catalog.revision })
+  const exported = await source.service.exportBundle('project-wuxia-ad')
+  const destination = await stores(t)
+  await destination.service.importBundle(exported.body, { conflictPolicy: 'reject' })
+  const restored = destination.workspaceStore.getModeDocument(document.id)
+  assert.equal(JSON.parse(restored.value).title, document.title)
+  assert.equal(restored.revision, 2)
+  assert.equal(source.projectStore.getProject(document.id).revision, 1, 'Read-only export does not rewrite its older asset projection')
+})
 
 test('complete AEONQUILL package round-trips three mode bodies, recoveries, resources and provenance', async (t) => {
   const source = await stores(t, 'aeonquill-package-source-')

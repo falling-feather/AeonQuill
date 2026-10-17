@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { ProjectStore } from '../server/project-store.mjs'
 import { canvasLogicalAssetId, observeCanvasAssetVersions, reserveCanvasAssetVersion } from '../src/lib/canvasAssets.mjs'
 
@@ -10,6 +11,50 @@ const projectTestTemp = fileURLToPath(new URL('../.runtime/test-temp/', import.m
 
 const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAFAgIACQFe3gAAAABJRU5ErkJggg=='
 const pixelVariant = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+
+test('compatibility export uses the authoritative workspace snapshot without overwriting its older asset projection', async (t) => {
+  const { store } = await fixture(t)
+  const saved = await store.saveProject(document('workspace-export', 0))
+  const snapshot = { ...saved, title: 'Approved workspace', revision: 1,
+    document: { ...saved.document, title: 'Approved workspace', revision: 1 } }
+  const exported = JSON.parse(gunzipSync(await store.exportProjectBundle(saved.id, { project: snapshot })).toString('utf8'))
+  assert.equal(exported.project.document.revision, 1)
+  assert.equal(exported.project.document.title, 'Approved workspace')
+  assert.equal(exported.assets.length, saved.assets.length)
+  assert.equal(store.getProject(saved.id).revision, 0)
+})
+
+test('compatibility import advances beyond a newer workspace revision rather than its older asset projection', async (t) => {
+  const { store } = await fixture(t)
+  const saved = await store.saveProject(document('workspace-import', 0))
+  const bundle = await store.exportProjectBundle(saved.id)
+  const imported = await store.importProjectBundle(bundle, { minimumRevision: 9 })
+  assert.equal(imported.revision, 9)
+  assert.equal(imported.document.revision, 9)
+  assert.equal(imported.assets.length, saved.assets.length)
+  await assert.rejects(() => store.importProjectBundle(bundle, { minimumRevision: -1 }), { code: 'INVALID_PROJECT_DOCUMENT' })
+  assert.equal(store.getProject(saved.id).revision, 9)
+})
+
+test('authoritative export closes over newly referenced assets and rejects missing version metadata', async (t) => {
+  const { store } = await fixture(t)
+  const saved = await store.saveProject(document('workspace-assets', 0))
+  const library = await store.createLibraryAsset({ scope: 'global', title: 'New input', dataUrl: pixelVariant, tags: [], collectionIds: [] })
+  const added = { ...saved.document.elements[0], id: 'new-image', src: library.version.url, sourceSrc: library.version.url }
+  delete added.assetId
+  delete added.assetVersion
+  delete added.assetVersionId
+  const snapshot = { ...saved, revision: 1, document: { ...saved.document, revision: 1, elements: [...saved.document.elements, added] } }
+  const bundle = await store.exportProjectBundle(saved.id, { project: snapshot })
+  const decoded = JSON.parse(gunzipSync(bundle).toString('utf8'))
+  assert.ok(decoded.assets.some(({ id }) => id === library.version.assetId))
+  const { store: fresh } = await fixture(t)
+  const restored = await fresh.importProjectBundle(bundle)
+  assert.equal(restored.document.elements.find(({ id }) => id === 'new-image').src, library.version.url)
+  await assert.rejects(() => store.exportProjectBundle(saved.id, { project: { ...snapshot, assetVersions: [] } }), { code: 'ASSET_VERSION_NOT_FOUND' })
+  const mismatched = { ...snapshot, document: { ...snapshot.document, elements: [{ ...saved.document.elements[0], src: library.version.url }] } }
+  await assert.rejects(() => store.exportProjectBundle(saved.id, { project: mismatched }), { code: 'ASSET_VERSION_MISMATCH' })
+})
 
 function document(id = 'project-1', revision = 1) {
   return {

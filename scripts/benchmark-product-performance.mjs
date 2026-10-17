@@ -264,6 +264,7 @@ async function validateTransientProjectReadRecovery(browser, bridge, issues) {
   observePage(page, issues)
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   const created = await createProjectForMode(page, 'balanced', 'transient-read')
+  await page.locator('.save-status').filter({ hasText: /^已保存$/u }).waitFor({ state: 'visible' })
   await returnHome(page)
   let requests = 0
   await page.route((url) => url.pathname === '/api/projects/current' && url.searchParams.has('id'), async (route) => {

@@ -104,6 +104,10 @@ try {
   const balancedTitle = 'AI-002 均衡审批'
   await createProject(balancedTitle, /均衡模式 图像、文字与多模态创作/u, () => page.getByLabel('无限画布'))
   const balancedInitial = await evidence(balancedTitle, 'balanced')
+  const projectionSeedStatus = await page.evaluate(async (document) => (await fetch('/api/projects/current', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ document }),
+  })).status, balancedInitial.value)
+  assert.equal(projectionSeedStatus, 200, 'Seed the older canvas asset projection before workspace approval')
   const prompt = page.getByLabel('画布快捷指令')
   await prompt.fill('创建标题 受控计划验证')
   await prompt.press('Enter')
@@ -124,6 +128,14 @@ try {
   assert.equal(balancedApproved.registrationRevision, balancedApproved.bodyRevision)
   assert.equal(balancedApproved.value.elements.some(({ content }) => content === '受控计划验证'), true)
   assert.equal(balancedApproved.receipts[0].modeId, 'balanced')
+  const canvasRead = await page.evaluate(async (id) => {
+    const response = await fetch(`/api/projects/current?id=${encodeURIComponent(id)}`)
+    if (!response.ok) throw new Error(`Canvas read returned ${response.status}`)
+    return (await response.json()).project
+  }, balancedApproved.value.id)
+  assert.equal(canvasRead.document.revision, balancedApproved.value.revision)
+  assert.equal(canvasRead.document.elements.some(({ content }) => content === '受控计划验证'), true,
+    'A pre-approval canvas autosave must not take precedence over the committed workspace document')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByLabel('无限画布').waitFor({ state: 'visible', timeout: 15_000 })
   await page.getByText('受控计划验证', { exact: true }).waitFor({ state: 'visible' })

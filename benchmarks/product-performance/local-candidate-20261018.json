@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 1,
+  "task": "QA-007",
+  "status": "source-engineering-passed",
+  "date": "2026-10-18",
+  "functionalTrack": "V0.7.109",
+  "unit": {
+    "total": 574,
+    "passed": 573,
+    "skipped": 1,
+    "failed": 0,
+    "scope": "Final full unit run after the authoritative full-package snapshot fix"
+  },
+  "baseline": {
+    "status": "passed",
+    "checks": 171,
+    "continuation": {
+      "originalFailure": {
+        "label": "isolated browser smoke",
+        "status": "failed",
+        "durationMs": 21855,
+        "error": "isolated browser smoke exited with 1"
+      },
+      "resumedCommand": "node scripts/validate-browser.mjs",
+      "exitCode": 0,
+      "reason": "The old browser assertion expected a duplicate mask-derived node. The approved local effect stack modifies the selected image; revised assertions verify unchanged node count, original source bytes, local parameters, save and reload.",
+      "finalUnitValidation": "574 tests: 573 passed, one Windows symlink-permission skip; includes the authoritative full-package snapshot regression.",
+      "targetedPackageValidation": "21 passed after the snapshot authority fix."
+    },
+    "syntaxChecks": 132,
+    "phases": [
+      {
+        "label": "document metadata and relative links",
+        "status": "passed",
+        "durationMs": 302
+      },
+      {
+        "label": "unit and offline workflow contracts",
+        "status": "passed",
+        "durationMs": 8818
+      },
+      {
+        "label": "image quality benchmark contract",
+        "status": "passed",
+        "durationMs": 560
+      },
+      {
+        "label": "semantic image quality benchmark contract",
+        "status": "passed",
+        "durationMs": 790
+      },
+      {
+        "label": "TypeScript",
+        "status": "passed",
+        "durationMs": 16974
+      },
+      {
+        "label": "production build",
+        "status": "passed",
+        "durationMs": 25193
+      },
+      {
+        "label": "mode-level code splitting budget",
+        "status": "passed",
+        "durationMs": 240
+      },
+      {
+        "label": "recoverable lazy surface browser vertical",
+        "status": "passed",
+        "durationMs": 21163
+      },
+      {
+        "label": "atomic three-mode project initialization",
+        "status": "passed",
+        "durationMs": 21803
+      },
+      {
+        "label": "cross-mode controlled Agent plans",
+        "status": "passed",
+        "durationMs": 17754
+      },
+      {
+        "label": "cross-mode BYOK text plan compiler",
+        "status": "passed",
+        "durationMs": 19068
+      },
+      {
+        "label": "interruptible video production supervisor",
+        "status": "passed",
+        "durationMs": 12978
+      },
+      {
+        "label": "product cold start and memory smoke gate",
+        "status": "passed",
+        "durationMs": 94170
+      },
+      {
+        "label": "deterministic image processors",
+        "status": "passed",
+        "durationMs": 4809
+      },
+      {
+        "label": "video delivery quality gate",
+        "status": "passed",
+        "durationMs": 2512
+      },
+      {
+        "label": "isolated local API",
+        "status": "passed",
+        "durationMs": 9633
+      },
+      {
+        "label": "canonical canvas read and partial-sync retry",
+        "status": "passed",
+        "durationMs": 4611
+      },
+      {
+        "label": "durable job archive API",
+        "status": "passed",
+        "durationMs": 6388
+      },
+      {
+        "label": "lazy job archive browser vertical",
+        "status": "passed",
+        "durationMs": 13718
+      },
+      {
+        "label": "redacted diagnostic bundle API",
+        "status": "passed",
+        "durationMs": 8745
+      },
+      {
+        "label": "diagnostic bundle browser export",
+        "status": "passed",
+        "durationMs": 14890
+      },
+      {
+        "label": "video chain candidate manifest API",
+        "status": "passed",
+        "durationMs": 19814
+      },
+      {
+        "label": "controlled custom ComfyUI execution",
+        "status": "passed",
+        "durationMs": 5547
+      },
+      {
+        "label": "safe storage lifecycle API",
+        "status": "passed",
+        "durationMs": 2798
+      },
+      {
+        "label": "safe storage lifecycle browser vertical",
+        "status": "passed",
+        "durationMs": 40555
+      },
+      {
+        "label": "controlled custom workflow browser vertical",
+        "status": "passed",
+        "durationMs": 17100
+      },
+      {
+        "label": "fixed image edit preset browser contract",
+        "status": "passed",
+        "durationMs": 14111
+      },
+      {
+        "label": "authoritative workspace recovery browser regression",
+        "status": "passed",
+        "durationMs": 12154
+      },
+      {
+        "label": "pixel-perfect stroke and image conversion browser vertical",
+        "status": "passed",
+        "durationMs": 16012
+      },
+      {
+        "label": "linked cel, selection transform and Aseprite round trip",
+        "status": "passed",
+        "durationMs": 24409
+      },
+      {
+        "label": "system pixel clipboard and permission recovery",
+        "status": "passed",
+        "durationMs": 21576
+      },
+      {
+        "label": "canvas connections and visual multi-alignment",
+        "status": "passed",
+        "durationMs": 16640
+      },
+      {
+        "label": "local image effect replay and atomic batch recipes",
+        "status": "passed",
+        "durationMs": 29436
+      },
+      {
+        "label": "balanced canvas failed-save and draft recovery",
+        "status": "passed",
+        "durationMs": 17051
+      },
+      {
+        "label": "managed LoRA bindings and recipe verification",
+        "status": "passed",
+        "durationMs": 17331
+      },
+      {
+        "label": "SAM project and managed-source request binding",
+        "status": "passed",
+        "durationMs": 72045
+      },
+      {
+        "label": "refreshable cross-media proposal inputs",
+        "status": "passed",
+        "durationMs": 30240
+      },
+      {
+        "label": "local sound remix failure retry and cancellation",
+        "status": "passed",
+        "durationMs": 21205
+      },
+      {
+        "label": "isolated browser smoke",
+        "status": "passed",
+        "durationMs": 26595
+      }
+    ]
+  },
+  "p7": {
+    "status": "passed",
+    "phaseCount": 6
+  },
+  "packageAuthorityRegression": {
+    "status": "passed",
+    "targetedTests": 21,
+    "scope": "Complete and compatibility exports use the workspace body; isolated new-store round trips and immutable asset closure verified"
+  },
+  "modeBudget": {
+    "initialPixelBytes": 153533,
+    "pixelBytes": 145072,
+    "maximumPixelBytes": 150000,
+    "thresholdRelaxed": false
+  },
+  "canvasAuthority": {
+    "schemaVersion": 1,
+    "task": "QA-007 canvas authority and retry",
+    "status": "passed",
+    "checks": [
+      {
+        "case": "workspace-locked-after-projection-write",
+        "status": "passed",
+        "httpStatus": 500,
+        "projectionRevision": 1,
+        "authoritativeRevision": 0,
+        "falseSuccess": false
+      },
+      {
+        "case": "idempotent-retry-stale-rejection-and-restart",
+        "status": "passed",
+        "revision": 1
+      },
+      {
+        "case": "existing-client-catalog-flush-contract",
+        "status": "passed",
+        "completePackagePreview": true
+      }
+    ]
+  },
+  "formalPerformance": "pixel-latency-20261018.json",
+  "nativeInstallation": "REL-023 follows from a clean source commit",
+  "boundary": [
+    "Fixtures prove software contracts, not model/voice quality.",
+    "Real SAM, Qwen, H3 and alignment samples are separately recorded.",
+    "No LoRA training without meaningful topic and authorized train/validation data."
+  ]
+}

@@ -1,4 +1,4 @@
-import { getCanvasDraft } from './lib/canvasDraft.mjs'
+import { flushCanvasProjectMutation, getCanvasDraft } from './lib/canvasDraft.mjs'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Library, Workflow } from 'lucide-react'
 import { SurfaceState } from './components/Home/SurfaceState'
@@ -33,6 +33,8 @@ import {
   loadLocalProject,
   loadWorkspaceCatalog,
   loadWorkspaceModeDocument,
+  flushWorkspaceModeDocument,
+  saveLocalProject,
   saveWorkspaceCatalog,
   saveWorkspaceModeDocument,
   takeWorkspaceCreativePlanCommit,
@@ -965,6 +967,25 @@ export default function ProductApp() {
     packageBusyRef.current = true
     try {
       await flushProjectCatalogBridgeSave()
+      const registrations = projectCatalogRef.current.projects.find((project) => project.id === projectId)?.documents ?? []
+      for (const registration of registrations) {
+        await flushWorkspaceModeDocument(registration.id)
+        if (registration.modeId !== 'balanced') continue
+        await flushCanvasProjectMutation(registration.id)
+        const current = await loadLocalProject(registration.id)
+        if (!current) throw new Error('均衡正文暂不可读取，请恢复项目后再导出')
+        const stored = current.recoveredDraft ? await saveLocalProject(current.document) : current
+        const agentCommit = takeWorkspaceCreativePlanCommit(registration.id)
+        if (agentCommit && agentCommit.catalog.revision >= projectCatalogRef.current.revision) {
+          commitProjectCatalog(agentCommit.catalog, { workspacePersisted: true })
+        }
+        const latest = projectCatalogRef.current.projects.find((project) => project.id === projectId)?.documents.find((document) => document.id === registration.id)
+        if (!latest || latest.revision !== stored.revision || latest.title !== stored.title) {
+          commitProjectCatalog(touchProjectDocument(projectCatalogRef.current, projectId, registration.id,
+            { title: stored.title, revision: stored.revision }))
+        }
+      }
+      await flushProjectCatalogBridgeSave()
       const preview = await previewWorkspaceProjectPackage(projectId)
       if (!window.confirm(packagePreviewText(preview, '导出'))) return
       const blob = await downloadWorkspaceProjectPackage(projectId)
@@ -980,7 +1001,7 @@ export default function ProductApp() {
     } finally {
       packageBusyRef.current = false
     }
-  }, [flushProjectCatalogBridgeSave])
+  }, [commitProjectCatalog, flushProjectCatalogBridgeSave])
 
   const handleImportProjectPackage = useCallback(async (file: File) => {
     if (packageBusyRef.current) return

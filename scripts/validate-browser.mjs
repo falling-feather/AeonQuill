@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { startIsolatedBridge } from './qa-runtime.mjs'
 
@@ -12,7 +12,9 @@ try {
 }
 
 const bridge = await startIsolatedBridge('browser')
-const artifactDirectory = await mkdtemp(join(tmpdir(), 'miaohui-browser-artifacts-'))
+const artifactRoot = fileURLToPath(new URL('../.runtime/qa/', import.meta.url))
+await mkdir(artifactRoot, { recursive: true })
+const artifactDirectory = await mkdtemp(join(artifactRoot, 'browser-smoke-'))
 const browserChannel = process.env.MIAOHUI_BROWSER_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined)
 let browser
 let failed = true
@@ -56,6 +58,15 @@ async function readStoredDocument(page) {
     if (!raw) throw new Error('Versioned canvas document was not persisted')
     return JSON.parse(raw)
   })
+}
+
+async function sourceImageHash(page, element) {
+  return page.evaluate(async (source) => {
+    const response = await fetch(source)
+    if (!response.ok) throw new Error(`Source image returned ${response.status}`)
+    const digest = await crypto.subtle.digest('SHA-256', await response.arrayBuffer())
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }, element.sourceSrc ?? element.src)
 }
 
 try {
@@ -151,6 +162,9 @@ try {
   ))
   const applyMask = desktop.getByRole('button', { name: '应用到画布', exact: true })
   assert.equal(await applyMask.isEnabled(), true)
+  const beforeMask = await readStoredDocument(desktop)
+  const sourceBeforeMask = beforeMask.elements.find((element) => element.id === 'image-summer-character')
+  const originalSourceHash = await sourceImageHash(desktop, sourceBeforeMask)
   await applyMask.click()
   await imageLab.waitFor({ state: 'hidden', timeout: 30_000 })
   const maskDerivedId = await desktop.waitForFunction(() => {
@@ -175,10 +189,10 @@ try {
   assert.equal(maskStep.maskRecipe.strokes[0].points.every((point) =>
     point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1
   ), true)
-  assert.equal(
-    afterMask.elements.find((element) => element.id === 'image-summer-character').processingStack.length,
-    0,
-  )
+  assert.equal(maskDerivedId, sourceBeforeMask.id, 'Local mask parameters update the selected image in place')
+  assert.equal(afterMask.elements.length, beforeMask.elements.length, 'Local effects do not create duplicate image nodes')
+  assert.equal(maskDerived.processingStack.length, sourceBeforeMask.processingStack.length + 1)
+  assert.equal(await sourceImageHash(desktop, maskDerived), originalSourceHash, 'The immutable original source remains byte-identical')
   await desktop.waitForFunction(async (elementId) => {
     const response = await fetch('/api/projects/current?id=local-project', { credentials: 'same-origin' })
     const project = (await response.json()).project
@@ -191,7 +205,7 @@ try {
     )
   }, maskDerivedId)
   await desktop.reload({ waitUntil: 'domcontentloaded' })
-  await desktop.locator(`img[alt$="· 蒙版修边"]`).waitFor({ state: 'visible' })
+  await desktop.getByRole('img', { name: sourceBeforeMask.name, exact: true }).waitFor({ state: 'visible' })
   const afterMaskReload = await readStoredDocument(desktop)
   assert.equal(afterMaskReload.elements.some((element) =>
     element.id === maskDerivedId

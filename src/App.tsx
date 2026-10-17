@@ -349,7 +349,7 @@ function App({
   const viewportRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
-  const persistenceReadyRef = useRef(false)
+  const persistenceReadyRef = useRef(Boolean(initialDocument) && !getCanvasDraft(projectId))
   const lastPersistedRevisionRef = useRef(canvasDocument.revision)
   const jobStatusRef = useRef(new Map<string, ProcessingJob['status']>())
   const appliedImageJobIdsRef = useRef(new Set<string>())

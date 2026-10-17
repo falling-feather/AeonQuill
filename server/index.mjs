@@ -1560,6 +1560,8 @@ async function runSemanticElementExtractJob(jobId, { signal }) {
       bytes: libraryAsset.version.bytes, provenance: libraryAsset.version.provenance }
     const delivery = await deliverConfiguredOutput(jobId, outputPath, outputFilename)
     await store.log(jobId, 'success', `SAM 已提取 ${output.width}×${output.height} 透明元素`)
+    signal.throwIfAborted()
+    if (store.get(jobId)?.cancelRequested) throw Object.assign(new Error('元素提取任务已取消'), { name: 'AbortError' })
     await store.update(jobId, {
       status: 'completed',
       phase: 'completed',
@@ -3613,6 +3615,31 @@ async function createImageJob(body, retrySource, options = {}) {
   }
 }
 
+function readCurrentCanvasProject(projectId) {
+  const project = projectStore.getProject(projectId)
+  const workspaceDocument = workspaceStore.getModeDocument(projectId)
+  if (workspaceDocument?.modeId !== 'balanced') return project
+  const document = JSON.parse(workspaceDocument.value)
+  assertCanvasDocument(document)
+  return {
+    id: document.id, title: document.title, schemaVersion: document.schemaVersion,
+    revision: document.revision, document,
+    createdAt: workspaceDocument.createdAt, updatedAt: workspaceDocument.updatedAt,
+    assets: project?.assets ?? projectStore.listProjectAssets(projectId),
+    assetVersions: project?.assetVersions ?? projectStore.listProjectAssetVersions(projectId),
+  }
+}
+
+function syncBalancedCanvasDocument(project, reason, expectedDocument) {
+  const registration = workspaceStore.findDocumentRegistration(project.id)
+  if (registration?.document.modeId !== 'balanced') return
+  workspaceStore.saveModeDocument({
+    projectId: registration.project.id, documentId: project.id, modeId: 'balanced',
+    baseRevision: expectedDocument?.revision ?? null, revision: project.revision,
+    value: JSON.stringify(project.document),
+  }, { reason })
+}
+
 function semanticWorkspaceProject(projectId) {
   const project = workspaceStore.getCatalog().catalog.projects.find((candidate) => candidate.id === projectId)
   if (!project || project.status !== 'active') {
@@ -5018,7 +5045,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && pathname === '/api/projects/current/package') {
       const projectId = url.searchParams.get('id') || 'local-project'
-      const body = await projectStore.exportProjectBundle(projectId)
+      const body = await projectStore.exportProjectBundle(projectId, { project: readCurrentCanvasProject(projectId) })
       response.writeHead(200, {
         'content-type': 'application/vnd.miaohui.project',
         'content-length': body.length,
@@ -5030,51 +5057,30 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && pathname === '/api/projects/import') {
       const projectId = url.searchParams.get('projectId') || 'local-project'
-      const project = await projectStore.importProjectBundle(await readBinaryBody(request), { projectId })
+      const workspaceDocument = workspaceStore.getModeDocument(projectId)
+      const project = await projectStore.importProjectBundle(await readBinaryBody(request), {
+        projectId, ...(workspaceDocument?.modeId === 'balanced' ? { minimumRevision: workspaceDocument.revision + 1 } : {}),
+      })
+      syncBalancedCanvasDocument(project, 'balanced-canvas-package-import', workspaceDocument)
       return sendJson(response, 201, { project })
     }
     if (request.method === 'PUT' && pathname === '/api/projects/current') {
       const body = await readJsonBody(request, 72 * 1024 * 1024)
       assertCanvasDocument(body.document)
+      const workspaceDocument = workspaceStore.getModeDocument(body.document.id)
+      if (workspaceDocument?.modeId === 'balanced' && body.document.revision < workspaceDocument.revision) {
+        throw Object.assign(new Error('均衡正文已在其他操作中更新，当前草稿仍保留'), { status: 409, code: 'WORKSPACE_DOCUMENT_CONFLICT' })
+      }
       const project = await projectStore.saveProject(body.document, {
         source: 'canvas-autosave',
         resolveAssetReference: resolveProjectAssetReference,
       })
-      const registration = workspaceStore.findDocumentRegistration(project.id)
-      if (registration?.document.modeId === 'balanced') {
-        const existingWorkspaceDocument = workspaceStore.getModeDocument(project.id)
-        workspaceStore.saveModeDocument({
-          projectId: registration.project.id,
-          documentId: project.id,
-          modeId: 'balanced',
-          baseRevision: existingWorkspaceDocument?.revision ?? null,
-          revision: project.revision,
-          value: JSON.stringify(project.document),
-        }, { reason: 'balanced-canvas-autosave' })
-      }
+      syncBalancedCanvasDocument(project, 'balanced-canvas-autosave', workspaceDocument)
       return sendJson(response, 200, { project })
     }
     if (request.method === 'GET' && pathname === '/api/projects/current') {
       const projectId = url.searchParams.get('id') || 'local-project'
-      let project = projectStore.getProject(projectId)
-      if (!project) {
-        const workspaceDocument = workspaceStore.getModeDocument(projectId)
-        if (workspaceDocument?.modeId === 'balanced') {
-          const document = JSON.parse(workspaceDocument.value)
-          assertCanvasDocument(document)
-          project = {
-            id: document.id,
-            title: document.title,
-            schemaVersion: 1,
-            revision: document.revision,
-            document,
-            createdAt: workspaceDocument.createdAt,
-            updatedAt: workspaceDocument.updatedAt,
-            assets: [],
-            assetVersions: [],
-          }
-        }
-      }
+      const project = readCurrentCanvasProject(projectId)
       return sendJson(response, 200, { project })
     }
     if (request.method === 'POST' && pathname === '/api/projects/gc') {

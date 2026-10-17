@@ -63,6 +63,7 @@ const report = {
   responsive: null,
   pageErrors: [],
   consoleErrors: [],
+  expectedConsoleErrors: [],
   consoleWarnings: [],
   screenshots: [desktopScreenshotPath, mobileScreenshotPath, failureScreenshotPath],
   error: null,
@@ -72,12 +73,22 @@ const logLines = []
 const pageErrors = []
 const consoleErrors = []
 const consoleWarnings = []
+const expectedConsoleErrors = []
 const persistenceRequests = []
+const moduleRequests = []
+const moduleGate = {
+  active: false,
+  outcome: 'continue',
+  pending: 0,
+  promise: null,
+  release: null,
+}
 let bridge
 let browser
 let context
 let page
 let linkedStage = 'not-started'
+let expectedModuleAbortConsoleError = false
 
 function log(message) {
   logLines.push(`${new Date().toISOString()} ${message}`)
@@ -86,6 +97,30 @@ function log(message) {
 
 function delay(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
+function armTransformModuleGate(outcome = 'abort') {
+  moduleGate.active = true
+  moduleGate.outcome = outcome
+  moduleGate.promise = new Promise((resolvePromise) => { moduleGate.release = resolvePromise })
+}
+
+async function releaseTransformModuleGate(outcome = 'abort') {
+  moduleGate.outcome = outcome
+  moduleGate.active = false
+  moduleGate.release?.()
+  moduleGate.release = null
+  moduleGate.promise = null
+  await delay(120)
+}
+
+async function waitForTransformModulePending(timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (moduleGate.pending > 0) return
+    await delay(25)
+  }
+  throw new Error(`选区变换模块未进入延迟请求；requests=${moduleRequests.length}`)
 }
 
 function hashBytes(bytes) {
@@ -434,7 +469,10 @@ async function assertNoHorizontalOverflow() {
 function observePage(target) {
   target.on('pageerror', (error) => pageErrors.push(error.message))
   target.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text())
+    if (message.type() === 'error') {
+      if (expectedModuleAbortConsoleError && moduleRequests.includes(message.location().url) && message.text() === 'Failed to load resource: net::ERR_FAILED') expectedConsoleErrors.push(message.text())
+      else consoleErrors.push(message.text())
+    }
     else if (message.type() === 'warning') consoleWarnings.push(message.text())
   })
   target.on('response', (response) => {
@@ -568,6 +606,21 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: edgePath, args: ['--disable-gpu'] })
   context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true })
   page = await context.newPage()
+  await page.route('**/*', async (route) => {
+    const request = route.request()
+    if (moduleGate.active && request.resourceType() === 'script' && /\/assets\/PixelSelectionTransformPanel-[^/]+\.js(?:\?|$)/u.test(request.url())) {
+      moduleRequests.push(request.url())
+      if (moduleGate.promise) {
+        moduleGate.pending += 1
+        try { await moduleGate.promise } finally { moduleGate.pending -= 1 }
+      }
+      if (moduleGate.outcome === 'abort') {
+        await route.abort().catch(() => undefined)
+        return
+      }
+    }
+    await route.continue()
+  })
   observePage(page)
   await page.goto(bridge.baseUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   await page.getByRole('heading', { name: '项目中心', exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
@@ -594,6 +647,92 @@ try {
   const selectionActions = page.locator('.aq-pixel-selection-actions')
   await selectionActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).waitFor({ state: 'visible' })
   assert.match((await selectionActions.textContent()) ?? '', /3×2/u)
+
+  const lazyLoadBeforeRevision = await uiRevision()
+  assert.equal(moduleRequests.length, 0, 'Selection transform chunk must not load before its entry is clicked')
+  armTransformModuleGate('abort')
+  await selectionActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).click()
+  const loadingTransformDialog = page.getByRole('dialog', { name: '正在载入选区变换', exact: true })
+  await loadingTransformDialog.waitFor({ state: 'visible', timeout: 10_000 })
+  await waitForTransformModulePending()
+  await loadingTransformDialog.getByRole('button', { name: '取消载入', exact: true }).click()
+  expectedModuleAbortConsoleError = true
+  await releaseTransformModuleGate('abort')
+  await loadingTransformDialog.waitFor({ state: 'hidden', timeout: 10_000 })
+  await delay(200)
+  expectedModuleAbortConsoleError = false
+  assert.equal(await uiRevision(), lazyLoadBeforeRevision, 'Canceled transform module load changed the document revision')
+  await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 20_000 })
+  const lazyAbortRequestCount = moduleRequests.length
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+  await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 20_000 })
+  await page.locator('.aq-pixel-toolbar').getByRole('button', { name: /选区/u }).click()
+  await dragSelection(2, 2, 4, 3)
+  const reloadedSelectionActions = page.locator('.aq-pixel-selection-actions')
+  await reloadedSelectionActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).waitFor({ state: 'visible' })
+  armTransformModuleGate('continue')
+  moduleGate.promise = null
+  moduleGate.release = null
+  const moduleRequestsBeforeRecovery = moduleRequests.length
+  const recoveredDialog = await openTransformDialog()
+  moduleGate.active = false
+  assert.ok(moduleRequests.length > moduleRequestsBeforeRecovery, 'Reload recovery did not request the transform module')
+  await recoveredDialog.getByRole('button', { name: '取消', exact: true }).click()
+  await recoveredDialog.waitFor({ state: 'hidden' })
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+  await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 20_000 })
+  await page.locator('.aq-pixel-toolbar').getByRole('button', { name: /选区/u }).click()
+  await dragSelection(2, 2, 4, 3)
+  const uncanceledSelectionActions = page.locator('.aq-pixel-selection-actions')
+  await uncanceledSelectionActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).waitFor({ state: 'visible' })
+  const uncanceledFailureRevision = await uiRevision()
+  const moduleRequestsBeforeFailure = moduleRequests.length
+  armTransformModuleGate('abort')
+  await uncanceledSelectionActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).click()
+  const failedLoadDialog = page.getByRole('dialog', { name: '正在载入选区变换', exact: true })
+  await failedLoadDialog.waitFor({ state: 'visible', timeout: 10_000 })
+  await waitForTransformModulePending()
+  expectedModuleAbortConsoleError = true
+  await releaseTransformModuleGate('abort')
+  await failedLoadDialog.waitFor({ state: 'hidden', timeout: 10_000 })
+  await waitForStatus(/选区变换未能载入，当前编辑保留；请先保存或导出，再重新载入应用/u)
+  await delay(200)
+  expectedModuleAbortConsoleError = false
+  assert.equal(await uiRevision(), uncanceledFailureRevision, 'Uncanceled module failure changed the document revision')
+  await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 20_000 })
+  assert.equal(await page.locator('.aq-pixel-toolbar').getByRole('button', { name: /铅笔/u }).isEnabled(), true)
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+  await page.getByLabel(/像素绘制区/u).waitFor({ state: 'visible', timeout: 20_000 })
+  await page.locator('.aq-pixel-toolbar').getByRole('button', { name: /选区/u }).click()
+  await dragSelection(2, 2, 4, 3)
+  const recoveredAfterFailureActions = page.locator('.aq-pixel-selection-actions')
+  await recoveredAfterFailureActions.getByRole('button', { name: '旋转与缩放选区', exact: true }).waitFor({ state: 'visible' })
+  armTransformModuleGate('continue')
+  moduleGate.promise = null
+  moduleGate.release = null
+  const moduleRequestsBeforeFailureRecovery = moduleRequests.length
+  const recoveredAfterFailureDialog = await openTransformDialog()
+  moduleGate.active = false
+  assert.ok(moduleRequests.length > moduleRequestsBeforeFailureRecovery, 'Reload after uncanceled module failure did not recover the transform module')
+  await recoveredAfterFailureDialog.getByRole('button', { name: '取消', exact: true }).click()
+  await recoveredAfterFailureDialog.waitFor({ state: 'hidden' })
+  report.phases.push({
+    name: 'lazy-selection-transform-load-cancel-abort-failure-reload-recovery',
+    status: 'passed',
+    beforeClickModuleRequests: 0,
+    firstAttempt: { requestCount: lazyAbortRequestCount, delayed: true, canceled: true, aborted: true, revisionUnchanged: true, workbenchUsable: true },
+    reloadRecovery: { requestedAfterReload: moduleRequests.length > moduleRequestsBeforeRecovery, recoveredDialogOpened: true, sameTabRetryClaimed: false },
+    uncanceledFailure: { requestCount: moduleRequests.length - moduleRequestsBeforeFailure, statusVisible: true, dialogClosed: true, revisionUnchanged: true, workbenchUsable: true },
+    failureReloadRecovery: { requestedAfterReload: moduleRequests.length > moduleRequestsBeforeFailureRecovery, recoveredDialogOpened: true },
+  })
+
+  await page.locator('.aq-pixel-toolbar').getByRole('button', { name: /选区/u }).click().catch(() => undefined)
+  await dragSelection(2, 2, 4, 3)
+  const selectionActionsAfterRecovery = page.locator('.aq-pixel-selection-actions')
+  await selectionActionsAfterRecovery.getByRole('button', { name: '旋转与缩放选区', exact: true }).waitFor({ state: 'visible' })
   const transformBeforeRevision = await uiRevision()
   const transformCandidates = []
   const firstDialog = await openTransformDialog()
@@ -989,6 +1128,7 @@ try {
   report.phases.push({ name: 'responsive-layout', status: 'passed', desktop: desktopOverflow, mobile: mobileOverflow })
   report.pageErrors = pageErrors
   report.consoleErrors = consoleErrors
+  report.expectedConsoleErrors = expectedConsoleErrors
   report.consoleWarnings = consoleWarnings.slice(-20)
   assert.deepEqual(pageErrors, [], `Browser page errors: ${pageErrors.join('; ')}`)
   assert.deepEqual(consoleErrors, [], `Browser console errors: ${consoleErrors.join('; ')}`)
@@ -999,6 +1139,7 @@ try {
   report.error = { name: error?.name ?? 'Error', message: error?.message ?? String(error), linkedStage }
   report.pageErrors = pageErrors
   report.consoleErrors = consoleErrors
+  report.expectedConsoleErrors = expectedConsoleErrors
   report.consoleWarnings = consoleWarnings.slice(-20)
   log(`FAIL ${report.error.name}: ${report.error.message}`)
   if (page) {
@@ -1007,6 +1148,7 @@ try {
 } finally {
   report.pageErrors = pageErrors
   report.consoleErrors = consoleErrors
+  report.expectedConsoleErrors = expectedConsoleErrors
   report.consoleWarnings = consoleWarnings.slice(-20)
   await browser?.close().catch(() => undefined)
   await bridge?.stop({ keepRuntime: false }).catch(() => undefined)

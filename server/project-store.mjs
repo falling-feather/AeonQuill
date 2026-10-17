@@ -1260,10 +1260,12 @@ export class ProjectStore {
     return manifest
   }
 
-  async exportProjectBundle(projectId) {
+  async exportProjectBundle(projectId, options = {}) {
     this.assertOpen()
-    const project = this.getProject(projectId)
+    const project = options.project ?? this.getProject(projectId)
     if (!project) fail('PROJECT_NOT_FOUND', 'Project was not found', 404)
+    if (project.id !== projectId || project.document.id !== projectId) fail('INVALID_PROJECT_DOCUMENT', 'Export snapshot identity does not match the project', 409)
+    assertCanvasDocument(project.document)
     const payload = {
       packageSchemaVersion: PACKAGE_SCHEMA_VERSION,
       exportedAt: Date.now(),
@@ -1277,8 +1279,23 @@ export class ProjectStore {
       },
       assets: [],
     }
-    for (const summary of project.assets) {
-      const asset = this.getAsset(summary.id)
+    const versions = new Map(project.assetVersions.map((version) => [version.id, version]))
+    for (const element of project.document.elements) {
+      if (element.assetVersionId && !versions.has(element.assetVersionId)) {
+        fail('ASSET_VERSION_NOT_FOUND', `Document asset version is missing: ${element.assetVersionId}`, 409)
+      }
+      const renderedSource = element.kind === 'video' ? element.videoSrc : element.src
+      const renderedAsset = /^\/api\/project-assets\/([a-f0-9]{64})$/u.exec(renderedSource ?? '')?.[1]
+      if (element.assetVersionId && renderedAsset && versions.get(element.assetVersionId).assetId !== renderedAsset) {
+        fail('ASSET_VERSION_MISMATCH', `Document asset version does not match its rendered content: ${element.assetVersionId}`, 409)
+      }
+    }
+    const referencedIds = collectAssetIds(project.document)
+    collectAssetIds(project.assetVersions, referencedIds)
+    for (const summary of project.assets) referencedIds.add(summary.id)
+    for (const assetId of referencedIds) {
+      const asset = this.getAsset(assetId)
+      if (!asset) fail('ASSET_NOT_FOUND', `Export asset is missing: ${assetId}`, 409)
       const bytes = await readFile(this.assetPath(asset))
       if (contentHash(bytes) !== asset.sha256) {
         fail('ASSET_HASH_MISMATCH', `Stored asset hash mismatch: ${asset.id}`, 409)
@@ -1388,6 +1405,11 @@ export class ProjectStore {
     const now = Date.now()
     if (existingProject) {
       imported.revision = Math.max(imported.revision, existingProject.revision + 1)
+      imported.updatedAt = Math.max(imported.createdAt, now)
+    }
+    if (options.minimumRevision !== undefined) {
+      if (!Number.isSafeInteger(options.minimumRevision) || options.minimumRevision < 0) fail('INVALID_PROJECT_DOCUMENT', 'Import revision floor must be a non-negative safe integer', 400)
+      imported.revision = Math.max(imported.revision, options.minimumRevision)
       imported.updatedAt = Math.max(imported.createdAt, now)
     }
     const availableAssetIds = new Set([
