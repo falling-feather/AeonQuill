@@ -5,7 +5,7 @@ export type PixelCommandType =
   | 'groups.add' | 'groups.remove' | 'groups.restore' | 'groups.patch'
   | 'layers.add' | 'layers.remove' | 'layers.restore' | 'layers.patch' | 'layers.reorder' | 'layers.select'
   | 'frames.add' | 'frames.remove' | 'frames.restore' | 'frames.patch' | 'frames.duration.set' | 'frames.reorder' | 'frames.select'
-  | 'cels.copy' | 'cels.restore'
+  | 'cels.copy' | 'cels.restore' | 'cels.link' | 'cels.unlink' | 'cels.restore-links'
   | 'animations.add' | 'animations.remove' | 'animations.restore' | 'animations.patch'
   | 'animation-events.add' | 'animation-events.remove' | 'animation-events.restore' | 'animation-events.patch'
   | 'terrain-maps.add' | 'terrain-maps.remove' | 'terrain-maps.restore' | 'terrain-maps.patch'
@@ -79,6 +79,14 @@ export type PixelFrame = {
   gameplay: PixelFrameGameplay
   cels: Record<string, Array<string | null>>
 }
+export type PixelCelLinkGroup = { id: string; layerId: string; frameIds: string[] }
+export type PixelCelLinkRestoreGroup = { index: number; link: PixelCelLinkGroup }
+export type PixelCelLinkRestoreEntry = { frameId: string; pixels: Array<string | null> }
+export type PixelCelLinkRestorePayload = {
+  layerId: string
+  entries: PixelCelLinkRestoreEntry[]
+  groups: PixelCelLinkRestoreGroup[]
+}
 export type PixelAnimationDirection = 'forward' | 'reverse' | 'ping-pong'
 export type PixelAnimationTag = {
   id: string
@@ -100,7 +108,7 @@ export type PixelAnimationEvent = {
 export type PixelOnionSkin = { enabled: boolean; previousFrames: number; nextFrames: number; opacity: number }
 export type PixelDocument = {
   kind: 'aeonquill.pixel-document'
-  schemaVersion: 8
+  schemaVersion: 9
   id: string
   name: string
   width: number
@@ -111,6 +119,7 @@ export type PixelDocument = {
   layerGroups: PixelLayerGroup[]
   layers: PixelLayer[]
   frames: PixelFrame[]
+  celLinks: PixelCelLinkGroup[]
   animationTags: PixelAnimationTag[]
   animationEvents: PixelAnimationEvent[]
   terrainMaps: PixelTerrainMap[]
@@ -134,7 +143,7 @@ export type SpriteSheetCell = {
 export type SpriteSheetFrame = SpriteSheetCell & { gameplay: PixelFrameGameplay }
 export type SpriteSheetLayout = { width: number; height: number; columns: number; rows: number; padding: number; spacing: number; cells: SpriteSheetCell[] }
 export type SpriteSheetMetadata = {
-  schemaVersion: 8
+  schemaVersion: 9
   kind: 'aeonquill.sprite-sheet'
   sourceDocumentId: string
   sourceRevision: number
@@ -154,7 +163,7 @@ export type SpriteSheetMetadata = {
   terrainMaps: PixelTerrainMap[]
 }
 export type PixelAnimationClipMetadata = {
-  schemaVersion: 8
+  schemaVersion: 9
   kind: 'aeonquill.pixel-animation-clip'
   sourceDocumentId: string
   sourceRevision: number
@@ -176,7 +185,7 @@ export type PixelAnimationClipMetadata = {
 
 export class PixelContractError extends Error { code: string; details?: unknown }
 export const PIXEL_DOCUMENT_KIND: 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION: 8
+export const PIXEL_DOCUMENT_SCHEMA_VERSION: 9
 export const PIXEL_COMMAND_SCHEMA_VERSION: 1
 export const PIXEL_PALETTE_CYCLE_DIRECTIONS: ReadonlyArray<PixelPaletteCycleDirection>
 export const PIXEL_ANIMATION_EVENT_TYPES: ReadonlyArray<PixelAnimationEventType>

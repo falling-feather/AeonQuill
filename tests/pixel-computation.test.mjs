@@ -68,6 +68,23 @@ test('document-json serializes the complete authoritative document with unchange
   assert.throws(() => runPixelComputation(request(document, 'document-json', { extra: true })))
 })
 
+test('frame and terrain projections keep linked-Cel relationships valid without dropping required pixels', () => {
+  const document = makeDocument()
+  document.frames[1].cels.ink = document.frames[0].cels.ink.slice()
+  document.celLinks = [{ id: 'linked-pair', layerId: 'ink', frameIds: ['frame-1', 'frame-2'] }]
+  for (const frame of document.frames) frame.gameplay.tileRule = { terrainId: 'grass', bitmask: 0 }
+  document.terrainMaps = [{ id: 'map', name: 'Map', width: 1, height: 1, cells: ['grass'], terrainLayer: { visible: true, locked: false }, objectLayers: [] }]
+  const single = createPixelComputationSnapshot(document, 'frame', { frameId: 'frame-1' })
+  assert.deepEqual(runPixelComputation(request(single, 'frame', { frameId: 'frame-1' })).result,
+    runPixelComputation(request(document, 'frame', { frameId: 'frame-1' })).result)
+  assert.deepEqual(single.celLinks, [])
+  const terrain = createPixelComputationSnapshot(document, 'terrain-map', { terrainMapId: 'map' })
+  assert.deepEqual(terrain.celLinks, document.celLinks)
+  assert.equal(terrain.frames[1].cels.ink, document.frames[1].cels.ink)
+  assert.deepEqual(runPixelComputation(request(terrain, 'terrain-map', { terrainMapId: 'map' })).result,
+    runPixelComputation(request(document, 'terrain-map', { terrainMapId: 'map' })).result)
+})
+
 function makeTerrainDocument() {
   const document = makeDocument()
   document.frames[0].gameplay.tileRule = { terrainId: 'grass', bitmask: 0 }

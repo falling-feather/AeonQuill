@@ -20,6 +20,7 @@ import {
   FolderOpen,
   Grid3X3,
   Layers,
+  Link2,
   Lock,
   Minus,
   Move,
@@ -473,6 +474,7 @@ export function PixelModeWorkbench({
   const [selection, setSelection] = useState<PixelRect | null>(null)
   const [selectionClipboard, setSelectionClipboard] = useState<PixelSelectionClipboard | null>(null)
   const [selectionPasteMode, setSelectionPasteMode] = useState<PixelSelectionPasteMode>('replace')
+  const [linkedTargetFrameId, setLinkedTargetFrameId] = useState('')
   const [dragDraft, setDragDraft] = useState<PixelDragContext | null>(null)
   const [activeColorId, setActiveColorId] = useState(() => history.document.palette[2]?.id ?? history.document.palette[0].id)
   const [status, setStatus] = useState('确定性编辑已就绪')
@@ -1608,6 +1610,10 @@ export function PixelModeWorkbench({
     ? null
     : document.layerGroups.find((group) => group.id === selectedLayer.groupId) ?? null
   const activeFrame = document.frames.find((frame) => frame.id === document.activeFrameId) ?? document.frames[0]
+  const activeCelLink = document.celLinks.find((link) => link.layerId === document.activeLayerId && link.frameIds.includes(document.activeFrameId))
+  const linkTarget = document.frames.some((frame) => frame.id === linkedTargetFrameId && frame.id !== document.activeFrameId)
+    ? linkedTargetFrameId : document.frames.find((frame) => frame.id !== document.activeFrameId)?.id ?? ''
+
   const activeTerrainMap = document.terrainMaps.find((terrainMap) => terrainMap.id === activeTerrainMapId)
     ?? document.terrainMaps[0]
     ?? null
@@ -3349,6 +3355,24 @@ export function PixelModeWorkbench({
                 ><Trash2 size={14} /></button>
               </div>
             </div>
+            <div className="aq-pixel-cel-links" aria-label="跨帧 Cel 关联">
+              <span>{activeCelLink ? `当前图层关联 ${activeCelLink.frameIds.length} 帧` : '当前图层 Cel 独立'}</span>
+              <select aria-label="Cel 关联目标帧" value={linkTarget} disabled={!linkTarget}
+                onChange={(event) => setLinkedTargetFrameId(event.target.value)}>
+                {!linkTarget ? <option value="">先添加另一帧</option> : null}
+                {document.frames.filter((frame) => frame.id !== document.activeFrameId).map((frame) => <option key={frame.id} value={frame.id}>{frame.name}</option>)}
+              </select>
+              <button type="button" aria-label="关联当前图层 Cel" disabled={!linkTarget || selectedLayer.locked || selectedLayerGroup?.locked}
+                onClick={() => {
+                  const current = historyRef.current.document
+                  if (apply('cels.link', { id: uniqueId('cel-link', current.celLinks.map(({ id }) => id), current.revision),
+                    layerId: current.activeLayerId, sourceFrameId: current.activeFrameId, frameIds: [current.activeFrameId, linkTarget] })) {
+                    setStatus('Cel 已关联 · 以当前帧内容覆盖目标，后续像素编辑联动 · 可撤销')
+                  }
+                }}><Link2 size={13} /> 关联</button>
+              <button type="button" aria-label="解除当前 Cel 关联" disabled={!activeCelLink || selectedLayer.locked || selectedLayerGroup?.locked}
+                onClick={() => { if (apply('cels.unlink', { frameId: document.activeFrameId, layerId: document.activeLayerId })) setStatus('当前 Cel 已独立 · 像素保持 · 可撤销') }}>解除</button>
+            </div>
             <div className="aq-pixel-frame-strip">
               {document.frames.map((frame, index) => (
                 <button
@@ -3363,7 +3387,7 @@ export function PixelModeWorkbench({
                 >
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <strong>{frame.name}</strong>
-                  <small>{frame.durationMs} ms</small>
+                  <small>{frame.durationMs} ms{document.celLinks.some((link) => link.layerId === document.activeLayerId && link.frameIds.includes(frame.id)) ? ' · 关联' : ''}</small>
                   {activeAnimationEvents.some((event) => event.frameId === frame.id) ? (
                     <em className="aq-pixel-frame-event-badge" title="动画事件数">
                       {activeAnimationEvents.filter((event) => event.frameId === frame.id).length}

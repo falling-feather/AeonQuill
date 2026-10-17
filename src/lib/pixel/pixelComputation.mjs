@@ -246,6 +246,17 @@ function withoutBudget(options) {
 }
 
 function projectDocumentWithBlankCels(document, dependencyFrameIds = new Set()) {
+  // A retained frame may share a Cel with another retained layer's frame. Close
+  // the dependency set over link groups so strict materialized links stay valid.
+  let previousSize = -1
+  while (previousSize !== dependencyFrameIds.size) {
+    previousSize = dependencyFrameIds.size
+    for (const link of document.celLinks) {
+      if (link.frameIds.some((frameId) => dependencyFrameIds.has(frameId))) {
+        for (const frameId of link.frameIds) dependencyFrameIds.add(frameId)
+      }
+    }
+  }
   const blankCel = Array.from({ length: document.width * document.height }, () => null)
   const frames = document.frames.map((frame) => {
     if (dependencyFrameIds.has(frame.id)) return frame
@@ -542,6 +553,7 @@ export function createPixelComputationSnapshot(documentInput, operationInput, op
   }
 
   const frameIds = operation === 'frame' ? [options.frameId] : options.frameIds
+  const selectedFrameIds = new Set(frameIds)
   const frames = frameIds.map((frameId) => {
     const sourceFrame = document.frames.find((frame) => frame.id === frameId)
     return { ...sourceFrame, cels: sourceFrame.cels }
@@ -552,6 +564,8 @@ export function createPixelComputationSnapshot(documentInput, operationInput, op
     animationTags: [],
     animationEvents: [],
     terrainMaps: [],
+    celLinks: document.celLinks.map((link) => ({ ...link, frameIds: link.frameIds.filter((id) => selectedFrameIds.has(id)) }))
+      .filter((link) => link.frameIds.length >= 2),
     activeFrameId: frameIds[0],
   }
 }

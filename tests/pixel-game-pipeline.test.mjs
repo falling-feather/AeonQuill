@@ -1,3 +1,4 @@
+import { PIXEL_DOCUMENT_SCHEMA_VERSION } from '../src/lib/pixel/pixelCore.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createPixelDocument, renderPixelFrameRgba } from '../src/lib/pixel/pixelCore.mjs'
@@ -115,7 +116,7 @@ test('builds a deterministic eight-direction game manifest with anchors and tile
   const document = createEightFrameDocument()
   const manifest = createPixelGameManifest(document, { columns: 4, mapWidth: 3, mapHeight: 3 })
   assert.equal(manifest.kind, 'aeonquill.pixel-game-bundle')
-  assert.equal(manifest.schemaVersion, 8)
+  assert.equal(manifest.schemaVersion, PIXEL_DOCUMENT_SCHEMA_VERSION)
   assert.deepEqual(manifest.animationEvents, document.animationEvents)
   assert.deepEqual(manifest.paletteCycles, document.paletteCycles)
   assert.deepEqual(manifest.layerGroups, document.layerGroups)
@@ -167,7 +168,7 @@ test('exports one active animation clip with a unique atlas and exact playback, 
   const bundle = createPixelAnimationClipExportBundle(document, 'turn', { columns: 2, padding: 1, spacing: 1 })
   assert.equal(bundle.sprite.filename, 'Hero-Eight-Way-Turn-clip.png')
   assert.equal(bundle.manifest.value.kind, 'aeonquill.pixel-animation-clip')
-  assert.equal(bundle.manifest.value.schemaVersion, 8)
+  assert.equal(bundle.manifest.value.schemaVersion, PIXEL_DOCUMENT_SCHEMA_VERSION)
   assert.deepEqual(bundle.manifest.value.frames.map((frame) => frame.frameId), [
     'direction-5', 'direction-6', 'direction-7', 'direction-8',
   ])

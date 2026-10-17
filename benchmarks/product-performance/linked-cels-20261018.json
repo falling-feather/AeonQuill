@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "kind": "aeonquill.qa.linked-cels",
+  "status": "passed",
+  "generatedAt": "2026-10-17T20:04:01.044Z",
+  "sourceCheckpoint": "dab3a67",
+  "sourceScope": "Working-tree linked-Cel integration; final clean release validation is separate.",
+  "schema": 9,
+  "browser": "Microsoft Edge via Playwright",
+  "linkedCel": {
+    "schemaVersion": 9,
+    "layerId": "layer-1",
+    "sourceFrameId": "frame-1",
+    "targetFrameId": "frame-2",
+    "linkedGroupId": "cel-link-16",
+    "jsonDownload": {
+      "filename": "pixel-round-two-manual.aeonpixel.json",
+      "bytes": 2460,
+      "sha256": "c38bc653abb2f73ff683956a7c0fb501ef8b83d0f4799f709e13f319706b1b79",
+      "celLinkCount": 1,
+      "frameIds": [
+        "frame-1",
+        "frame-2"
+      ]
+    },
+    "paint": {
+      "point": {
+        "x": 1,
+        "y": 0
+      },
+      "before": "color-2",
+      "linkedColorId": "color-1",
+      "independentColor": "color-2"
+    },
+    "revisions": {
+      "linked": 16,
+      "linkedPaint": 17,
+      "undo": 18,
+      "redo": 19,
+      "unlink": 20,
+      "independent": 21,
+      "lockRejectedAt": 23,
+      "final": 25
+    },
+    "lockButtonsDisabled": true,
+    "linkedReopenFrameHash": "1d124319a62ea363",
+    "finalReopenFrameHash": "377c81c7ffba1de2"
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "independentReview": {
+    "status": "no-evidenced-blocking-findings",
+    "targetedTests": [
+      43,
+      60
+    ]
+  },
+  "nativeApp": "Installed App remains V0.7.92."
+}

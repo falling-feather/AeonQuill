@@ -1,3 +1,4 @@
+import { PIXEL_DOCUMENT_SCHEMA_VERSION } from '../src/lib/pixel/pixelCore.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -67,15 +68,16 @@ function execute(document, type, payload, actor = 'user') {
   return applyPixelCommand(document, command)
 }
 
-test('schema v7 terrain maps migrate to v8 with an unlocked terrain layer and empty object layers', () => {
+test('schema v7 terrain maps migrate to the current schema with an unlocked terrain layer and empty object layers', () => {
   const source = makeDocument()
   source.schemaVersion = 7
+  delete source.celLinks
   for (const map of source.terrainMaps) {
     delete map.terrainLayer
     delete map.objectLayers
   }
   const migrated = migratePixelDocument(source)
-  assert.equal(migrated.schemaVersion, 8)
+  assert.equal(migrated.schemaVersion, PIXEL_DOCUMENT_SCHEMA_VERSION)
   assert.deepEqual(migrated.terrainMaps[0].terrainLayer, { visible: true, locked: false })
   assert.deepEqual(migrated.terrainMaps[0].objectLayers, [])
 })

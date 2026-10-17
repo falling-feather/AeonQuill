@@ -3153,3 +3153,8 @@
   font-size: 8px;
   cursor: pointer;
 }
+
+.aq-pixel-cel-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 14px; font-size: 11px; color: #626575; }
+.aq-pixel-cel-links select { min-width: 90px; max-width: 180px; }
+.aq-pixel-cel-links button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border: 1px solid #dfddea; border-radius: 6px; background: #f8f7ff; cursor: pointer; }
+.aq-pixel-cel-links button:disabled { opacity: .4; cursor: not-allowed; }

@@ -1,3 +1,4 @@
+import { PIXEL_DOCUMENT_SCHEMA_VERSION } from '../src/lib/pixel/pixelCore.mjs'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -385,6 +386,7 @@ test('same-revision pixel v7 retry compares normalized legacy SQLite content wit
     }, { now: 4_000 })
     const legacy = structuredClone(current)
     legacy.schemaVersion = 7
+    delete legacy.celLinks
     legacy.terrainMaps = legacy.terrainMaps.map(({ terrainLayer, objectLayers, ...terrainMap }) => terrainMap)
     const legacyBytes = JSON.stringify(legacy)
     store.database.prepare('UPDATE mode_documents SET value_json = ? WHERE document_id = ?').run(legacyBytes, 'document-pixel')
@@ -412,7 +414,7 @@ test('same-revision pixel v7 retry compares normalized legacy SQLite content wit
       baseRevision: 1, revision: 2, value: serializePixelDocument(next),
     }, { now: 6_000 })
     assert.equal(saved.revision, 2)
-    assert.equal(JSON.parse(saved.value).schemaVersion, 8)
+    assert.equal(JSON.parse(saved.value).schemaVersion, PIXEL_DOCUMENT_SCHEMA_VERSION)
     assert.equal(JSON.parse(saved.value).name, '实际改名')
   })
 })

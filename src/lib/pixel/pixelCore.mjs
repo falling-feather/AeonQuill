@@ -1,5 +1,5 @@
 export const PIXEL_DOCUMENT_KIND = 'aeonquill.pixel-document'
-export const PIXEL_DOCUMENT_SCHEMA_VERSION = 8
+export const PIXEL_DOCUMENT_SCHEMA_VERSION = 9
 export const PIXEL_COMMAND_SCHEMA_VERSION = 1
 
 export const PIXEL_LIMITS = Object.freeze({
@@ -40,6 +40,7 @@ const DOCUMENT_FIELDS = new Set([
   'layerGroups',
   'layers',
   'frames',
+  'celLinks',
   'animationTags',
   'animationEvents',
   'terrainMaps',
@@ -47,6 +48,7 @@ const DOCUMENT_FIELDS = new Set([
   'activeFrameId',
   'onionSkin',
 ])
+const LEGACY_DOCUMENT_FIELDS = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'celLinks'))
 const PALETTE_FIELDS = new Set(['id', 'name', 'color'])
 const PALETTE_CYCLE_FIELDS = new Set(['id', 'name', 'colorIds', 'stepDurationMs', 'direction', 'enabled'])
 const LAYER_GROUP_FIELDS = new Set(['id', 'name', 'visible', 'locked'])
@@ -67,6 +69,8 @@ const SCHEMA_SIX_TERRAIN_MAP_FIELDS = new Set(['id', 'name', 'terrainId', 'width
 const ANIMATION_TAG_FIELDS = new Set(['id', 'name', 'fromFrameId', 'toFrameId', 'direction', 'loop'])
 const ANIMATION_EVENT_FIELDS = new Set(['id', 'name', 'type', 'animationTagId', 'frameId', 'value'])
 const ONION_FIELDS = new Set(['enabled', 'previousFrames', 'nextFrames', 'opacity'])
+const CEL_LINK_FIELDS = new Set(['id', 'layerId', 'frameIds'])
+const CEL_LINK_RESTORE_GROUP_FIELDS = new Set(['index', 'link'])
 const COMMAND_FIELDS = new Set(['schemaVersion', 'id', 'actor', 'type', 'baseRevision', 'payload'])
 const ACTORS = new Set(['user', 'tool', 'agent', 'system'])
 const COMMAND_TYPES = new Set([
@@ -98,6 +102,9 @@ const COMMAND_TYPES = new Set([
   'frames.select',
   'cels.copy',
   'cels.restore',
+  'cels.link',
+  'cels.unlink',
+  'cels.restore-links',
   'animations.add',
   'animations.remove',
   'animations.restore',
@@ -130,6 +137,7 @@ const INTERNAL_COMMAND_TYPES = new Set([
   'layers.restore',
   'frames.restore',
   'cels.restore',
+  'cels.restore-links',
   'animations.restore',
   'animation-events.restore',
   'terrain-maps.restore',
@@ -651,6 +659,78 @@ function assertPixelArray(pixels, pixelCount, paletteIds, path) {
   }
 }
 
+function assertCelLinkShape(input, path, layerIds, frameById) {
+  const link = assertRecord(input, path)
+  assertKnownFields(link, CEL_LINK_FIELDS, path)
+  assertId(link.id, `${path}.id`)
+  assertId(link.layerId, `${path}.layerId`)
+  if (!layerIds.has(link.layerId)) {
+    fail('UNKNOWN_LAYER', `${path}.layerId references an unknown layer`, { layerId: link.layerId })
+  }
+  const frameIds = assertUniqueStringList(link.frameIds, `${path}.frameIds`, {
+    min: 2,
+    max: frameById.size,
+  })
+  for (const frameId of frameIds) {
+    if (!frameById.has(frameId)) {
+      fail('UNKNOWN_FRAME', `${path}.frameIds references an unknown frame`, { frameId })
+    }
+  }
+  return link
+}
+
+function assertCelLinkGroup(input, path, layerIds, frameById, pixelCount) {
+  const link = assertCelLinkShape(input, path, layerIds, frameById)
+  const firstFrameId = link.frameIds[0]
+  const firstPixels = frameById.get(firstFrameId).cels[link.layerId]
+  for (const frameId of link.frameIds.slice(1)) {
+    const pixels = frameById.get(frameId).cels[link.layerId]
+    for (let index = 0; index < pixelCount; index += 1) {
+      if (pixels[index] !== firstPixels[index]) {
+        fail('CEL_LINK_MISMATCH', `${path} requires equal materialized pixels`, {
+          path,
+          frameId,
+          sourceFrameId: firstFrameId,
+          index,
+        })
+      }
+    }
+  }
+  return link
+}
+
+function assertCelLinks(input, path, layers, frames, pixelCount) {
+  if (!Array.isArray(input)) fail('INVALID_CEL_LINKS', `${path} must be an array`, { path })
+  const maxCelLinkGroups = Math.floor((frames.length * layers.length) / 2)
+  if (input.length > maxCelLinkGroups) {
+    fail('INVALID_CEL_LINKS', `${path} must contain at most ${maxCelLinkGroups} groups`, {
+      path,
+      limit: maxCelLinkGroups,
+    })
+  }
+  const layerIds = new Set(layers.map((layer) => layer.id))
+  const frameById = new Map(frames.map((frame) => [frame.id, frame]))
+  const pairOwners = new Map()
+  input.forEach((linkInput, index) => {
+    const linkPath = `${path}[${index}]`
+    const link = assertCelLinkGroup(linkInput, linkPath, layerIds, frameById, pixelCount)
+    for (const frameId of link.frameIds) {
+      const pairKey = JSON.stringify([link.layerId, frameId])
+      const owner = pairOwners.get(pairKey)
+      if (owner !== undefined) {
+        fail('CEL_LINK_CONFLICT', `${linkPath} reuses frame ${frameId} in layer ${link.layerId}`, {
+          layerId: link.layerId,
+          frameId,
+          owner,
+        })
+      }
+      pairOwners.set(pairKey, link.id)
+    }
+  })
+  assertUniqueIds(input, path)
+  return input
+}
+
 export function assertPixelDocument(input) {
   const document = assertRecord(input, 'document')
   assertKnownFields(document, DOCUMENT_FIELDS, 'document')
@@ -728,6 +808,7 @@ export function assertPixelDocument(input) {
   if (!frameIds.has(document.activeFrameId)) {
     fail('UNKNOWN_FRAME', 'document.activeFrameId must reference an existing frame', { frameId: document.activeFrameId })
   }
+  assertCelLinks(document.celLinks, 'document.celLinks', document.layers, document.frames, pixelCount)
   if (!Array.isArray(document.animationTags) || document.animationTags.length > PIXEL_LIMITS.maxAnimationTags) {
     fail('INVALID_ANIMATION_TAGS', `document.animationTags must contain 0-${PIXEL_LIMITS.maxAnimationTags} tags`)
   }
@@ -777,7 +858,7 @@ export function createPixelDocument(input = {}) {
   const options = assertRecord(input, 'input')
   assertKnownFields(options, new Set([
     'id', 'name', 'width', 'height', 'revision', 'palette', 'paletteCycles', 'layerGroups', 'layers', 'frames',
-    'animationTags', 'animationEvents', 'terrainMaps', 'activeLayerId', 'activeFrameId', 'onionSkin',
+    'celLinks', 'animationTags', 'animationEvents', 'terrainMaps', 'activeLayerId', 'activeFrameId', 'onionSkin',
   ]), 'input')
   const width = options.width ?? 16
   const height = options.height ?? 16
@@ -788,6 +869,7 @@ export function createPixelDocument(input = {}) {
   if (options.layerGroups !== undefined && !Array.isArray(options.layerGroups)) fail('INVALID_LAYER_GROUPS', 'input.layerGroups must be an array')
   if (options.layers !== undefined && !Array.isArray(options.layers)) fail('INVALID_LAYERS', 'input.layers must be an array')
   if (options.frames !== undefined && !Array.isArray(options.frames)) fail('INVALID_FRAMES', 'input.frames must be an array')
+  if (options.celLinks !== undefined && !Array.isArray(options.celLinks)) fail('INVALID_CEL_LINKS', 'input.celLinks must be an array')
   if (options.animationTags !== undefined && !Array.isArray(options.animationTags)) fail('INVALID_ANIMATION_TAGS', 'input.animationTags must be an array')
   if (options.animationEvents !== undefined && !Array.isArray(options.animationEvents)) fail('INVALID_ANIMATION_EVENTS', 'input.animationEvents must be an array')
   if (options.terrainMaps !== undefined && !Array.isArray(options.terrainMaps)) fail('INVALID_TERRAIN_MAPS', 'input.terrainMaps must be an array')
@@ -832,6 +914,7 @@ export function createPixelDocument(input = {}) {
     layerGroups,
     layers,
     frames,
+    celLinks: options.celLinks ?? [],
     animationTags: options.animationTags ?? [],
     animationEvents: options.animationEvents ?? [],
     terrainMaps,
@@ -907,9 +990,20 @@ export function migratePixelDocument(input) {
     assertPixelDocument(input)
     return clonePixelDocumentValue(input)
   }
+  if (isRecord(input) && input.schemaVersion === 8) {
+    const legacy = assertRecord(input, 'schemaEightDocument')
+    assertKnownFields(legacy, LEGACY_DOCUMENT_FIELDS, 'schemaEightDocument')
+    const migrated = {
+      ...cloneJson(legacy),
+      schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
+    }
+    assertPixelDocument(migrated)
+    return migrated
+  }
   if (isRecord(input) && input.schemaVersion === 7) {
     const legacy = assertRecord(input, 'schemaSevenDocument')
-    assertKnownFields(legacy, DOCUMENT_FIELDS, 'schemaSevenDocument')
+    assertKnownFields(legacy, LEGACY_DOCUMENT_FIELDS, 'schemaSevenDocument')
     if (!Array.isArray(legacy.terrainMaps) || legacy.terrainMaps.length > PIXEL_LIMITS.maxTerrainMaps) {
       fail('INVALID_TERRAIN_MAPS', `schemaSevenDocument.terrainMaps must contain 0-${PIXEL_LIMITS.maxTerrainMaps} maps`)
     }
@@ -920,6 +1014,7 @@ export function migratePixelDocument(input) {
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       terrainMaps: legacyMaps.map((terrainMap) => ({
         ...terrainMap,
         terrainLayer: { visible: true, locked: false },
@@ -931,7 +1026,7 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 6) {
     const legacy = assertRecord(input, 'schemaSixDocument')
-    assertKnownFields(legacy, DOCUMENT_FIELDS, 'schemaSixDocument')
+    assertKnownFields(legacy, LEGACY_DOCUMENT_FIELDS, 'schemaSixDocument')
     if (!Array.isArray(legacy.terrainMaps) || legacy.terrainMaps.length > PIXEL_LIMITS.maxTerrainMaps) {
       fail('INVALID_TERRAIN_MAPS', `schemaSixDocument.terrainMaps must contain 0-${PIXEL_LIMITS.maxTerrainMaps} maps`)
     }
@@ -942,6 +1037,7 @@ export function migratePixelDocument(input) {
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       terrainMaps: legacyMaps.map((terrainMap) => ({
         id: terrainMap.id,
         name: terrainMap.name,
@@ -957,11 +1053,12 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 5) {
     const legacy = assertRecord(input, 'schemaFiveDocument')
-    const schemaFiveFields = new Set([...DOCUMENT_FIELDS].filter((field) => field !== 'terrainMaps'))
+    const schemaFiveFields = new Set([...LEGACY_DOCUMENT_FIELDS].filter((field) => field !== 'terrainMaps'))
     assertKnownFields(legacy, schemaFiveFields, 'schemaFiveDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       terrainMaps: [],
     }
     assertPixelDocument(migrated)
@@ -969,11 +1066,12 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 4) {
     const legacy = assertRecord(input, 'schemaFourDocument')
-    const schemaFourFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
+    const schemaFourFields = new Set([...LEGACY_DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaFourFields, 'schemaFourDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       paletteCycles: [],
       animationEvents: [],
       terrainMaps: [],
@@ -983,11 +1081,12 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 3) {
     const legacy = assertRecord(input, 'schemaThreeDocument')
-    const schemaThreeFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
+    const schemaThreeFields = new Set([...LEGACY_DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaThreeFields, 'schemaThreeDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       paletteCycles: [],
       frames: legacy.frames.map((frame) => ({
         ...frame,
@@ -1001,11 +1100,12 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 2) {
     const legacy = assertRecord(input, 'schemaTwoDocument')
-    const schemaTwoFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'layerGroups', 'animationEvents', 'terrainMaps']).has(field)))
+    const schemaTwoFields = new Set([...LEGACY_DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'layerGroups', 'animationEvents', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaTwoFields, 'schemaTwoDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       paletteCycles: [],
       layerGroups: [],
       layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
@@ -1021,11 +1121,12 @@ export function migratePixelDocument(input) {
   }
   if (isRecord(input) && input.schemaVersion === 1) {
     const legacy = assertRecord(input, 'schemaOneDocument')
-    const schemaOneFields = new Set([...DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationTags', 'animationEvents', 'layerGroups', 'terrainMaps']).has(field)))
+    const schemaOneFields = new Set([...LEGACY_DOCUMENT_FIELDS].filter((field) => !new Set(['paletteCycles', 'animationTags', 'animationEvents', 'layerGroups', 'terrainMaps']).has(field)))
     assertKnownFields(legacy, schemaOneFields, 'schemaOneDocument')
     const migrated = {
       ...cloneJson(legacy),
       schemaVersion: PIXEL_DOCUMENT_SCHEMA_VERSION,
+      celLinks: [],
       paletteCycles: [],
       layerGroups: [],
       layers: legacy.layers.map((layer) => ({ ...layer, groupId: null, blendMode: 'normal' })),
@@ -1040,7 +1141,7 @@ export function migratePixelDocument(input) {
     assertPixelDocument(migrated)
     return migrated
   }
-  if (isRecord(input) && input.schemaVersion !== undefined && ![0, 1, 2, 3, 4, 5, 6, 7, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(input.schemaVersion)) {
+  if (isRecord(input) && input.schemaVersion !== undefined && ![0, 1, 2, 3, 4, 5, 6, 7, 8, PIXEL_DOCUMENT_SCHEMA_VERSION].includes(input.schemaVersion)) {
     fail('UNSUPPORTED_SCHEMA', `Unsupported pixel document schema ${String(input.schemaVersion)}`)
   }
   return migrateLegacyDocument(input)
@@ -1168,6 +1269,69 @@ function assertWritableLayer(document, layer) {
   }
 }
 
+function findCelLink(document, layerId, frameId) {
+  return document.celLinks.find((link) => link.layerId === layerId && link.frameIds.includes(frameId)) ?? null
+}
+
+function linkedFrameIds(document, layerId, frameId) {
+  const link = findCelLink(document, layerId, frameId)
+  return link ? [...link.frameIds] : [frameId]
+}
+
+function captureLayerCelLinkGroups(document, layerId) {
+  return document.celLinks
+    .map((link, index) => ({ index, link: cloneJson(link) }))
+    .filter((entry) => entry.link.layerId === layerId)
+}
+
+function restoreLayerCelLinkGroups(currentLinks, layerId, entries) {
+  const others = currentLinks.filter((link) => link.layerId !== layerId).map((link) => cloneJson(link))
+  const desired = entries
+    .map((entry) => ({ index: entry.index, link: cloneJson(entry.link) }))
+    .sort((left, right) => left.index - right.index)
+  const maxIndex = Math.max(currentLinks.length, ...desired.map((entry) => entry.index + 1), 0)
+  const result = []
+  let otherIndex = 0
+  let desiredIndex = 0
+  for (let index = 0; index < maxIndex; index += 1) {
+    if (desiredIndex < desired.length && desired[desiredIndex].index === index) {
+      result.push(desired[desiredIndex].link)
+      desiredIndex += 1
+    } else if (otherIndex < others.length) {
+      result.push(others[otherIndex])
+      otherIndex += 1
+    }
+  }
+  while (desiredIndex < desired.length) result.push(desired[desiredIndex++].link)
+  while (otherIndex < others.length) result.push(others[otherIndex++])
+  return result
+}
+
+function replaceLayerCelLinkGroups(document, layerId, entries) {
+  document.celLinks = restoreLayerCelLinkGroups(document.celLinks, layerId, entries)
+}
+
+function celEntriesForFrames(document, layerId, frameIds) {
+  return frameIds.map((frameId) => {
+    const frame = document.frames.find((item) => item.id === frameId)
+    return { frameId, pixels: cloneJson(frame.cels[layerId]) }
+  })
+}
+
+function assertBulkCellCount(cellCount, message = 'Cel operation exceeds the bulk cell limit') {
+  if (cellCount > PIXEL_LIMITS.maxBulkCellsPerCommand) {
+    fail('BULK_COMMAND_TOO_LARGE', `${message}: ${cellCount} cells`, {
+      cellCount,
+      limit: PIXEL_LIMITS.maxBulkCellsPerCommand,
+    })
+  }
+}
+
+function assertPixelFanOutLimit(document, payload) {
+  const fanOut = linkedFrameIds(document, payload.layerId, payload.frameId).length
+  assertBulkCellCount(payload.pixels.length * fanOut, 'Linked pixel operation exceeds the bulk cell limit')
+}
+
 function assertPointList(points, path, document, mode) {
   if (!Array.isArray(points) || points.length < 1 || points.length > PIXEL_LIMITS.maxPixelsPerCommand) {
     fail('INVALID_PIXELS', `${path} must contain 1-${PIXEL_LIMITS.maxPixelsPerCommand} unique pixels`)
@@ -1220,6 +1384,7 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       const { layer } = assertTarget(payload, document)
       assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, { withColor: true })
+      assertPixelFanOutLimit(document, payload)
       break
     }
     case 'pixels.erase': {
@@ -1227,6 +1392,7 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       const { layer } = assertTarget(payload, document)
       assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, {})
+      assertPixelFanOutLimit(document, payload)
       break
     }
     case 'pixels.patch': {
@@ -1234,12 +1400,14 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       const { layer } = assertTarget(payload, document)
       assertWritableLayer(document, layer)
       assertPointList(payload.pixels, 'command.payload.pixels', document, { withValue: true })
+      assertPixelFanOutLimit(document, payload)
       break
     }
     case 'pixels.restore': {
       assertKnownFields(payload, new Set(['frameId', 'layerId', 'pixels']), 'command.payload')
       assertTarget(payload, document)
       assertPointList(payload.pixels, 'command.payload.pixels', document, { withValue: true })
+      assertPixelFanOutLimit(document, payload)
       break
     }
     case 'palette.replace': {
@@ -1337,7 +1505,7 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       if (document.layers.length === 1) fail('LAST_LAYER', 'The last layer cannot be removed')
       break
     case 'layers.restore': {
-      assertKnownFields(payload, new Set(['layer', 'index', 'cels', 'activeLayerId']), 'command.payload')
+      assertKnownFields(payload, new Set(['layer', 'index', 'cels', 'activeLayerId', 'celLinks']), 'command.payload')
       assertLayer(payload.layer, 'command.payload.layer', new Set(document.layerGroups.map((group) => group.id)))
       if (document.layers.some((layer) => layer.id === payload.layer.id)) fail('DUPLICATE_ID', `Layer ${payload.layer.id} already exists`)
       assertIndex(payload.index, 'command.payload.index', document.layers.length)
@@ -1350,6 +1518,19 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       assertId(payload.activeLayerId, 'command.payload.activeLayerId')
       if (payload.activeLayerId !== payload.layer.id && !document.layers.some((layer) => layer.id === payload.activeLayerId)) {
         fail('UNKNOWN_LAYER', `Unknown restored active layer ${payload.activeLayerId}`)
+      }
+      if (payload.celLinks !== undefined) {
+        if (!Array.isArray(payload.celLinks)) fail('INVALID_CEL_LINKS', 'command.payload.celLinks must be an array')
+        assertPixelDocument({
+          ...document,
+          layers: [...document.layers, payload.layer],
+          frames: document.frames.map((frame) => ({
+            ...frame,
+            cels: { ...frame.cels, [payload.layer.id]: cels[frame.id] },
+          })),
+          activeLayerId: payload.activeLayerId,
+          celLinks: cloneJson(payload.celLinks),
+        })
       }
       break
     }
@@ -1410,12 +1591,17 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       }
       break
     case 'frames.restore': {
-      assertKnownFields(payload, new Set(['frame', 'index', 'activeFrameId']), 'command.payload')
+      assertKnownFields(payload, new Set(['frame', 'index', 'activeFrameId', 'celLinks']), 'command.payload')
       const frame = assertRecord(payload.frame, 'command.payload.frame')
       assertKnownFields(frame, FRAME_FIELDS, 'command.payload.frame')
       if (document.frames.some((item) => item.id === frame.id)) fail('DUPLICATE_ID', `Frame ${frame.id} already exists`)
       assertIndex(payload.index, 'command.payload.index', document.frames.length)
-      const temporary = { ...document, frames: [...document.frames, frame], activeFrameId: frame.id }
+      const temporary = {
+        ...document,
+        frames: [...document.frames, frame],
+        activeFrameId: frame.id,
+        ...(payload.celLinks === undefined ? {} : { celLinks: cloneJson(payload.celLinks) }),
+      }
       assertPixelDocument(temporary)
       assertId(payload.activeFrameId, 'command.payload.activeFrameId')
       if (payload.activeFrameId !== frame.id && !document.frames.some((item) => item.id === payload.activeFrameId)) {
@@ -1500,10 +1686,15 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
         assertWritableLayer(document, layer)
       }
       if (!new Set(['replace', 'non-transparent']).has(payload.mode)) fail('INVALID_COPY_MODE', `Unsupported cel copy mode ${String(payload.mode)}`)
-      const cellCount = targetFrameIds.size * layerIds.size * document.width * document.height
-      if (cellCount > PIXEL_LIMITS.maxBulkCellsPerCommand) {
-        fail('BULK_COMMAND_TOO_LARGE', `Cel copy would touch ${cellCount} cells`, { cellCount, limit: PIXEL_LIMITS.maxBulkCellsPerCommand })
+      const affectedPairs = new Set()
+      for (const layerId of layerIds) {
+        for (const frameId of targetFrameIds) {
+          for (const affectedFrameId of linkedFrameIds(document, layerId, frameId)) {
+            affectedPairs.add(JSON.stringify([layerId, affectedFrameId]))
+          }
+        }
       }
+      assertBulkCellCount(affectedPairs.size * document.width * document.height, 'Cel copy would touch too many cells')
       break
     }
     case 'cels.restore': {
@@ -1534,6 +1725,106 @@ function assertPixelCommandInternal(input, documentInput, skipDocumentValidation
       if (cellCount > PIXEL_LIMITS.maxBulkCellsPerCommand) {
         fail('BULK_COMMAND_TOO_LARGE', `Cel restore would touch ${cellCount} cells`, { cellCount, limit: PIXEL_LIMITS.maxBulkCellsPerCommand })
       }
+      break
+    }
+    case 'cels.link': {
+      assertKnownFields(payload, new Set(['id', 'layerId', 'sourceFrameId', 'frameIds']), 'command.payload')
+      assertId(payload.id, 'command.payload.id')
+      assertId(payload.layerId, 'command.payload.layerId')
+      assertId(payload.sourceFrameId, 'command.payload.sourceFrameId')
+      const layer = document.layers.find((item) => item.id === payload.layerId)
+      if (!layer) fail('UNKNOWN_LAYER', `Unknown layer ${payload.layerId}`)
+      assertWritableLayer(document, layer)
+      const frameById = new Map(document.frames.map((frame) => [frame.id, frame]))
+      const frameIds = assertUniqueStringList(payload.frameIds, 'command.payload.frameIds', {
+        min: 2,
+        max: document.frames.length,
+      })
+      for (const frameId of frameIds) {
+        if (!frameById.has(frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${frameId}`)
+      }
+      if (!frameIds.has(payload.sourceFrameId)) {
+        fail('INVALID_SOURCE_FRAME', 'Source frame must be included in frameIds', { sourceFrameId: payload.sourceFrameId })
+      }
+      const touched = document.celLinks.filter((link) => (
+        link.layerId === payload.layerId && link.frameIds.some((frameId) => frameIds.has(frameId))
+      ))
+      const existingId = document.celLinks.find((link) => link.id === payload.id)
+      if (existingId && !touched.includes(existingId)) {
+        fail('DUPLICATE_ID', `Cel link ${payload.id} already exists`)
+      }
+      const memberIds = new Set(payload.frameIds)
+      for (const link of touched) for (const frameId of link.frameIds) memberIds.add(frameId)
+      assertBulkCellCount(memberIds.size * document.width * document.height, 'Cel link would touch too many cells')
+      break
+    }
+    case 'cels.unlink': {
+      assertKnownFields(payload, new Set(['frameId', 'layerId']), 'command.payload')
+      assertId(payload.frameId, 'command.payload.frameId')
+      assertId(payload.layerId, 'command.payload.layerId')
+      const layer = document.layers.find((item) => item.id === payload.layerId)
+      if (!layer) fail('UNKNOWN_LAYER', `Unknown layer ${payload.layerId}`)
+      if (!document.frames.some((frame) => frame.id === payload.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${payload.frameId}`)
+      assertWritableLayer(document, layer)
+      if (!findCelLink(document, payload.layerId, payload.frameId)) {
+        fail('CEL_NOT_LINKED', `Frame ${payload.frameId} is not linked in layer ${payload.layerId}`)
+      }
+      break
+    }
+    case 'cels.restore-links': {
+      assertKnownFields(payload, new Set(['layerId', 'entries', 'groups']), 'command.payload')
+      assertId(payload.layerId, 'command.payload.layerId')
+      if (!document.layers.some((layer) => layer.id === payload.layerId)) fail('UNKNOWN_LAYER', `Unknown layer ${payload.layerId}`)
+      if (!Array.isArray(payload.entries) || payload.entries.length > document.frames.length) {
+        fail('INVALID_CEL_LINK_RESTORE', 'command.payload.entries must be a bounded frame list')
+      }
+      const frameById = new Map(document.frames.map((frame) => [frame.id, frame]))
+      const paletteIds = new Set(document.palette.map((color) => color.id))
+      const entryFrameIds = new Set()
+      let cellCount = 0
+      payload.entries.forEach((entryInput, index) => {
+        const entryPath = `command.payload.entries[${index}]`
+        const entry = assertRecord(entryInput, entryPath)
+        assertKnownFields(entry, new Set(['frameId', 'pixels']), entryPath)
+        assertId(entry.frameId, `${entryPath}.frameId`)
+        if (entryFrameIds.has(entry.frameId)) fail('DUPLICATE_ID', `command.payload.entries contains duplicate frame ${entry.frameId}`)
+        entryFrameIds.add(entry.frameId)
+        if (!frameById.has(entry.frameId)) fail('UNKNOWN_FRAME', `Unknown frame ${entry.frameId}`)
+        assertPixelArray(entry.pixels, document.width * document.height, paletteIds, `${entryPath}.pixels`)
+        cellCount += document.width * document.height
+      })
+      assertBulkCellCount(cellCount, 'Cel link restore would touch too many cells')
+      const maxCelLinkGroups = Math.floor((document.frames.length * document.layers.length) / 2)
+      if (!Array.isArray(payload.groups) || payload.groups.length > maxCelLinkGroups) {
+        fail('INVALID_CEL_LINK_RESTORE', 'command.payload.groups must be a bounded link list')
+      }
+      const currentOtherLinks = document.celLinks.filter((link) => link.layerId !== payload.layerId)
+      const layerIds = new Set(document.layers.map((layer) => layer.id))
+      const frameByIdForShape = new Map([...frameById.entries()])
+      const groupIds = new Set()
+      const groupIndexes = new Set()
+      const pairKeys = new Set()
+      for (const link of currentOtherLinks) {
+        for (const frameId of link.frameIds) pairKeys.add(JSON.stringify([link.layerId, frameId]))
+      }
+      payload.groups.forEach((entryInput, index) => {
+        const entryPath = `command.payload.groups[${index}]`
+        const entry = assertRecord(entryInput, entryPath)
+        assertKnownFields(entry, CEL_LINK_RESTORE_GROUP_FIELDS, entryPath)
+        assertInteger(entry.index, `${entryPath}.index`, { min: 0, max: maxCelLinkGroups })
+        if (groupIndexes.has(entry.index)) fail('DUPLICATE_INDEX', `command.payload.groups contains duplicate index ${entry.index}`)
+        groupIndexes.add(entry.index)
+        const link = assertCelLinkShape(entry.link, `${entryPath}.link`, layerIds, frameByIdForShape)
+        if (link.layerId !== payload.layerId) fail('INVALID_CEL_LINK_RESTORE', `${entryPath}.link.layerId must match payload.layerId`)
+        if (groupIds.has(link.id)) fail('DUPLICATE_ID', `command.payload.groups contains duplicate link ${link.id}`)
+        if (currentOtherLinks.some((candidate) => candidate.id === link.id)) fail('DUPLICATE_ID', `command.payload.groups reuses link ${link.id}`)
+        groupIds.add(link.id)
+        for (const frameId of link.frameIds) {
+          const pairKey = JSON.stringify([link.layerId, frameId])
+          if (pairKeys.has(pairKey)) fail('CEL_LINK_CONFLICT', `${entryPath}.link reuses frame ${frameId}`)
+          pairKeys.add(pairKey)
+        }
+      })
       break
     }
     case 'animations.add':
@@ -1838,19 +2129,23 @@ export function applyPixelCommand(documentInput, commandInput) {
     case 'pixels.erase':
     case 'pixels.patch':
     case 'pixels.restore': {
-      const frame = next.frames.find((item) => item.id === payload.frameId)
-      const cel = frame.cels[payload.layerId]
+      const sourceFrame = next.frames.find((item) => item.id === payload.frameId)
+      const sourceCel = sourceFrame.cels[payload.layerId]
       const previous = payload.pixels.map((point) => ({
         x: point.x,
         y: point.y,
-        value: cel[pixelIndex(next, point.x, point.y)],
+        value: sourceCel[pixelIndex(next, point.x, point.y)],
       }))
-      for (const point of payload.pixels) {
-        cel[pixelIndex(next, point.x, point.y)] = command.type === 'pixels.paint'
-          ? point.colorId
-          : command.type === 'pixels.erase'
-            ? null
-            : point.value
+      for (const frameId of linkedFrameIds(next, payload.layerId, payload.frameId)) {
+        const frame = next.frames.find((item) => item.id === frameId)
+        const cel = frame.cels[payload.layerId]
+        for (const point of payload.pixels) {
+          cel[pixelIndex(next, point.x, point.y)] = command.type === 'pixels.paint'
+            ? point.colorId
+            : command.type === 'pixels.erase'
+              ? null
+              : point.value
+        }
       }
       inverseType = 'pixels.restore'
       inversePayload = { frameId: payload.frameId, layerId: payload.layerId, pixels: previous }
@@ -1935,6 +2230,8 @@ export function applyPixelCommand(documentInput, commandInput) {
     case 'layers.remove': {
       const index = next.layers.findIndex((layer) => layer.id === payload.layerId)
       const [layer] = next.layers.splice(index, 1)
+      const celLinks = cloneJson(next.celLinks)
+      next.celLinks = next.celLinks.filter((link) => link.layerId !== payload.layerId)
       const cels = {}
       for (const frame of next.frames) {
         cels[frame.id] = frame.cels[payload.layerId]
@@ -1945,13 +2242,14 @@ export function applyPixelCommand(documentInput, commandInput) {
         next.activeLayerId = next.layers[Math.min(index, next.layers.length - 1)].id
       }
       inverseType = 'layers.restore'
-      inversePayload = { layer, index, cels, activeLayerId: previousActiveLayerId }
+      inversePayload = { layer, index, cels, activeLayerId: previousActiveLayerId, celLinks }
       break
     }
     case 'layers.restore': {
       next.layers.splice(payload.index, 0, cloneJson(payload.layer))
       for (const frame of next.frames) frame.cels[payload.layer.id] = cloneJson(payload.cels[frame.id])
       next.activeLayerId = payload.activeLayerId
+      if (payload.celLinks !== undefined) next.celLinks = cloneJson(payload.celLinks)
       inverseType = 'layers.remove'
       inversePayload = { layerId: payload.layer.id }
       break
@@ -1996,17 +2294,23 @@ export function applyPixelCommand(documentInput, commandInput) {
     }
     case 'frames.remove': {
       const index = next.frames.findIndex((frame) => frame.id === payload.frameId)
+      const celLinks = cloneJson(next.celLinks)
       const [frame] = next.frames.splice(index, 1)
+      next.celLinks = next.celLinks.map((link) => {
+        if (!link.frameIds.includes(payload.frameId)) return link
+        return { ...link, frameIds: link.frameIds.filter((frameId) => frameId !== payload.frameId) }
+      }).filter((link) => link.frameIds.length >= 2)
       const previousActiveFrameId = next.activeFrameId
       if (next.activeFrameId === payload.frameId) {
         next.activeFrameId = next.frames[Math.min(index, next.frames.length - 1)].id
       }
       inverseType = 'frames.restore'
-      inversePayload = { frame, index, activeFrameId: previousActiveFrameId }
+      inversePayload = { frame, index, activeFrameId: previousActiveFrameId, celLinks }
       break
     }
     case 'frames.restore':
       next.frames.splice(payload.index, 0, cloneJson(payload.frame))
+      if (payload.celLinks !== undefined) next.celLinks = cloneJson(payload.celLinks)
       next.activeFrameId = payload.activeFrameId
       inverseType = 'frames.remove'
       inversePayload = { frameId: payload.frame.id }
@@ -2045,17 +2349,35 @@ export function applyPixelCommand(documentInput, commandInput) {
       break
     case 'cels.copy': {
       const source = next.frames.find((frame) => frame.id === payload.sourceFrameId)
-      const previous = payload.targetFrameIds.map((frameId) => {
-        const target = next.frames.find((frame) => frame.id === frameId)
+      const affectedByLayer = new Map()
+      for (const layerId of payload.layerIds) {
+        const affected = []
+        const seen = new Set()
+        for (const frameId of payload.targetFrameIds) {
+          for (const affectedFrameId of linkedFrameIds(next, layerId, frameId)) {
+            if (seen.has(affectedFrameId)) continue
+            seen.add(affectedFrameId)
+            affected.push(affectedFrameId)
+          }
+        }
+        affectedByLayer.set(layerId, affected)
+      }
+      const previous = []
+      for (const frame of next.frames) {
         const cels = {}
         for (const layerId of payload.layerIds) {
-          cels[layerId] = cloneJson(target.cels[layerId])
+          if (affectedByLayer.get(layerId).includes(frame.id)) cels[layerId] = cloneJson(frame.cels[layerId])
+        }
+        if (Object.keys(cels).length > 0) previous.push({ frameId: frame.id, cels })
+      }
+      for (const [layerId, affectedFrameIds] of affectedByLayer) {
+        for (const frameId of affectedFrameIds) {
+          const target = next.frames.find((frame) => frame.id === frameId)
           target.cels[layerId] = payload.mode === 'replace'
             ? cloneJson(source.cels[layerId])
             : source.cels[layerId].map((colorId, index) => colorId === null ? target.cels[layerId][index] : colorId)
         }
-        return { frameId, cels }
-      })
+      }
       inverseType = 'cels.restore'
       inversePayload = { frames: previous }
       break
@@ -2072,6 +2394,63 @@ export function applyPixelCommand(documentInput, commandInput) {
       })
       inverseType = 'cels.restore'
       inversePayload = { frames: previous }
+      break
+    }
+    case 'cels.link': {
+      const previousGroups = captureLayerCelLinkGroups(next, payload.layerId)
+      const touched = next.celLinks.filter((link) => (
+        link.layerId === payload.layerId && link.frameIds.some((frameId) => payload.frameIds.includes(frameId))
+      ))
+      const memberIds = [...payload.frameIds]
+      for (const link of touched) {
+        for (const frameId of link.frameIds) if (!memberIds.includes(frameId)) memberIds.push(frameId)
+      }
+      const previousEntries = celEntriesForFrames(next, payload.layerId, memberIds)
+      const source = next.frames.find((frame) => frame.id === payload.sourceFrameId)
+      for (const frameId of memberIds) {
+        const frame = next.frames.find((item) => item.id === frameId)
+        frame.cels[payload.layerId] = cloneJson(source.cels[payload.layerId])
+      }
+      const touchedIndexes = touched.map((link) => next.celLinks.indexOf(link))
+      const insertIndex = touchedIndexes.length > 0 ? Math.min(...touchedIndexes) : next.celLinks.length
+      const touchedIds = new Set(touched.map((link) => link.id))
+      const remaining = captureLayerCelLinkGroups(next, payload.layerId)
+        .filter((entry) => !touchedIds.has(entry.link.id))
+      remaining.push({
+        index: insertIndex,
+        link: {
+          id: payload.id,
+          layerId: payload.layerId,
+          frameIds: memberIds,
+        },
+      })
+      replaceLayerCelLinkGroups(next, payload.layerId, remaining)
+      inverseType = 'cels.restore-links'
+      inversePayload = { layerId: payload.layerId, entries: previousEntries, groups: previousGroups }
+      break
+    }
+    case 'cels.unlink': {
+      const previousGroups = captureLayerCelLinkGroups(next, payload.layerId)
+      const link = findCelLink(next, payload.layerId, payload.frameId)
+      next.celLinks = next.celLinks.flatMap((candidate) => {
+        if (candidate !== link) return [candidate]
+        const frameIds = candidate.frameIds.filter((frameId) => frameId !== payload.frameId)
+        return frameIds.length >= 2 ? [{ ...candidate, frameIds }] : []
+      })
+      inverseType = 'cels.restore-links'
+      inversePayload = { layerId: payload.layerId, entries: [], groups: previousGroups }
+      break
+    }
+    case 'cels.restore-links': {
+      const previousGroups = captureLayerCelLinkGroups(next, payload.layerId)
+      const previousEntries = celEntriesForFrames(next, payload.layerId, payload.entries.map((entry) => entry.frameId))
+      replaceLayerCelLinkGroups(next, payload.layerId, payload.groups)
+      for (const entry of payload.entries) {
+        const frame = next.frames.find((item) => item.id === entry.frameId)
+        frame.cels[payload.layerId] = cloneJson(entry.pixels)
+      }
+      inverseType = 'cels.restore-links'
+      inversePayload = { layerId: payload.layerId, entries: previousEntries, groups: previousGroups }
       break
     }
     case 'animations.add':

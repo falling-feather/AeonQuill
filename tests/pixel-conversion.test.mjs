@@ -45,7 +45,7 @@ test('fixed RGBA conversion is deterministic and matches the checked contract ha
   const second = convertRgbaToPixelDocument(fixedRgba, options)
   assert.deepEqual(first, second)
   const digest = createHash('sha256').update(serializePixelDocument(first.document)).digest('hex')
-  assert.equal(digest, '9c6643bbe74f8d19ded2df3ed53df9553b3038f92432856e6a7fe6bb2b6e0cde')
+  assert.equal(digest, '25ed0b2b5c6ae50ecc761676350b3d8f89aba301ec4631b84cbbd1467dbfe8a9')
   assert.deepEqual(first.report, {
     sourceWidth: 4,
     sourceHeight: 4,
@@ -417,6 +417,13 @@ test('project JSON round-trip is semantically exact and schema v0 migrates expli
   assert.equal(serialized.includes('base64'), false)
   assert.equal(serialized.includes('data:'), false)
 
+  const schemaEight = JSON.parse(serializePixelDocument(converted))
+  schemaEight.schemaVersion = 8
+  delete schemaEight.celLinks
+  const migratedSchemaEight = deserializePixelProject(JSON.stringify(schemaEight))
+  assert.equal(migratedSchemaEight.schemaVersion, 9)
+  assert.deepEqual(migratedSchemaEight.celLinks, [])
+
   const migrated = deserializePixelProject(JSON.stringify({
     schemaVersion: 0,
     id: 'legacy-fixture',
@@ -427,7 +434,7 @@ test('project JSON round-trip is semantically exact and schema v0 migrates expli
     pixels: [1, 2],
     frameDurationMs: 90,
   }))
-  assert.equal(migrated.schemaVersion, 8)
+  assert.equal(migrated.schemaVersion, 9)
   assert.deepEqual(migrated.frames[0].cels['layer-1'], ['color-1', 'color-2'])
   assert.deepEqual(migrated.frames[0].gameplay, { anchor: { x: 1, y: 1 }, collisions: [], tileRule: null })
 })
