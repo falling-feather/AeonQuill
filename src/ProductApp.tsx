@@ -1,3 +1,4 @@
+import { getCanvasDraft } from './lib/canvasDraft.mjs'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Library, Workflow } from 'lucide-react'
 import { SurfaceState } from './components/Home/SurfaceState'
@@ -1430,6 +1431,7 @@ export default function ProductApp() {
         return
       }
       setProjectProbe({ projectId, status: 'ready', project })
+      if (project.recoveredDraft) setModeNotice({ tone: 'error', message: '已恢复尚未保存的均衡草稿；内容仍在当前页面会话，请重试保存或导出。' })
       updatePreferences({ balancedProjectId: project.id })
     } catch (error) {
       if (projectRequestRef.current !== requestId) return
@@ -1984,13 +1986,14 @@ export default function ProductApp() {
   }, [modeNotice])
 
   useEffect(() => {
-    if (route.modeId === 'home' || announcedRecoveryRef.current === currentRouteKey) return
+    if (route.modeId === 'home') { announcedRecoveryRef.current = ''; return }
+    if (announcedRecoveryRef.current === currentRouteKey) return
     let message: string | undefined
     if (
       route.modeId === 'balanced' &&
       projectProbe.status === 'ready' &&
       projectProbe.project?.id === (route.projectId ?? preferences.balancedProjectId)
-    ) message = `已从本机项目恢复“${projectProbe.project.title}”。`
+    ) message = (projectProbe.project.recoveredDraft || (getCanvasDraft(projectProbe.project.id)?.revision ?? -1) > projectProbe.project.revision) ? `已恢复未保存草稿“${projectProbe.project.title}”，请重试保存。` : `已从本机项目恢复“${projectProbe.project.title}”。`
     if (
       route.modeId === 'pixel' &&
       pixelDraft.status === 'ready' &&

@@ -5,6 +5,12 @@ import type {
   CreativePlanReceipt,
 } from './agent/creativePlan.mjs'
 import type { ProjectCatalog } from './project'
+import {
+  discardCanvasDraftIfCurrent,
+  enqueueCanvasProjectMutation,
+  getCanvasDraft,
+  queueCanvasDocumentSave,
+} from './canvasDraft.mjs'
 import { ensureLocalSession } from './videoApi'
 
 export class ProjectApiError extends Error {
@@ -71,6 +77,7 @@ export type StoredProject = {
     provenance: Record<string, unknown>
     createdAt: number
   }>
+  recoveredDraft?: boolean
 }
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
@@ -447,21 +454,42 @@ export async function importWorkspaceProjectPackage(
   return (payload as { result: ProjectPackageImportResult }).result
 }
 
-export async function saveLocalProject(document: CanvasDocument) {
-  const payload = await api<{ project: StoredProject }>('/api/projects/current', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ document }),
+export function saveLocalProject(document: CanvasDocument) {
+  return queueCanvasDocumentSave(document, async (draft) => {
+    const payload = await api<{ project: StoredProject }>('/api/projects/current', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ document: draft }),
+    })
+    observeCanvasAssetVersions(payload.project.id, payload.project.assetVersions)
+    return payload.project
   })
-  observeCanvasAssetVersions(payload.project.id, payload.project.assetVersions)
-  return payload.project
+}
+
+function recoveredDraftProject(document: CanvasDocument): StoredProject {
+  return {
+    id: document.id,
+    title: document.title,
+    schemaVersion: document.schemaVersion,
+    revision: document.revision,
+    document,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    assets: [],
+    assetVersions: [],
+    recoveredDraft: true,
+  }
 }
 
 export async function loadLocalProject(projectId = 'local-project') {
+  const draftAtStart = getCanvasDraft(projectId)
+  if (draftAtStart) return recoveredDraftProject(draftAtStart)
   const payload = await api<{ project: StoredProject | null }>(
-    `/api/projects/current?id=${encodeURIComponent(projectId)}`,
+    '/api/projects/current?id=' + encodeURIComponent(projectId),
   )
   if (payload.project) observeCanvasAssetVersions(payload.project.id, payload.project.assetVersions)
+  const currentDraft = getCanvasDraft(projectId)
+  if (currentDraft) return recoveredDraftProject(currentDraft)
   return payload.project
 }
 
@@ -482,20 +510,24 @@ export async function downloadLocalProjectPackage(projectId = 'local-project') {
   return response.blob()
 }
 
-export async function importLocalProjectPackage(file: Blob, projectId = 'local-project') {
-  await ensureLocalSession()
-  const response = await fetch(
-    `/api/projects/import?projectId=${encodeURIComponent(projectId)}`,
-    {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/vnd.miaohui.project' },
-      body: file,
-    },
-  )
-  const payload = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(payload?.error?.message || `项目包导入返回 HTTP ${response.status}`)
-  const project = (payload as { project: StoredProject }).project
-  observeCanvasAssetVersions(project.id, project.assetVersions)
-  return project
+export function importLocalProjectPackage(file: Blob, projectId = 'local-project') {
+  const draftBeforeImport = getCanvasDraft(projectId)
+  return enqueueCanvasProjectMutation(projectId, async () => {
+    await ensureLocalSession()
+    const response = await fetch(
+      '/api/projects/import?projectId=' + encodeURIComponent(projectId),
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/vnd.miaohui.project' },
+        body: file,
+      },
+    )
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(payload?.error?.message || '项目包导入返回 HTTP ' + response.status)
+    const project = (payload as { project: StoredProject }).project
+    observeCanvasAssetVersions(project.id, project.assetVersions)
+    discardCanvasDraftIfCurrent(projectId, draftBeforeImport)
+    return project
+  })
 }

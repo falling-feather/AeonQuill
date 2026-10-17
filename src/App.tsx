@@ -8,6 +8,7 @@ import { editableImageProcessingSteps, effectRecipeFromSteps, reorderImageProces
   validateImageEffectRecipe, type ImageEffectRecipe } from './lib/imageEffects.mjs'
 import { IMAGE_EFFECT_MAX_CACHED_CHARACTERS, IMAGE_EFFECT_MAX_DOCUMENT_BYTES } from './lib/imageEffects.mjs'
 import { preflightImageEffectBatch, replayImageProcessingStack } from './lib/imageEffectReplay'
+import { getCanvasDraft, rememberCanvasDraft } from './lib/canvasDraft.mjs'
 import { canvasLogicalAssetId, reserveCanvasAssetVersion } from './lib/canvasAssets.mjs'
 import { AgentPlanComposer } from './components/AgentPlanComposer'
 import { AgentPlanReviewDialog } from './components/AgentPlanReviewDialog'
@@ -106,6 +107,8 @@ function loadProject(input: {
   storageKey: string
   initialDocument?: CanvasDocument
 }): CanvasDocument {
+  const retainedDraft = getCanvasDraft(input.projectId)
+  if (retainedDraft) return assertCanvasDocument(cloneCanvasDocument(retainedDraft))
   if (input.initialDocument) return assertCanvasDocument(cloneCanvasDocument(input.initialDocument))
   const compatibleKeys = input.projectId === 'local-project'
     ? [input.storageKey, APP_STORAGE_KEY, ...LEGACY_APP_STORAGE_KEYS]
@@ -324,7 +327,8 @@ function App({
   const [streamConnected, setStreamConnected] = useState(false)
   const [videoSubmitting, setVideoSubmitting] = useState(false)
   const [videoSubmitError, setVideoSubmitError] = useState<string | null>(null)
-  const [saveStatus, setSaveStatus] = useState<'saving' | 'saved'>('saved')
+  const [saveStatus, setSaveStatus] = useState<'saving' | 'saved' | 'local' | 'failed'>('saved')
+  const [saveAttempt, setSaveAttempt] = useState(0)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [connectionSourceId, setConnectionSourceId] = useState<string | null>(null)
@@ -484,42 +488,35 @@ function App({
   }, [toast])
 
   useEffect(() => {
-    if (persistenceReadyRef.current && canvasDocument.revision === lastPersistedRevisionRef.current) return
+    if (persistenceReadyRef.current && canvasDocument.revision === lastPersistedRevisionRef.current && !getCanvasDraft(canvasDocument.id)) return
     persistenceReadyRef.current = true
+    rememberCanvasDraft(canvasDocument)
     setSaveStatus('saving')
     let disposed = false
     const timeout = window.setTimeout(() => {
       void (async () => {
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(canvasDocument))
-          lastPersistedRevisionRef.current = canvasDocument.revision
-        } catch {
-          if (!disposed) showToast('图片较大，本地自动保存空间不足')
-        }
+        let browserSaved = false
+        let serverSaved = false
+        try { localStorage.setItem(storageKey, JSON.stringify(canvasDocument)); browserSaved = true }
+        catch { if (!disposed) showToast('浏览器空间不足；未保存内容仍保留在当前页面会话') }
         try {
           const stored = await saveLocalProject(canvasDocument)
-          if (
-            !disposed &&
-            documentRef.current.revision === canvasDocument.revision &&
-            JSON.stringify(stored.document) !== JSON.stringify(documentRef.current)
-          ) {
-            localStorage.setItem(storageKey, JSON.stringify(stored.document))
-            lastPersistedRevisionRef.current = stored.document.revision
+          serverSaved = true
+          lastPersistedRevisionRef.current = stored.document.revision
+          onDocumentChange?.(stored.document)
+          if (!disposed && documentRef.current === canvasDocument && JSON.stringify(stored.document) !== JSON.stringify(canvasDocument)) {
+            try { localStorage.setItem(storageKey, JSON.stringify(stored.document)) } catch { /* SQLite is already authoritative. */ }
             replaceDocument(assertCanvasDocument(stored.document))
           }
-        } catch {
-          // localStorage remains the offline fallback when the local bridge is unavailable.
+        } catch (reason) {
+          if (!disposed) showToast(`${reason instanceof Error ? reason.message : '本机保存失败'} · 草稿保留，可重试保存`)
         } finally {
-          if (!disposed && documentRef.current.revision === canvasDocument.revision) setSaveStatus('saved')
+          if (!disposed && documentRef.current.revision === canvasDocument.revision) setSaveStatus(serverSaved ? 'saved' : browserSaved ? 'local' : 'failed')
         }
       })()
-      onDocumentChange?.(canvasDocument)
     }, 260)
-    return () => {
-      disposed = true
-      window.clearTimeout(timeout)
-    }
-  }, [canvasDocument, onDocumentChange, replaceDocument, showToast, storageKey])
+    return () => { disposed = true; window.clearTimeout(timeout) }
+  }, [canvasDocument, onDocumentChange, replaceDocument, saveAttempt, showToast, storageKey])
 
   useEffect(() => {
     setSelectedIds((current) => {
@@ -861,12 +858,21 @@ function App({
 
   const importProject = useCallback(async (file: File) => {
     try {
+      const before = documentRef.current
       const stored = await importLocalProjectPackage(file, documentRef.current.id)
+      if (documentRef.current.revision !== before.revision) {
+        const current = documentRef.current
+        const retained = assertCanvasDocument({ ...current, revision: Math.max(current.revision, stored.revision) + 1, updatedAt: Math.max(Date.now(), current.updatedAt) })
+        rememberCanvasDraft(retained)
+        replaceDocument(retained)
+        showToast('导入期间出现了新编辑，已保留较新草稿；需要替换时请重新导入')
+        return
+      }
       const restored = assertCanvasDocument(stored.document)
       pastRef.current = []
       futureRef.current = []
       syncHistoryCounts()
-      localStorage.setItem(storageKey, JSON.stringify(restored))
+      try { localStorage.setItem(storageKey, JSON.stringify(restored)) } catch { /* The imported SQLite document is already durable. */ }
       lastPersistedRevisionRef.current = restored.revision
       persistenceReadyRef.current = true
       replaceDocument(restored)
@@ -972,7 +978,7 @@ function App({
         try {
           const stored = await loadLocalProject(documentRef.current.id)
           if (disposed) return
-          if (stored && stored.revision >= documentRef.current.revision) {
+          if (stored && !stored.recoveredDraft && !getCanvasDraft(documentRef.current.id) && stored.revision >= documentRef.current.revision) {
             const restored = assertCanvasDocument(stored.document)
             pastRef.current = []
             futureRef.current = []
@@ -1744,6 +1750,7 @@ function App({
         onReset={resetProject}
         onToggleInspector={() => setInspectorOpen((open) => !open)}
         saveStatus={saveStatus}
+        onRetrySave={() => setSaveAttempt((value) => value + 1)}
       />
 
       <main className="workspace-shell">

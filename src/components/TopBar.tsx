@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Download,
@@ -26,7 +27,8 @@ type TopBarProps = {
   onImport: () => void
   onReset: () => void
   onToggleInspector: () => void
-  saveStatus: 'saving' | 'saved'
+  saveStatus: 'saving' | 'saved' | 'local' | 'failed'
+  onRetrySave: () => void
 }
 
 export function TopBar({
@@ -42,6 +44,7 @@ export function TopBar({
   onReset,
   onToggleInspector,
   saveStatus,
+  onRetrySave,
 }: TopBarProps) {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -120,11 +123,14 @@ export function TopBar({
         <span className={`save-status is-${saveStatus}`} role="status">
           {saveStatus === 'saving' ? (
             <LoaderCircle size={13} />
-          ) : (
+          ) : saveStatus === 'saved' ? (
             <CheckCircle2 size={13} />
+          ) : (
+            <AlertTriangle size={13} />
           )}
-          {saveStatus === 'saving' ? '正在保存' : '已保存'}
+          {saveStatus === 'saving' ? '正在保存' : saveStatus === 'saved' ? '已保存' : saveStatus === 'local' ? '仅浏览器草稿' : '保存失败 · 草稿保留'}
         </span>
+        {saveStatus === 'failed' || saveStatus === 'local' ? <button type="button" onClick={onRetrySave}>重试保存</button> : null}
       </div>
 
       <div className="history-actions" aria-label="历史操作">

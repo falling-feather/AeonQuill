@@ -2048,6 +2048,7 @@ textarea:focus-visible,
 .aq-canvas-connection-details { padding: 18px; display: grid; gap: 12px; }
 .aq-canvas-connection-details p { overflow-wrap: anywhere; font-size: 12px; }
 .aq-effects-hint { font-size: 11px; line-height: 1.6; color: #747780; }
+.save-status.is-failed, .save-status.is-local { color: #a43b45; }
 .aq-effect-row { display: grid; gap: 6px; padding: 9px 0; border-bottom: 1px solid #ececf2; }
 .aq-effect-title { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
 .aq-effect-title span { display: grid; gap: 3px; min-width: 0; }

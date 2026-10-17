@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "immediateLeaveMs": 169,
+  "failedPutCount": 2,
+  "checks": [
+    "initial project and real canvas element created",
+    "edit followed by immediate leave/reopen retained the session draft",
+    "switching to another project and returning retained the original draft",
+    "localStorage quota plus PUT 503 showed 保存失败 · 草稿保留",
+    "retry saved the retained draft to SQLite",
+    "SQLite failure with working localStorage showed 仅浏览器草稿",
+    "successful retry and reload restored the SQLite document",
+    "import delayed behind a concurrent edit and preserved the newer revision",
+    "1440/390 layouts had no horizontal overflow"
+  ],
+  "issues": [],
+  "artifacts": [
+    ".runtime/qa/canvas-draft-ui-desktop.png",
+    ".runtime/qa/canvas-draft-ui-mobile.png"
+  ],
+  "noGpu": true,
+  "task": "QA-007 balanced canvas save",
+  "sourceScope": "V0.7.107 working-tree engineering validation; installed candidate separately witnessed",
+  "unit": {
+    "targeted": 10,
+    "passed": 10
+  },
+  "boundary": "Page-session memory draft is not durable storage. No GPU/model quality claim."
+}
