@@ -72,7 +72,16 @@
     "files": 300,
     "logicalBytes": 5100986816,
     "allocatedBytes": 5101244416,
-    "scope": "old isolated pixel performance fixtures only; formal user data, models, source and video outputs preserved"
+    "scope": "old isolated pixel performance fixtures only; formal user data, models, source and video outputs preserved",
+    "portableStaging": {
+      "files": 179,
+      "logicalBytes": 160593574,
+      "allocatedBytes": 160670720,
+      "archiveRetained": true
+    },
+    "totalFiles": 479,
+    "totalLogicalBytes": 5261580390,
+    "totalAllocatedBytes": 5261915136
   },
   "limitations": {
     "native12SecondsVerified": false,
@@ -81,6 +90,43 @@
     "signingPreparation": "Modification command blocked by executor policy. Original script preserved; existing clean candidate used for unsigned portable delivery."
   },
   "remote": {
-    "status": "pending"
+    "status": "published",
+    "releaseId": 422756785,
+    "tag": "v0.7.1-preview.122",
+    "url": "https://github.com/falling-feather/AeonQuill/releases/tag/v0.7.1-preview.122",
+    "publishedAt": "2026-10-24T13:47:19Z",
+    "sourceCommitVerified": true,
+    "preparedMainCommit": "5613c266afa378bb9d512aea6e1ca9c90b8225e4",
+    "assets": [
+      {
+        "digest": "sha256:ff88b6a8fc5ab9df79b9a0f2d98b87df00b24713bc42ab66113ca0dd8ca1c37e",
+        "name": "AEONQUILL-0.7.1-V0.7.122-Windows-x64-portable-test.zip",
+        "size": 31127961,
+        "state": "uploaded",
+        "url": "https://github.com/falling-feather/AeonQuill/releases/download/v0.7.1-preview.122/AEONQUILL-0.7.1-V0.7.122-Windows-x64-portable-test.zip"
+      },
+      {
+        "digest": "sha256:031a9500743cbdc9cf677d4c44bd1edbc2ce014ed0fb17dbc3d1d45dadac5049",
+        "name": "INSTALL.zh-CN.md",
+        "size": 1450,
+        "state": "uploaded",
+        "url": "https://github.com/falling-feather/AeonQuill/releases/download/v0.7.1-preview.122/INSTALL.zh-CN.md"
+      },
+      {
+        "digest": "sha256:cd15477bdb114daeaeab730a8aa625dede555d98bf4ad8f905d36430e0546e4f",
+        "name": "SHA256SUMS.txt",
+        "size": 121,
+        "state": "uploaded",
+        "url": "https://github.com/falling-feather/AeonQuill/releases/download/v0.7.1-preview.122/SHA256SUMS.txt"
+      }
+    ],
+    "allRemoteAssetDigestsMatch": true,
+    "publicDownload": {
+      "checkedAt": "2026-10-24T13:49:44.901Z",
+      "httpStatus": 206,
+      "zipHeaderVerified": true,
+      "authenticated": false,
+      "probeBytes": 4
+    }
   }
 }

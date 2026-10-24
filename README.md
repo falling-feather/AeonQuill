@@ -16,7 +16,7 @@
 
 ## Windows 便携测试包
 
-当前软件功能轨为 **V0.7.122 / 产品版0.7.1**。本轮准备在[GitHub Releases](https://github.com/falling-feather/AeonQuill/releases)提供便携测试构建、SHA-256校验和及使用说明；它不等同于签名安装器或完整Beta验收。模型、Python/ComfyUI和用户数据不进入软件包。准确能力和使用入口见[开发者文档](doc/01-开发者文档.md)。
+当前软件功能轨为 **V0.7.122 / 产品版0.7.1**。已在[GitHub Release（V0.7.122）](https://github.com/falling-feather/AeonQuill/releases/tag/v0.7.1-preview.122)提供便携测试构建、SHA-256校验和及使用说明；它不等同于签名安装器或完整Beta验收。模型、Python/ComfyUI和用户数据不进入软件包。准确能力和使用入口见[开发者文档](doc/01-开发者文档.md)。
 
 4060上已完成5秒及8秒原生1344×768视频；12秒尚无成片。训练因缺有意义的主题与数据暂缓，不能把实验入口或夹具通过视为真实质量验收。
 
