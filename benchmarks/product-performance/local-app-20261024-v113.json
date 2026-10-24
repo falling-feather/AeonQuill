@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-desktop-h3-native-verification",
+  "generatedAt": "2026-10-24T03:55:27.631229+00:00",
+  "status": "passed",
+  "productVersion": "0.7.1",
+  "functionalTrack": "V0.7.113",
+  "sourceCommit": "aebb802fe1a3bf71f5bc5640dda81a119606099d",
+  "sourceWasCleanAtBuild": true,
+  "installation": "D:/AEONQUILL/App",
+  "artifacts": [
+    {
+      "name": "aeonquill-desktop.exe",
+      "bytes": 13224960,
+      "beforeSha256": "ba00a9d3369854ee6781f97c99602df591f42ec3c0bc38df30c13f0c9bdf1a1a",
+      "sha256": "59d0e3d7d808f11a0fd37466d0ddc86bc826c5de60c68de4948d48e64238db75"
+    },
+    {
+      "name": "aeonquill-bridge.exe",
+      "bytes": 61170214,
+      "beforeSha256": "b6426ee72a585b068f6e4981085200bfee0ad9874a9bd36dd6aae80c158e978e",
+      "sha256": "b77c7b0f2aac694f772436bfcf8a40f9ed1fab41681bf80d38d92c51452026fe"
+    }
+  ],
+  "validation": {
+    "unit": {
+      "tests": 582,
+      "pass": 581,
+      "fail": 0,
+      "skipped": 1,
+      "skipReason": "Windows symbolic-link permission"
+    },
+    "baseline": {
+      "status": "passed",
+      "checks": 174,
+      "node": "v24.20.0",
+      "generatedAt": "2026-10-24T03:20:09.344Z"
+    },
+    "p7": {
+      "status": "passed",
+      "phases": 6,
+      "generatedAt": "2026-10-24T03:21:30.112Z"
+    },
+    "sidecar": {
+      "status": "passed",
+      "readyMs": 516,
+      "systemOnlyPath": true,
+      "exitCode": 0,
+      "portClosed": true,
+      "identity": {
+        "version": "aeonquill-build-identity-v1",
+        "productVersion": "0.7.1",
+        "functionalTrack": "V0.7.113",
+        "sourceCommit": "aebb802fe1a3bf71f5bc5640dda81a119606099d",
+        "sourceCommitShort": "aebb802f",
+        "sourceState": "commit",
+        "runtimePackageId": null,
+        "runtimeRegistryVersion": "aeonquill-runtime-registry-v1",
+        "identityHash": "e361a362ad4f9712059605b13a79377aa87163b9b8e3521061a9f15142c28808"
+      }
+    },
+    "nativeRelease": {
+      "status": "passed",
+      "timeline": {
+        "tauriReadyMs": 23,
+        "bridgeSpawnedMs": 89,
+        "bridgeReadyMs": 619,
+        "windowLoadedMs": 2150,
+        "rendererProbedMs": 2240,
+        "windowCloseRequestedMs": 2841,
+        "shutdownFinishedMs": 3188
+      },
+      "rendererProbe": {
+        "tauriGlobalType": "undefined",
+        "processType": "undefined",
+        "requireType": "undefined",
+        "documentReadyState": "complete"
+      },
+      "shutdown": {
+        "requested": true,
+        "exited": true,
+        "exitCode": 0,
+        "forced": false,
+        "portClosed": true
+      }
+    },
+    "nativeInstalled": {
+      "status": "passed",
+      "timeline": {
+        "tauriReadyMs": 23,
+        "bridgeSpawnedMs": 58,
+        "bridgeReadyMs": 588,
+        "windowLoadedMs": 1747,
+        "rendererProbedMs": 1836,
+        "windowCloseRequestedMs": 2437,
+        "shutdownFinishedMs": 2728
+      },
+      "rendererProbe": {
+        "tauriGlobalType": "undefined",
+        "processType": "undefined",
+        "requireType": "undefined",
+        "documentReadyState": "complete"
+      },
+      "shutdown": {
+        "requested": true,
+        "exited": true,
+        "exitCode": 0,
+        "forced": false,
+        "portClosed": true
+      }
+    },
+    "singleInstance": {
+      "status": "passed",
+      "launchAttempts": 4,
+      "desktopProcesses": 1,
+      "bridgeProcesses": 1,
+      "secondaryExitCodes": [
+        0,
+        0,
+        0
+      ]
+    },
+    "packagedPresetUi": {
+      "status": "passed",
+      "kind": "fixture-read-only",
+      "scope": "UI and capability gates only; no media or training generation",
+      "generatedAt": "2026-10-24T03:20:55.055Z",
+      "checks": [
+        "balanced VideoStudio selects native Base20 with matching native/delivery dimensions and 5s-only duration",
+        "removing only memory-node availability blocks generation and gives an actionable dependency message",
+        "smart-video execution exposes the same native Base20 preset and dimensional contract"
+      ],
+      "jobRequests": 0,
+      "blockedMutations": [],
+      "issues": [],
+      "error": null
+    },
+    "installedPresetUiWithActualRuntime": {
+      "status": "passed",
+      "kind": "live-read-only",
+      "scope": "UI and capability gates only; no media or training generation",
+      "generatedAt": "2026-10-24T03:50:55.638Z",
+      "checks": [
+        "balanced VideoStudio selects native Base20 with matching native/delivery dimensions and 5s-only duration",
+        "removing only memory-node availability blocks generation and gives an actionable dependency message",
+        "smart-video execution exposes the same native Base20 preset and dimensional contract"
+      ],
+      "jobRequests": 0,
+      "blockedMutations": [],
+      "issues": [],
+      "error": null
+    },
+    "initialInstalledLiveAttempt": {
+      "status": "failed",
+      "phase": "QA setup/cleanup",
+      "code": "EBUSY",
+      "detail": "An isolated QA projects.sqlite3 unlink failed during bridge initialization; the underlying initial startup cause was obscured. Same unchanged test passed on retry after the system wait cleared. Formal UserData was not used."
+    }
+  },
+  "dataPreservation": {
+    "status": "passed",
+    "baselineGeneratedAt": "2026-10-24T03:00:10.475647+00:00",
+    "scope": "Every file under formal UserData/data and UserData/config; caches/logs/runtime not compared",
+    "checkedFiles": 56,
+    "differences": 0
+  },
+  "runtimeAddon": {
+    "status": "installed-and-registered",
+    "filesMatched": 4,
+    "provider": "custom_nodes.aeonquill_h3_memory",
+    "usedExtraPathConfigurationForInstalledCheck": false,
+    "coreOrDependencyUpgrade": false,
+    "sourceCommit": "eaa8fee753faf37d1539804d89a46d3e0f40963d"
+  },
+  "realGenerationEvidence": "benchmarks/video-quality/native-4060-20261024.json",
+  "scope": [
+    "Native lifecycle/security and Edge UI against the installed bridge were validated separately.",
+    "UI capability tests submitted zero generation or training jobs. Real GPU evidence is recorded separately.",
+    "One process-inventory command stalled for about 19 minutes; no causal explanation for the system stall is claimed.",
+    "No new installer, public release, GitHub push or human blind quality/listening approval."
+  ]
+}
