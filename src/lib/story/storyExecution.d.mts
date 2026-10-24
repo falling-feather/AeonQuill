@@ -1,3 +1,4 @@
+import type { VideoPresetId } from '../video/videoPresetPolicy.mjs'
 import type { RuntimeStatus, VideoJobRequest } from '../../types'
 import type { GenerationPlan, StoryProject } from './storyProject.mjs'
 
@@ -20,7 +21,7 @@ export const CONTROLLED_H3_WORKFLOW_IDS: Readonly<{
 
 export type VideoExecutionMode = 'text-to-video' | 'image-to-video'
 export type VideoFrameMode = 'none' | 'first' | 'first-last'
-export type VideoExecutionPreset = 'fast' | 'balanced' | 'delivery720' | 'nativeHigh' | 'cinemaBase' | 'master720'
+export type VideoExecutionPreset = VideoPresetId
 export type Sha256AssetVersionId = `sha256:${string}`
 
 export type ExecutionRuntimeSnapshot = {

@@ -1,3 +1,4 @@
+import { assertVideoPresetModelProfile } from '../src/lib/video/videoPresetPolicy.mjs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
@@ -52,6 +53,8 @@ const ALLOWED_NODE_TYPES_BY_ID = {
   '15': 'SaveVideo',
   '16': 'LoadImage',
   '17': 'LoadImage',
+  '18': 'MiniMaxLowVRAMAttention',
+  '19': 'MiniMaxChunkFeedForward',
 }
 
 export const ALLOWED_WORKFLOW_NODE_TYPES = new Set(Object.values(ALLOWED_NODE_TYPES_BY_ID).flatMap((value) => value instanceof Set ? [...value] : [value]))
@@ -137,6 +140,13 @@ export async function buildVideoWorkflow({
       code: 'VIDEO_PRESET_DURATION_UNSUPPORTED',
     })
   }
+  const maxFrames = Math.max(...presetConfig.allowedDurations.map(seconds => VIDEO_DURATIONS[seconds]))
+  if (!Number.isSafeInteger(length) || length < 5 || length > maxFrames) {
+    throw Object.assign(new Error(`${presetConfig.label} supports at most ${maxFrames} frames`), {
+      code: 'VIDEO_PRESET_FRAME_COUNT_UNSUPPORTED',
+    })
+  }
+  assertVideoPresetModelProfile(preset, profile.id)
   if (mode === 'image-to-video' && !inputImageName) {
     throw new Error('Image-to-video workflow requires an uploaded first frame')
   }
@@ -170,6 +180,13 @@ export async function buildVideoWorkflow({
       _meta: { title: 'H3 Base 采样器' },
     }
     workflow['10'].inputs.model = ['1', 0]
+  }
+  if (presetConfig.memoryOptimizations) {
+    const memory = presetConfig.memoryOptimizations
+    workflow['18'] = { class_type: 'MiniMaxLowVRAMAttention', inputs: { model: workflow['8'].inputs.model, head_chunks: memory.headChunks } }
+    workflow['19'] = { class_type: 'MiniMaxChunkFeedForward', inputs: { model: ['18', 0], chunks: memory.feedForwardChunks, seq_threshold: memory.tokenThreshold } }
+    workflow['8'].inputs.model = ['19', 0]
+    workflow['10'].inputs.model = ['19', 0]
   }
   workflow['6'].inputs.prompt = promptPlan.compiledPrompt
   workflow['6'].inputs.width = dimensions.width
@@ -221,6 +238,7 @@ export async function buildVideoWorkflow({
       sampler: presetConfig.sampler,
       loraStrength: presetConfig.loraStrength,
       lowVram: presetConfig.lowVram,
+      ...(presetConfig.memoryOptimizations ? { memoryOptimizations: presetConfig.memoryOptimizations } : {}),
       audio,
       delivery: presetConfig.delivery,
       preserveNative: presetConfig.preserveNative,

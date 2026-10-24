@@ -1,3 +1,4 @@
+import { VIDEO_PRESET_IDS, VIDEO_PRESET_PRESENTATIONS } from '../lib/video/videoPresetPolicy.mjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -92,84 +93,7 @@ const phaseGroups: Array<{ label: string; phases: VideoJobPhase[] }> = [
   { label: '保存', phases: ['saving', 'completed'] },
 ]
 
-const pipelinePresets: Array<{
-  id: VideoJobRequest['preset']
-  label: string
-  native: Record<VideoJobRequest['aspectRatio'], string>
-  delivery: Record<VideoJobRequest['aspectRatio'], string>
-  detail: string
-  minVram: string
-  risk: string
-  allowedDurations: VideoJobRequest['duration'][]
-  estimate: Partial<Record<VideoJobRequest['duration'], string>>
-}> = [
-  {
-    id: 'fast',
-    label: '快速动作预览',
-    native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    delivery: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    detail: '608×352 · 4 步 Turbo · 只看动作构图',
-    minVram: '8 GB',
-    risk: '低',
-    allowedDurations: [5, 10, 15],
-    estimate: { 5: '3–5 分钟', 10: '7–11 分钟', 15: '12–18 分钟' },
-  },
-  {
-    id: 'balanced',
-    label: '高清 Turbo',
-    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
-    delivery: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
-    detail: '8 步 Turbo · 源像素为旧预览约 2.75 倍',
-    minVram: '8 GB',
-    risk: '中',
-    allowedDurations: [5, 10],
-    estimate: { 5: '11–16 分钟', 10: '20–28 分钟' },
-  },
-  {
-    id: 'delivery720',
-    label: '兼容 720P（插值）',
-    native: { '16:9': '608×352', '9:16': '352×608', '1:1': '448×448' },
-    delivery: { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' },
-    detail: '旧 608×352 源片 · Lanczos · 不新增真实细节',
-    minVram: '8 GB',
-    risk: '中',
-    allowedDurations: [5, 10, 15],
-    estimate: { 5: '5–7 分钟', 10: '11–16 分钟', 15: '17–24 分钟' },
-  },
-  {
-    id: 'nativeHigh',
-    label: '原生 768P Turbo',
-    native: { '16:9': '1344×768', '9:16': '768×1344', '1:1': '992×992' },
-    delivery: { '16:9': '1344×768', '9:16': '768×1344', '1:1': '992×992' },
-    detail: 'H3 官方原生画布 · 8 步 · 限 5 秒',
-    minVram: '8 GB',
-    risk: '高',
-    allowedDurations: [5],
-    estimate: { 5: '17–24 分钟' },
-  },
-  {
-    id: 'cinemaBase',
-    label: 'Base 20 步精修',
-    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
-    delivery: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
-    detail: '官方 res_multistep · 无 Turbo LoRA · 声画优先',
-    minVram: '8 GB',
-    risk: '中高',
-    allowedDurations: [5, 10],
-    estimate: { 5: '15–30 分钟', 10: '30–55 分钟' },
-  },
-  {
-    id: 'master720',
-    label: '720P 时序精修母版',
-    native: { '16:9': '1024×576', '9:16': '576×1024', '1:1': '768×768' },
-    delivery: { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' },
-    detail: 'Base 20 步 → 卸载 H3 → SeedVR2 分块修复',
-    minVram: '8 GB',
-    risk: '高',
-    allowedDurations: [5, 10],
-    estimate: { 5: '20–40 分钟', 10: '38–75 分钟' },
-  },
-]
+const pipelinePresets = VIDEO_PRESET_IDS.map(id => VIDEO_PRESET_PRESENTATIONS[id])
 
 function formatBytes(value = 0) {
   return `${(value / 1024 ** 3).toFixed(1)} GB`
@@ -502,6 +426,7 @@ export function VideoStudio({
         </div>
         {preset === 'delivery720' ? <p className="pipeline-note">兼容档只把文件尺寸放大到 720P；清晰度仍受 608×352 源片限制。</p> : null}
         {preset === 'master720' ? <p className="pipeline-note">母版档会保留 H3 原生片，卸载 H3 后再运行 SeedVR2；第二阶段失败不会覆盖原生母片。</p> : null}
+        {presetCapability?.missingNodes?.length ? <p className="pipeline-warning">缺少低显存扩展节点：{presetCapability.missingNodes.join('、')}。请检查运行时后重试。</p> : null}
         {presetUnavailable ? <p className="pipeline-warning"><AlertTriangle size={13} />当前运行时尚未注册此档位的完整模型或节点；系统不会静默降级。</p> : null}
         {insufficientVram ? <p className="pipeline-warning"><AlertTriangle size={13} />当前检测到约 {vramGb.toFixed(1)}GB 显存，全部 H3 档位至少需要标称 8GB。</p> : null}
       </section>

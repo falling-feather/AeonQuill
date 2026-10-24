@@ -1,3 +1,4 @@
+import { VIDEO_PRESET_PRESENTATIONS, VIDEO_PRESET_DISPLAY_ORDER } from '../../lib/video/videoPresetPolicy.mjs'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -154,72 +155,8 @@ type PlannedShot = {
 
 type VideoWorkspaceSection = 'production' | 'source' | 'plan' | 'execution'
 
-const VIDEO_EXECUTION_PRESET_GUIDANCE: Record<VideoExecutionPreset, {
-  label: string
-  native: string
-  pipeline: string
-  estimate: Partial<Record<5 | 10 | 15, string>>
-  allowedDurations: readonly number[]
-  profile: 'preview' | 'quality' | 'master' | 'compatibility'
-}> = {
-  fast: {
-    label: '快速动作预览',
-    native: '608×352 · Turbo 4 步',
-    pipeline: '用于抽卡、构图和动作验证，不作为高清成片。',
-    estimate: { 5: '3–5 分钟', 10: '7–11 分钟', 15: '12–18 分钟' },
-    allowedDurations: [5, 10, 15],
-    profile: 'preview',
-  },
-  balanced: {
-    label: '高清 Turbo',
-    native: '1024×576 · Turbo 8 步',
-    pipeline: '以更高源像素快速筛选可用镜头，保留 H3 原生音频。',
-    estimate: { 5: '11–16 分钟', 10: '20–28 分钟' },
-    allowedDurations: [5, 10],
-    profile: 'quality',
-  },
-  cinemaBase: {
-    label: 'Base 20 步精修',
-    native: '1024×576 · res_multistep / simple · 20 步',
-    pipeline: '移除 Turbo LoRA，以 Base 采样优先保护运动、材质与原生声画。',
-    estimate: { 5: '15–30 分钟', 10: '30–55 分钟' },
-    allowedDurations: [5, 10],
-    profile: 'master',
-  },
-  master720: {
-    label: '720P 时序精修母版',
-    native: '1024×576 Base 20 步 → SeedVR2 3B INT8 → 1280×720',
-    pipeline: '先保留 H3 原生母片，再卸载 H3、分块修复完整时序并回填原音频。',
-    estimate: { 5: '20–40 分钟', 10: '38–75 分钟' },
-    allowedDurations: [5, 10],
-    profile: 'master',
-  },
-  nativeHigh: {
-    label: '原生 768P Turbo',
-    native: '1344×768 · Turbo 8 步',
-    pipeline: 'H3 原生短边 768 画布；8GB 设备仅开放 5 秒，避免时空注意力越界。',
-    estimate: { 5: '17–24 分钟' },
-    allowedDurations: [5],
-    profile: 'quality',
-  },
-  delivery720: {
-    label: '兼容 720P 插值',
-    native: '608×352 · Turbo 8 步 → Lanczos 1280×720',
-    pipeline: '仅保证交付文件尺寸，不宣称新增真实纹理；只用于旧项目兼容。',
-    estimate: { 5: '5–7 分钟', 10: '11–16 分钟', 15: '17–24 分钟' },
-    allowedDurations: [5, 10, 15],
-    profile: 'compatibility',
-  },
-}
-
-const VIDEO_EXECUTION_PRESET_ORDER: VideoExecutionPreset[] = [
-  'master720',
-  'cinemaBase',
-  'balanced',
-  'nativeHigh',
-  'fast',
-  'delivery720',
-]
+const VIDEO_EXECUTION_PRESET_GUIDANCE = VIDEO_PRESET_PRESENTATIONS
+const VIDEO_EXECUTION_PRESET_ORDER = VIDEO_PRESET_DISPLAY_ORDER
 
 function modelProfileLabel(profileId: string | undefined) {
   if (profileId === 'int8ConvrotCu130') return 'INT8 ConvRot · cu130'
@@ -453,11 +390,12 @@ export function SmartVideoWorkbench({
     () => plannedShots.filter(({ shot }) => selectedShotSet.has(shot.id)),
     [plannedShots, selectedShotSet],
   )
-  const presetGuidance = VIDEO_EXECUTION_PRESET_GUIDANCE[preset]
+  const presentation = VIDEO_EXECUTION_PRESET_GUIDANCE[preset]
+  const presetGuidance = { ...presentation, native: presentation.nativeSummaryByAspect[result.project.settings.aspectRatio] }
   const presetCapability = runtimeStatus?.videoCapabilities?.presets.find(({ id }) => id === preset)
   const selectedDuration = selectedShots[0]?.shot.durationSeconds
   const selectedEstimate = presetGuidance.estimate[selectedDuration as 5 | 10 | 15]
-  const unsupportedDuration = selectedShots.some(({ shot }) => !presetGuidance.allowedDurations.includes(shot.durationSeconds))
+  const unsupportedDuration = selectedShots.some(({ shot }) => !presetGuidance.allowedDurations.some(value => value === shot.durationSeconds))
   const activeModelProfile = presetCapability?.availableProfiles[0]
   const shotCount = plannedShots.length
   const totalSeconds = useMemo(
@@ -1641,7 +1579,7 @@ export function SmartVideoWorkbench({
                 <div className="aq-video-quality-warning"><AlertTriangle size={14} /> 当前选择包含不受此档位支持的镜头时长，请先拆分镜头或改用兼容档。</div>
               ) : null}
               {presetCapability?.available === false ? (
-                <div className="aq-video-quality-warning"><AlertTriangle size={14} /> 请复检运行时，或切换到未标记“未就绪”的质量档位。</div>
+                <div className="aq-video-quality-warning"><AlertTriangle size={14} /> {presetCapability.missingNodes?.length ? `缺少低显存扩展节点：${presetCapability.missingNodes.join('、')}。` : '请复检运行时，或切换到未标记“未就绪”的质量档位。'}</div>
               ) : null}
             </div>
 

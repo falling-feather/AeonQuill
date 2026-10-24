@@ -3,6 +3,7 @@ dist/
 .DS_Store
 *.log
 *.tsbuildinfo
+__pycache__/
 .agents/
 .codex/
 .runtime/

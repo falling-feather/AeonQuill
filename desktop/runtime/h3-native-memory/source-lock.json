@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "aeonquill_h3_memory",
+  "repository": "https://github.com/kijai/ComfyUI-KJNodes",
+  "sourceCommit": "eaa8fee753faf37d1539804d89a46d3e0f40963d",
+  "sourcePath": "nodes/minimax_nodes.py",
+  "sourceSha256": "acbfdd2c25ebec34b1ade23d4856931209a9e1d5b690b810f2cef0af47832642",
+  "license": "GPL-3.0; see LICENSE",
+  "licenseSha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+  "nodes": [
+    "MiniMaxLowVRAMAttention",
+    "MiniMaxChunkFeedForward"
+  ],
+  "testedCore": "ComfyUI 0.31.0 / PyTorch 2.12.1+cu130",
+  "dependencies": "Existing ComfyUI and PyTorch only; no new Python packages."
+}

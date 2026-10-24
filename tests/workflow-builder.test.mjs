@@ -15,7 +15,7 @@ function assertWorkflowGraph(workflow) {
   const ids = new Set(Object.keys(workflow))
   for (const [nodeId, node] of Object.entries(workflow)) {
     assert.equal(typeof node.class_type, 'string', `node ${nodeId} class_type`)
-    assert.ok(REQUIRED_NODE_TYPES.includes(node.class_type), `node ${nodeId} uses registered class ${node.class_type}`)
+    assert.ok([...REQUIRED_NODE_TYPES, 'MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward'].includes(node.class_type), `node ${nodeId} uses registered class ${node.class_type}`)
     assert.equal(typeof node.inputs, 'object', `node ${nodeId} inputs`)
     for (const [inputName, value] of Object.entries(node.inputs)) {
       if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && Number.isInteger(value[1])) {
@@ -37,6 +37,7 @@ test('builds every supported mode, preset, duration, and aspect ratio offline', 
             aspectRatio,
             duration,
             preset,
+            modelProfile: VIDEO_PRESETS[preset].allowedModelProfiles?.[0] ?? 'fp8Scaled4060',
             seed: 7,
             audio: true,
             inputImageName: mode === 'image-to-video' ? 'first.png' : undefined,

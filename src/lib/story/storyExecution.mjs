@@ -1,3 +1,4 @@
+import { VIDEO_PRESET_IDS } from '../video/videoPresetPolicy.mjs'
 import { assertGenerationPlan, assertStoryProject, StoryContractError } from './storyProject.mjs'
 
 export const STORY_EXECUTION_SCHEMA_VERSION = 1
@@ -51,7 +52,7 @@ const PAYLOAD_KEYS = new Set(['bindingId', 'assetVersionId', 'dataUrl'])
 
 const VIDEO_MODES = new Set(['text-to-video', 'image-to-video'])
 const FRAME_MODES = new Set(['none', 'first', 'first-last'])
-const PRESETS = new Set(['fast', 'balanced', 'delivery720', 'nativeHigh', 'cinemaBase', 'master720'])
+const PRESETS = new Set(VIDEO_PRESET_IDS)
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1'])
 const CAMERA_MOVEMENTS = new Set(['locked', 'push-in', 'pan', 'orbit', 'follow'])
 const MOTION_LEVELS = new Set(['subtle', 'natural', 'dynamic'])

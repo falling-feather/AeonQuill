@@ -1,0 +1,2 @@
+# Preserve byte-locked runtime sources and licenses across Git checkouts.
+desktop/runtime/h3-native-memory/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

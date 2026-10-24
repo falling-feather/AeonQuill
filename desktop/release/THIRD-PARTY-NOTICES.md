@@ -20,6 +20,10 @@ MiniMax H3 is subject to its Community License, including territory exclusions, 
 
 Cloud credentials, API keys, project databases, personal input/output media, caches, arbitrary custom nodes, unlisted weights, system NVIDIA drivers, PFX files and code-signing private keys are explicitly excluded.
 
+## Optional H3 native-memory add-on
+
+`desktop/runtime/h3-native-memory` contains the unchanged `nodes/minimax_nodes.py` from [kijai/ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes), commit `eaa8fee753faf37d1539804d89a46d3e0f40963d`, with its upstream GPL-3.0 license text and a SHA-256 source lock. The small registration module exposes only the attention-head and feed-forward memory nodes. It is an optional ComfyUI runtime component, not part of the proprietary renderer or bridge; staging requires an explicit `custom_nodes/aeonquill_h3_memory` destination and refuses to overwrite a modified package. It includes no weights and does not upgrade Python dependencies.
+
 ## Stage status
 
 The installer, application and bridge carry a self-signed Authenticode signature with subject `falling feather制作`; this is not a publicly trusted Windows publisher certificate. The package has no auto-updater and is not approved for public commercial release. The stage manifest marks the package `self-signed-test-package`; optional H3 downloads require separate explicit terms acceptance. See `LIMITATIONS.zh-CN.md` and `release-manifest.json` for machine-readable status.

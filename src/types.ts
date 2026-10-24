@@ -1,3 +1,4 @@
+import type { VideoPresetId } from './lib/video/videoPresetPolicy.mjs'
 import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
 import type { LoraBinding } from './lib/loraCompatibility.mjs'
 import type { ImageEffectParameters } from './lib/imageEffects.mjs'
@@ -388,7 +389,7 @@ export type VideoJobRequest = {
   scenario?: H3ScenarioId
   aspectRatio: '16:9' | '9:16' | '1:1'
   duration: 5 | 10 | 15
-  preset: 'fast' | 'balanced' | 'delivery720' | 'nativeHigh' | 'cinemaBase' | 'master720'
+  preset: VideoPresetId
   modelProfile?: 'auto' | 'fp8Scaled4060' | 'int8ConvrotCu130'
   seed: number
   audio: boolean
@@ -971,6 +972,7 @@ export type RuntimeStatus = {
       id: string
       available: boolean
       availableProfiles: string[]
+      missingNodes?: string[]
       postprocessor: null | {
         id: string
         available: boolean

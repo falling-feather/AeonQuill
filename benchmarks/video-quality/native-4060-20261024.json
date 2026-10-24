@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "kind": "h3-native-4060-actual-generation",
+  "generatedAt": "2026-10-24T03:11:22.963Z",
+  "status": "passed",
+  "quality": "human-review-required",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "vramMiB": 8188,
+    "systemRamGiB": 32
+  },
+  "runtime": {
+    "comfy": "0.31.0",
+    "python": "3.12.10",
+    "torch": "2.12.1+cu130",
+    "transformers": "5.15.1",
+    "comfyKitchen": "0.2.28",
+    "comfyAimdo": "0.4.13",
+    "newPythonDependencies": []
+  },
+  "comparison": {
+    "mode": "text-to-video",
+    "aspectRatio": "16:9",
+    "durationRequestSeconds": 5,
+    "seed": 20261024,
+    "promptSource": "scripts/run-h3-quality-smoke.mjs default cinematic bookshop prompt",
+    "promptSha256": "7888ec280906fad0852a34c2422795a1956f766a2b138389aabf6dae40cd61d4",
+    "samePromptAndSeed": true,
+    "variablesChanged": [
+      "Turbo8 with LoRA to Base20 without LoRA",
+      "attention-head and feed-forward chunking",
+      "reserve-vram 1.0GB to 1.5GB"
+    ],
+    "inferenceLimit": "Not a controlled isolation of chunking speed or memory benefit; no claim of general perceptual superiority."
+  },
+  "weights": {
+    "fullShaCheckedAt": "2026-10-24T02:03:28.169Z",
+    "artifacts": [
+      {
+        "id": "h3-fl2va-int8-convrot",
+        "bytes": 20970379616,
+        "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      },
+      {
+        "id": "h3-qwen3vl-nvfp4",
+        "bytes": 15687142551,
+        "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+      },
+      {
+        "id": "h3-video-vae",
+        "bytes": 5207808496,
+        "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+      },
+      {
+        "id": "h3-audio-vae",
+        "bytes": 605254808,
+        "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+      },
+      {
+        "id": "h3-turbo-lora-v4",
+        "bytes": 779849816,
+        "sha256": "5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3"
+      }
+    ]
+  },
+  "optionalAddon": {
+    "sourceCommit": "eaa8fee753faf37d1539804d89a46d3e0f40963d",
+    "sourceSha256": "acbfdd2c25ebec34b1ade23d4856931209a9e1d5b690b810f2cef0af47832642",
+    "nodes": [
+      "MiniMaxLowVRAMAttention",
+      "MiniMaxChunkFeedForward"
+    ],
+    "loadedFrom": "isolated custom_nodes directory; no core changes"
+  },
+  "cases": [
+    {
+      "id": "native8",
+      "preset": "nativeHigh",
+      "testedSourceBaseCommit": "8c72845be173505e1bbc901dc802bde07b5857db",
+      "testedWithUncommittedChanges": false,
+      "completedAt": "2026-10-24T02:23:50.576Z",
+      "elapsedSeconds": 1222.389,
+      "processArguments": {
+        "reserveVramGb": 1,
+        "lowvram": true,
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none"
+      },
+      "resource": {
+        "samples": 610,
+        "peakVramMiB": 7693,
+        "peakGpuPercent": 100,
+        "measurement": "NVML whole-card memory.used sampled every 2 seconds; includes all allocations, not CUDA allocator model-only peak"
+      },
+      "pipeline": {
+        "modelProfile": "int8ConvrotCu130",
+        "dimensions": {
+          "width": 1344,
+          "height": 768
+        },
+        "frames": 124,
+        "fps": 24,
+        "steps": 8,
+        "samplingMode": "turbo",
+        "sampler": "larry_turbo",
+        "loraStrength": 1,
+        "lowVram": true,
+        "audio": true,
+        "delivery": "native",
+        "postprocessor": null,
+        "sourceEncoding": "h264-crf12"
+      },
+      "output": {
+        "path": "output/h3-native-20261024/AEONQUILL/T2V_native8-20261024_00001_.mp4",
+        "bytes": 3624209,
+        "sha256": "f2f17df05c03524594944fc275350f7ab6c8ea0cd9eb1749874919bb4f25ff37",
+        "media": {
+          "programs": [],
+          "stream_groups": [],
+          "streams": [
+            {
+              "codec_name": "h264",
+              "codec_type": "video",
+              "width": 1344,
+              "height": 768,
+              "r_frame_rate": "24/1",
+              "duration": "5.166667",
+              "nb_frames": "124"
+            },
+            {
+              "codec_name": "aac",
+              "codec_type": "audio",
+              "sample_rate": "32000",
+              "channels": 2,
+              "r_frame_rate": "0/0",
+              "duration": "5.167000",
+              "nb_frames": "163"
+            }
+          ],
+          "format": {
+            "duration": "5.167000",
+            "size": "3624209"
+          }
+        },
+        "preview": "output/h3-native-20261024/native8-preview.png"
+      }
+    },
+    {
+      "id": "native20",
+      "preset": "nativeBase",
+      "testedSourceBaseCommit": "8c72845be173505e1bbc901dc802bde07b5857db",
+      "testedWithUncommittedChanges": true,
+      "completedAt": "2026-10-24T03:10:59.564Z",
+      "elapsedSeconds": 2456.733,
+      "processArguments": {
+        "reserveVramGb": 1.5,
+        "lowvram": true,
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none"
+      },
+      "resource": {
+        "samples": 1225,
+        "peakVramMiB": 7264,
+        "peakGpuPercent": 100,
+        "measurement": "NVML whole-card memory.used sampled every 2 seconds; includes all allocations, not CUDA allocator model-only peak"
+      },
+      "pipeline": {
+        "modelProfile": "int8ConvrotCu130",
+        "dimensions": {
+          "width": 1344,
+          "height": 768
+        },
+        "frames": 124,
+        "fps": 24,
+        "steps": 20,
+        "samplingMode": "base",
+        "sampler": "res_multistep",
+        "loraStrength": 0,
+        "lowVram": true,
+        "memoryOptimizations": {
+          "headChunks": 8,
+          "feedForwardChunks": 4,
+          "tokenThreshold": 4096
+        },
+        "audio": true,
+        "delivery": "native",
+        "postprocessor": null,
+        "sourceEncoding": "h264-crf8"
+      },
+      "output": {
+        "path": "output/h3-native-20261024/AEONQUILL/T2V_native20-20261024_00001_.mp4",
+        "bytes": 7691003,
+        "sha256": "881cb56e08883de25c904a47269ca4a82367519c228c984b79684f4116fe2bfa",
+        "media": {
+          "programs": [],
+          "stream_groups": [],
+          "streams": [
+            {
+              "codec_name": "h264",
+              "codec_type": "video",
+              "width": 1344,
+              "height": 768,
+              "r_frame_rate": "24/1",
+              "duration": "5.166667",
+              "nb_frames": "124"
+            },
+            {
+              "codec_name": "aac",
+              "codec_type": "audio",
+              "sample_rate": "32000",
+              "channels": 2,
+              "r_frame_rate": "0/0",
+              "duration": "5.167000",
+              "nb_frames": "163"
+            }
+          ],
+          "format": {
+            "duration": "5.167000",
+            "size": "7691003"
+          }
+        },
+        "preview": "output/h3-native-20261024/native20-preview.png"
+      }
+    }
+  ],
+  "compatibility": {
+    "cpu": {
+      "status": "passed",
+      "scope": "small CPU tensors, import and computation only; not pretrained-model quality",
+      "cases": 5,
+      "maxAbsoluteDifference": 5.960464477539062e-7,
+      "cudaContextInitialized": false
+    },
+    "ui": {
+      "status": "passed",
+      "kind": "live-read-only",
+      "scope": "UI and capability gates only; no media or training generation",
+      "generatedAt": "2026-10-24T02:52:20.899Z",
+      "checks": [
+        "balanced VideoStudio selects native Base20 with matching native/delivery dimensions and 5s-only duration",
+        "removing only memory-node availability blocks generation and gives an actionable dependency message",
+        "smart-video execution exposes the same native Base20 preset and dimensional contract"
+      ],
+      "jobRequests": 0,
+      "blockedMutations": [],
+      "issues": [],
+      "error": null
+    }
+  },
+  "limitations": [
+    "One prompt and seed, one landscape T2V per preset. No human blind quality or listening review.",
+    "Portrait, square and I2V have compilation contracts, not real inference in this round.",
+    "No interpolation, super-resolution, frame interpolation or lower-resolution fallback in either output.",
+    "Whole-card NVML samples are not an allocation-exact peak and the reserve setting differs."
+  ]
+}
