@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "h3-native-single-pass-long-duration",
-  "generatedAt": "2026-10-24T10:59:31.600Z",
+  "generatedAt": "2026-10-24T13:30:08.248Z",
   "measurementSetIncomplete": true,
   "unmeasuredRequestedSeconds": [
     12
@@ -492,6 +492,41 @@
         "stridedHostSecondsIncludingSync": 1.75,
         "scope": "One real full-sequence head group; dense first then strided, not a controlled speed benchmark"
       }
+    },
+    {
+      "attempt": "a10",
+      "status": "incomplete",
+      "functionalTrack": "V0.7.121",
+      "source": {
+        "baseCommit": "3898d4c6812dc0769d366b604136d295f9432818",
+        "worktreeModified": false
+      },
+      "startedAt": "2026-10-24T10:36:03.979Z",
+      "allocator": "native",
+      "garbageCollectionThreshold": 0.6,
+      "maxSplitSizeMiB": 128,
+      "torchVramFraction": 0.95,
+      "vramHeadroomGb": 4,
+      "disableSmartMemory": true,
+      "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70",
+      "change": "Protect large native cached blocks from splitting; retain canonical V0.7.121 attention kernel, sampler and frame settings.",
+      "completionClaim": false,
+      "kind": "process-ended-without-result",
+      "lastObservedAt": "2026-10-24T11:33:24.009Z",
+      "observedElapsedSeconds": 3440.489,
+      "completedSamplerSteps": 4,
+      "samplerSteps": 20,
+      "resource": {
+        "samples": 1713,
+        "peakVramMiB": 7926,
+        "peakGpuPercent": 100,
+        "scope": "Partial samples until last status only"
+      },
+      "verifiedStoppedAt": "2026-10-24T12:39:52.906Z",
+      "finishedAt": null,
+      "exitCode": null,
+      "reason": "No owned Python process, dedicated listener, result receipt or native12 MP4. Exit cause unknown. User requested closure without restart.",
+      "concurrentCpuWork": "V0.7.122 desktop candidate build; elapsed observations are not a controlled speed comparison."
     }
   ],
   "adapterValidation": {
@@ -656,25 +691,6 @@
     ],
     "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70"
   },
-  "nextExperiment": {
-    "attempt": "a10",
-    "status": "running",
-    "functionalTrack": "V0.7.121",
-    "source": {
-      "baseCommit": "3898d4c6812dc0769d366b604136d295f9432818",
-      "worktreeModified": false
-    },
-    "startedAt": "2026-10-24T10:36:03.979Z",
-    "allocator": "native",
-    "garbageCollectionThreshold": 0.6,
-    "maxSplitSizeMiB": 128,
-    "torchVramFraction": 0.95,
-    "vramHeadroomGb": 4,
-    "disableSmartMemory": true,
-    "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70",
-    "change": "Protect large native cached blocks from splitting; retain canonical V0.7.121 attention kernel, sampler and frame settings.",
-    "completionClaim": false
-  },
   "allocatorCapabilityProbe": {
     "torch": "2.12.1+cu130",
     "allocator": "native",
@@ -682,5 +698,13 @@
     "expandableSegmentsSupported": false,
     "snapshotIsExpandable": false,
     "scope": "Local platform small-allocation capability check only; not H3 quality or full-model capacity."
+  },
+  "followUp": {
+    "status": "paused-by-user",
+    "date": "2026-10-24",
+    "newGenerationStarted": false,
+    "requestedSecondsStillUnmeasured": [
+      12
+    ]
   }
 }

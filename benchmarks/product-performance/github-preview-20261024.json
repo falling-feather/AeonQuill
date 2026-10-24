@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "github-portable-preview-delivery",
+  "preparedAt": "2026-10-24T13:42:55.133Z",
+  "source": {
+    "productVersion": "0.7.1",
+    "functionalTrack": "V0.7.122",
+    "commit": "9b48fbbc82f63a0516001c046d9862a7f8645b1b",
+    "workingTreeDirty": false
+  },
+  "distribution": {
+    "format": "unsigned-portable-test-zip",
+    "platform": "windows-x64",
+    "tag": "v0.7.1-preview.122",
+    "signatureStatus": "NotSigned",
+    "nsisInstaller": false,
+    "webview2Bundled": false,
+    "modelRuntimeBundled": false,
+    "userDataBundled": false,
+    "optionalH3AddonSourceBundled": true
+  },
+  "artifact": {
+    "filename": "AEONQUILL-0.7.1-V0.7.122-Windows-x64-portable-test.zip",
+    "bytes": 31127961,
+    "sha256": "ff88b6a8fc5ab9df79b9a0f2d98b87df00b24713bc42ab66113ca0dd8ca1c37e",
+    "payloadFiles": 14,
+    "verifiedPayloadChecksums": 13
+  },
+  "executables": {
+    "desktop": {
+      "bytes": 13223936,
+      "sha256": "9964bb66a47b58d28e7335ed6bb0e18c4d045591eb08392b48aef175c8609706"
+    },
+    "bridge": {
+      "bytes": 61173201,
+      "sha256": "50bc24ae29edfaa840ffdfd152d67ae5ea0eac56166479d7e0df03f518d58f9d"
+    }
+  },
+  "validation": {
+    "unit": {
+      "tests": 598,
+      "passed": 597,
+      "skipped": 1
+    },
+    "baseline": {
+      "checks": 174,
+      "status": "passed"
+    },
+    "p7": {
+      "status": "passed",
+      "phases": 6
+    },
+    "zipIntegrity": "passed",
+    "nativeWindow": {
+      "status": "passed",
+      "readyMs": 1955,
+      "rendererProbe": "passed",
+      "controlledShutdown": "passed"
+    },
+    "singleInstance": {
+      "status": "passed",
+      "launchAttempts": 4,
+      "secondaryExitCodes": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "cleanup": {
+    "directories": 25,
+    "files": 300,
+    "logicalBytes": 5100986816,
+    "allocatedBytes": 5101244416,
+    "scope": "old isolated pixel performance fixtures only; formal user data, models, source and video outputs preserved"
+  },
+  "limitations": {
+    "native12SecondsVerified": false,
+    "humanBlindQualityApproved": false,
+    "signingScriptChanged": false,
+    "signingPreparation": "Modification command blocked by executor policy. Original script preserved; existing clean candidate used for unsigned portable delivery."
+  },
+  "remote": {
+    "status": "pending"
+  }
+}
