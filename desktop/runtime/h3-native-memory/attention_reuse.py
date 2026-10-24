@@ -9,6 +9,11 @@ from comfy_api.latest import io
 from . import minimax_nodes as upstream
 
 
+def release_unused_cuda_cache(tensor):
+    if tensor.is_cuda:
+        torch.cuda.empty_cache()
+
+
 def project_rows(project, values, chunks=16, threshold=4096):
     if values.ndim != 2:
         raise ValueError("H3 packed projection requires a 2D token matrix")
@@ -36,6 +41,7 @@ def attention_forward(self, x, rope_freqs=None, transformer_options=None):
         x = x.pop()
     size, dtype, device = x.shape[0], x.dtype, x.device
     chunks = options.get("aeonquill_h3_projection_chunks", 16)
+    release_unused_cuda_cache(x)
     qkv = project_rows(self.qkv_proj, x, chunks)
     del x
     if qkv.dtype != dtype:
@@ -59,6 +65,9 @@ def attention_forward(self, x, rope_freqs=None, transformer_options=None):
     v = v.transpose(0, 1).unsqueeze(0)
     groups = min(options.get("minimax_head_chunks", 1), self.heads)
     output = qkv[:, :inner]
+    # Inactive projection/norm allocations otherwise compete with offloaded
+    # model weights during the long full-sequence attention kernels on WDDM.
+    release_unused_cuda_cache(output)
     start = 0
     for count in [self.heads // groups + (1 if i < self.heads % groups else 0) for i in range(groups)]:
         end = start + count
@@ -69,7 +78,10 @@ def attention_forward(self, x, rope_freqs=None, transformer_options=None):
         start = end
         del value
     del q, k, v, qkv
-    return project_rows(self.out_proj, output, chunks)
+    result = project_rows(self.out_proj, output, chunks)
+    del output
+    release_unused_cuda_cache(result)
+    return result
 
 
 attention_forward._uses_optimized_attention = True

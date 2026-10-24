@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "h3-native-single-pass-long-duration",
-  "generatedAt": "2026-10-24T08:15:14.727Z",
+  "generatedAt": "2026-10-24T09:44:17.995Z",
   "measurementSetIncomplete": true,
   "unmeasuredRequestedSeconds": [
     12
@@ -310,26 +310,92 @@
       "observedError": "CUDA out of memory. Tried to allocate 1.19 GiB. GPU 0 has a total capacity of 8.00 GiB of which 0 bytes is free. 7.60 GiB allowed; Of the allocated memory 5.74 GiB is allocated by PyTorch, and 904.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)",
       "allocation": "separate attention output, 1.19GiB",
       "exceptionType": "torch.OutOfMemoryError"
+    },
+    {
+      "attempt": "a6",
+      "kind": "agent-interrupted-memory-profile-trial",
+      "source": {
+        "baseCommit": "92fcc58fe499f1aac9de421f120173a4c5618e12",
+        "worktreeModified": false
+      },
+      "requestedSeconds": 12,
+      "startedAt": "2026-10-24T07:47:30.183Z",
+      "finishedAt": "2026-10-24T09:25:26.610Z",
+      "elapsedSeconds": 5876.427,
+      "launchPolicy": {
+        "noVram": false,
+        "lowVram": true,
+        "reserveVramGb": 1.5,
+        "vramHeadroomGb": 2.5,
+        "cudaMallocAsyncDisabled": false,
+        "requestedAllocatorConfig": "backend:cudaMallocAsync",
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none",
+        "disableSmartMemory": true
+      },
+      "resource": {
+        "samples": 2925,
+        "peakVramMiB": 7883,
+        "peakGpuPercent": 100
+      },
+      "completedSamplerSteps": 5,
+      "interruptedBy": "agent",
+      "sharedGpuMemorySampleMiB": 828,
+      "reason": "The fifth step completed after approximately 28 minutes, following two approximately 13.6 minute steps; stop before continuing the sixth. Switching to native cache reclamation and the canonical release adapter. No proven OOM.",
+      "prototypeSha256": "4b7a32563e8251e01ef535ba58a712c4519fa9c3c9bd7f52fa4edab6f65e84df",
+      "warmStepMinutes": [
+        11.693,
+        13.559,
+        13.571,
+        28.016
+      ]
+    },
+    {
+      "attempt": "a7",
+      "kind": "agent-interrupted-memory-profile-trial",
+      "source": {
+        "baseCommit": "a44608e0798af2aba623e16168858677383b878d",
+        "worktreeModified": false
+      },
+      "requestedSeconds": 12,
+      "startedAt": "2026-10-24T09:29:37.791Z",
+      "finishedAt": "2026-10-24T09:40:27.085Z",
+      "elapsedSeconds": 649.295,
+      "launchPolicy": {
+        "noVram": false,
+        "lowVram": true,
+        "reserveVramGb": 1.5,
+        "vramHeadroomGb": 4,
+        "cudaMallocAsyncDisabled": true,
+        "requestedAllocatorConfig": "backend:native,garbage_collection_threshold:0.6",
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none",
+        "disableSmartMemory": true,
+        "torchVramFraction": 0.95
+      },
+      "resource": {
+        "samples": 324,
+        "peakVramMiB": 7893,
+        "peakGpuPercent": 100
+      },
+      "completedSamplerSteps": 0,
+      "interruptedBy": "agent",
+      "sharedGpuMemorySampleMiB": 1214,
+      "reason": "Native allocator still retained approximately 906MiB inactive pool memory at projection boundaries and sampled 1214MiB shared GPU memory. Testing explicit cache release between projection, full-sequence attention and feed-forward; no proven OOM.",
+      "attentionNode": "MiniMaxReuseQKVAttention",
+      "adapterSha256": "8170f85ba78cea88df52e6395f0255f2f0b299d9a28a034cab36c1f9b2ef8135",
+      "projectionBoundaryMemoryMiB": {
+        "allocatedBefore": 3140.1909,
+        "allocatedAfter": 6792.1909,
+        "reserved": 7698
+      },
+      "phase": "first full forward; projection and early attention blocks ran, no completed sampler step"
     }
   ],
-  "ongoingExperiment": {
-    "attempt": "a6",
-    "requestedSeconds": 12,
-    "startedAt": "2026-10-24T07:47:30.183Z",
-    "scope": "isolated full-sequence QKV buffer-reuse prototype; not a completed release-node inference",
-    "prototypeSha256": "4b7a32563e8251e01ef535ba58a712c4519fa9c3c9bd7f52fa4edab6f65e84df",
-    "projectionChunks": 16,
-    "headChunks": 28,
-    "feedForwardChunks": 16,
-    "allocator": "cudaMallocAsync",
-    "vramHeadroomGb": 2.5,
-    "disableSmartMemory": true,
-    "realInt8ProjectionParity": {
-      "rows": 128,
-      "maxAbsoluteDifference": 0
-    },
-    "completed": false
-  },
   "adapterValidation": {
     "status": "passed",
     "scope": "small CPU tensors, import and computation only; not pretrained-model quality",
@@ -481,6 +547,17 @@
       "unsupported-model-and-patch-conflict-rejected",
       "training-rejected"
     ],
-    "adapterSha256": "8170f85ba78cea88df52e6395f0255f2f0b299d9a28a034cab36c1f9b2ef8135"
+    "adapterSha256": "847ebf4539da424940f63c03cd965a91a2ae3a9c2aaabc2e73244460499a8001"
+  },
+  "nextExperiment": {
+    "attempt": "a8",
+    "status": "prepared",
+    "functionalTrack": "V0.7.120",
+    "allocator": "native",
+    "garbageCollectionThreshold": 0.6,
+    "torchVramFraction": 0.95,
+    "vramHeadroomGb": 4,
+    "disableSmartMemory": true,
+    "change": "Explicitly release unused CUDA cache before QKV, before full-sequence attention, and after freeing the QKV buffer. The allocator policy matches a7."
   }
 }
