@@ -15,8 +15,15 @@ import { createRestrictedChildEnvironment, redactSensitiveText } from './securit
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const START_TIMEOUT_MS = 4 * 60 * 1000
 
+function normalizeComfyAllocatorProfile(value = 'default') {
+  if (value === null) return 'default'
+  if (value === 'default' || value === 'native128') return value
+  throw Object.assign(new Error('不支持的 ComfyUI 显存配置'), { code: 'INVALID_COMFY_ALLOCATOR_PROFILE' })
+}
+
 export function buildManagedComfyLaunch({
   args = [],
+  allocatorProfile = 'default',
   dataRoot = dataDirectory,
   cacheRoot = cacheDirectory,
 } = {}) {
@@ -28,6 +35,15 @@ export function buildManagedComfyLaunch({
     temp: join(cacheRoot, 'comfyui', 'temp'),
   }
   const nextArgs = Array.isArray(args) ? [...args] : []
+  const profile = normalizeComfyAllocatorProfile(allocatorProfile)
+  const environment = {}
+  if (profile === 'native128') {
+    if (nextArgs.includes('--cuda-malloc')) throw Object.assign(new Error('native128 不能与 --cuda-malloc 同时启用'), { code: 'COMFY_ALLOCATOR_CONFLICT' })
+    if (!nextArgs.includes('--disable-cuda-malloc')) nextArgs.push('--disable-cuda-malloc')
+    const allocatorConfig = 'backend:native,garbage_collection_threshold:0.6,max_split_size_mb:128'
+    environment.PYTORCH_ALLOC_CONF = allocatorConfig
+    environment.PYTORCH_CUDA_ALLOC_CONF = allocatorConfig
+  }
   for (const [flag, pathname] of [
     ['--input-directory', directories.input],
     ['--output-directory', directories.output],
@@ -36,7 +52,7 @@ export function buildManagedComfyLaunch({
   ]) {
     if (!nextArgs.includes(flag)) nextArgs.push(flag, pathname)
   }
-  return { args: nextArgs, directories }
+  return { args: nextArgs, directories, allocatorProfile: profile, environment }
 }
 
 async function fileExists(pathname) {
@@ -141,6 +157,7 @@ export async function loadLocalRuntimeConfig() {
         || join(dataDirectory, 'models', 'realesrgan-ncnn-vulkan'),
     },
     offlineRuntimePackageId: offlineRuntime?.packageId,
+    comfyAllocatorProfile: normalizeComfyAllocatorProfile(config.comfyAllocatorProfile),
     comfyArgs: Array.isArray(config.comfyArgs) && config.comfyArgs.length
       ? config.comfyArgs
       : [
@@ -277,11 +294,11 @@ export class ComfyRuntimeManager {
   }
 
   async start(reason) {
-    const { pythonPath, comfyRoot, comfyArgs } = this.config
+    const { pythonPath, comfyRoot, comfyArgs, comfyAllocatorProfile } = this.config
     if (!(await fileExists(pythonPath)) || !(await fileExists(join(comfyRoot || '', 'main.py')))) {
       throw new Error('ComfyUI 本机路径未配置，无法按需启动')
     }
-    const launch = buildManagedComfyLaunch({ args: comfyArgs })
+    const launch = buildManagedComfyLaunch({ args: comfyArgs, allocatorProfile: comfyAllocatorProfile })
     await Promise.all([
       mkdir(logDirectory, { recursive: true }),
       ...Object.values(launch.directories).map((pathname) => mkdir(pathname, { recursive: true })),
@@ -297,6 +314,7 @@ export class ComfyRuntimeManager {
       windowsHide: true,
       stdio: ['ignore', logHandle, logHandle],
       env: createRestrictedChildEnvironment({
+        ...launch.environment,
         U2NET_HOME: this.config.imageTools?.rembgModelsPath,
       }),
     })

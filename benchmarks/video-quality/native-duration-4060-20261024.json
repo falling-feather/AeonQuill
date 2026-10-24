@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "h3-native-single-pass-long-duration",
-  "generatedAt": "2026-10-24T10:02:58.807Z",
+  "generatedAt": "2026-10-24T10:59:31.600Z",
   "measurementSetIncomplete": true,
   "unmeasuredRequestedSeconds": [
     12
@@ -436,6 +436,62 @@
         "attentionEntryReserved": 6784
       },
       "adapterSha256": "847ebf4539da424940f63c03cd965a91a2ae3a9c2aaabc2e73244460499a8001"
+    },
+    {
+      "attempt": "a9",
+      "kind": "cuda-out-of-memory",
+      "source": {
+        "baseCommit": "3898d4c6812dc0769d366b604136d295f9432818",
+        "worktreeModified": false
+      },
+      "requestedSeconds": 12,
+      "startedAt": "2026-10-24T10:08:52.597Z",
+      "finishedAt": "2026-10-24T10:21:20.076Z",
+      "elapsedSeconds": 747.479,
+      "launchPolicy": {
+        "noVram": false,
+        "lowVram": true,
+        "reserveVramGb": 1.5,
+        "vramHeadroomGb": 4,
+        "cudaMallocAsyncDisabled": true,
+        "requestedAllocatorConfig": "backend:native,garbage_collection_threshold:0.6",
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none",
+        "torchVramFraction": 0.95,
+        "disableSmartMemory": true
+      },
+      "resource": {
+        "samples": 372,
+        "peakVramMiB": 7897,
+        "peakGpuPercent": 100
+      },
+      "completedSamplerSteps": 1,
+      "failure": {
+        "phase": "QKV allocation in second sampler step",
+        "type": "torch.OutOfMemoryError",
+        "requestedGiB": 3.57,
+        "allocatedGiB": 3.38,
+        "reservedButUnallocatedGiB": 3.19
+      },
+      "attentionNode": "MiniMaxReuseQKVAttention",
+      "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70",
+      "realAttentionGroupParity": {
+        "shape": [
+          1,
+          2,
+          89033,
+          128
+        ],
+        "dtype": "torch.bfloat16",
+        "maxAbsoluteDifference": 0,
+        "rtol": 0.02,
+        "atol": 0.01,
+        "denseHostSecondsIncludingSync": 0.34299999999348074,
+        "stridedHostSecondsIncludingSync": 1.75,
+        "scope": "One real full-sequence head group; dense first then strided, not a controlled speed benchmark"
+      }
     }
   ],
   "adapterValidation": {
@@ -601,16 +657,30 @@
     "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70"
   },
   "nextExperiment": {
-    "attempt": "a9",
-    "status": "prepared",
+    "attempt": "a10",
+    "status": "running",
     "functionalTrack": "V0.7.121",
+    "source": {
+      "baseCommit": "3898d4c6812dc0769d366b604136d295f9432818",
+      "worktreeModified": false
+    },
+    "startedAt": "2026-10-24T10:36:03.979Z",
     "allocator": "native",
     "garbageCollectionThreshold": 0.6,
+    "maxSplitSizeMiB": 128,
     "torchVramFraction": 0.95,
     "vramHeadroomGb": 4,
     "disableSmartMemory": true,
-    "observedPackedTokens": 89033,
-    "headGroupStagingMiB": 130.4194,
-    "change": "Stage Q/K/V contiguously within each independent head group. Retain all tokens, head groups, projection chunks, phase cache release and sampler settings."
+    "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70",
+    "change": "Protect large native cached blocks from splitting; retain canonical V0.7.121 attention kernel, sampler and frame settings.",
+    "completionClaim": false
+  },
+  "allocatorCapabilityProbe": {
+    "torch": "2.12.1+cu130",
+    "allocator": "native",
+    "requestedBytes": 67108864,
+    "expandableSegmentsSupported": false,
+    "snapshotIsExpandable": false,
+    "scope": "Local platform small-allocation capability check only; not H3 quality or full-model capacity."
   }
 }
