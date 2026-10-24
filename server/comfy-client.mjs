@@ -240,12 +240,16 @@ export class ComfyClient {
 
     return {
       socket,
-      waitForPrompt: (promptId, signal) => this.waitForPrompt(socket, promptId, signal, onMessage),
+      waitForPrompt: (promptId, signal, options) => this.waitForPrompt(socket, promptId, signal, onMessage, options),
       close: () => socket.close(),
     }
   }
 
-  waitForPrompt(socket, promptId, signal, onMessage) {
+  waitForPrompt(socket, promptId, signal, onMessage, { timeoutMs = 2 * 60 * 60 * 1000 } = {}) {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
+      throw new RangeError('Comfy execution timeout must fit a positive Node timer interval')
+    }
+    if (signal?.aborted) return Promise.reject(abortError())
     return new Promise((resolve, reject) => {
       let settled = false
       let completionObserved = false
@@ -314,8 +318,8 @@ export class ComfyClient {
       signal?.addEventListener('abort', handleAbort, { once: true })
       const pollTimer = setInterval(pollHistory, 2_000)
       const timeoutTimer = setTimeout(
-        () => finish(reject, new Error('Video generation exceeded the two-hour safety timeout')),
-        2 * 60 * 60 * 1000,
+        () => finish(reject, Object.assign(new Error('ComfyUI execution wait exceeded its configured time budget'), { code: 'COMFY_EXECUTION_TIMEOUT' })),
+        timeoutMs,
       )
       pollHistory()
     })

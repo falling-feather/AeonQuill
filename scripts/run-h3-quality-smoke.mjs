@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { videoExecutionTimeoutMs } from '../src/lib/video/videoPresetPolicy.mjs'
 import { ComfyClient, findVideoOutput } from '../server/comfy-client.mjs'
 import { buildVideoWorkflow } from '../server/workflow-builder.mjs'
 
@@ -84,7 +85,7 @@ async function main() {
   try {
     const queued = await comfy.queuePrompt(workflow, clientId, controller.signal)
     console.log(JSON.stringify({ at: new Date().toISOString(), type: 'queued', promptId: queued.prompt_id, number: queued.number }))
-    const history = await tracker.waitForPrompt(queued.prompt_id, controller.signal)
+    const history = await tracker.waitForPrompt(queued.prompt_id, controller.signal, { timeoutMs: videoExecutionTimeoutMs(preset, duration) })
     const output = findVideoOutput(history)
     if (!output) throw new Error('H3 completed without a video output')
     console.log(JSON.stringify({

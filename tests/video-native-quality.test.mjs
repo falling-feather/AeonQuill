@@ -41,7 +41,7 @@ test('native Base quality retains target-resolution sampling, 20 steps and origi
   }
 })
 
-test('native Base rejects unvalidated quantization families and long clips instead of downgrading', async () => {
+test('native Base rejects unvalidated quantization and unsupported or oversized clips instead of downgrading', async () => {
   await assert.rejects(buildVideoWorkflow(nativeRequest({ modelProfile: 'fp8Scaled4060' })), error => error.code === 'VIDEO_PRESET_MODEL_UNSUPPORTED')
   await assert.rejects(buildVideoWorkflow(nativeRequest({ duration: 10 })), error => error.code === 'VIDEO_PRESET_DURATION_UNSUPPORTED')
   await assert.rejects(buildVideoWorkflow(nativeRequest({ frameCount: 243 })), error => error.code === 'VIDEO_PRESET_FRAME_COUNT_UNSUPPORTED')

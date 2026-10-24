@@ -1992,7 +1992,7 @@ async function runVideoJob(jobId, { signal }) {
       detail: queued.number ? `已进入 ComfyUI 队列 · #${queued.number}` : '已进入 ComfyUI 队列',
     })
     await store.log(jobId, 'info', `ComfyUI Prompt ID：${queued.prompt_id}`)
-    const history = await tracker.waitForPrompt(queued.prompt_id, signal)
+    const history = await tracker.waitForPrompt(queued.prompt_id, signal, { timeoutMs: job.scheduling.timeoutMs })
     const latest = store.get(jobId)
     if (latest?.cancelRequested) return
 
@@ -2089,7 +2089,7 @@ async function runVideoJob(jobId, { signal }) {
             detail: queuedPostprocess.number ? `SeedVR2 已进入队列 · #${queuedPostprocess.number}` : 'SeedVR2 已进入执行队列',
           })
           await store.log(jobId, 'info', `SeedVR2 Prompt ID：${queuedPostprocess.prompt_id} · ${framesPerChunk} 帧 / VAE ${vaeTileSize}`)
-          const postprocessHistory = await tracker.waitForPrompt(queuedPostprocess.prompt_id, signal)
+          const postprocessHistory = await tracker.waitForPrompt(queuedPostprocess.prompt_id, signal, { timeoutMs: job.scheduling.timeoutMs })
           postprocessOutput = findVideoOutput(postprocessHistory)
           if (!postprocessOutput) throw new Error('SeedVR2 finished without returning a video output')
           break
