@@ -4,7 +4,7 @@ export type VideoDuration = 5 | 8 | 10 | 12 | 15
 export const VIDEO_DURATION_FRAMES: Readonly<Record<VideoDuration, number>>
 export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[]
 export function videoExecutionTimeoutMs(presetId: VideoPresetId, duration: VideoDuration): number
-export type VideoMemoryOptimizations = Readonly<{ headChunks: number; feedForwardChunks: number; tokenThreshold: number }>
+export type VideoMemoryOptimizations = Readonly<{ headChunks: number; feedForwardChunks: number; tokenThreshold: number; attentionNode?: 'MiniMaxReuseQKVAttention'; projectionChunks?: number }>
 export type VideoDimensions = Readonly<Record<VideoAspectRatio, Readonly<{ width: number; height: number }>>>
 export type VideoPresetPolicy = Readonly<{
   id: VideoPresetId; label: string; description: string; qualityClass: string

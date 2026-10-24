@@ -23,7 +23,7 @@ const WORKFLOW_FILES = {
   'image-to-video': 'minimax-h3-i2v.json',
 }
 
-export const WORKFLOW_VERSION = 'h3-quality-matrix-v4'
+export const WORKFLOW_VERSION = 'h3-quality-matrix-v5'
 export const VIDEO_DIMENSIONS = VIDEO_NATIVE_DIMENSIONS.preview
 export { VIDEO_PRESETS }
 
@@ -49,7 +49,7 @@ const ALLOWED_NODE_TYPES_BY_ID = {
   '15': 'SaveVideo',
   '16': 'LoadImage',
   '17': 'LoadImage',
-  '18': 'MiniMaxLowVRAMAttention',
+  '18': new Set(['MiniMaxLowVRAMAttention', 'MiniMaxReuseQKVAttention']),
   '19': 'MiniMaxChunkFeedForward',
 }
 
@@ -179,7 +179,7 @@ export async function buildVideoWorkflow({
   }
   const memory = presetConfig.memoryOptimizationsByDuration?.[duration] ?? presetConfig.memoryOptimizations
   if (memory) {
-    workflow['18'] = { class_type: 'MiniMaxLowVRAMAttention', inputs: { model: workflow['8'].inputs.model, head_chunks: memory.headChunks } }
+    workflow['18'] = { class_type: memory.attentionNode ?? 'MiniMaxLowVRAMAttention', inputs: { model: workflow['8'].inputs.model, head_chunks: memory.headChunks, ...(memory.projectionChunks ? { projection_chunks: memory.projectionChunks } : {}) } }
     workflow['19'] = { class_type: 'MiniMaxChunkFeedForward', inputs: { model: ['18', 0], chunks: memory.feedForwardChunks, seq_threshold: memory.tokenThreshold } }
     workflow['8'].inputs.model = ['19', 0]
     workflow['10'].inputs.model = ['19', 0]

@@ -7,6 +7,7 @@ import {
   VIDEO_DURATIONS,
   VIDEO_PRESETS,
   WORKFLOW_VERSION,
+  ALLOWED_WORKFLOW_NODE_TYPES,
   validateBundledWorkflowTemplates,
   workflowCatalog,
 } from '../server/workflow-builder.mjs'
@@ -15,7 +16,7 @@ function assertWorkflowGraph(workflow) {
   const ids = new Set(Object.keys(workflow))
   for (const [nodeId, node] of Object.entries(workflow)) {
     assert.equal(typeof node.class_type, 'string', `node ${nodeId} class_type`)
-    assert.ok([...REQUIRED_NODE_TYPES, 'MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward'].includes(node.class_type), `node ${nodeId} uses registered class ${node.class_type}`)
+    assert.ok(ALLOWED_WORKFLOW_NODE_TYPES.has(node.class_type), `node ${nodeId} uses registered class ${node.class_type}`)
     assert.equal(typeof node.inputs, 'object', `node ${nodeId} inputs`)
     for (const [inputName, value] of Object.entries(node.inputs)) {
       if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && Number.isInteger(value[1])) {

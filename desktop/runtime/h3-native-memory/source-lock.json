@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "addonRevision": 2,
   "name": "aeonquill_h3_memory",
   "repository": "https://github.com/kijai/ComfyUI-KJNodes",
   "sourceCommit": "eaa8fee753faf37d1539804d89a46d3e0f40963d",
@@ -9,8 +10,14 @@
   "licenseSha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
   "nodes": [
     "MiniMaxLowVRAMAttention",
-    "MiniMaxChunkFeedForward"
+    "MiniMaxChunkFeedForward",
+    "MiniMaxReuseQKVAttention"
   ],
+  "adapter": {
+    "path": "attention_reuse.py",
+    "sha256": "8170f85ba78cea88df52e6395f0255f2f0b299d9a28a034cab36c1f9b2ef8135",
+    "license": "GPL-3.0; derived from the pinned upstream attention implementation"
+  },
   "testedCore": "ComfyUI 0.31.0 / PyTorch 2.12.1+cu130",
   "dependencies": "Existing ComfyUI and PyTorch only; no new Python packages."
 }

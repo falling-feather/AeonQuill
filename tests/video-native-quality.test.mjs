@@ -47,19 +47,21 @@ test('native Base rejects unvalidated quantization and unsupported or oversized 
   await assert.rejects(buildVideoWorkflow(nativeRequest({ frameCount: 243 })), error => error.code === 'VIDEO_PRESET_FRAME_COUNT_UNSUPPORTED')
 })
 
-test('native Base requires both memory nodes, while existing presets remain available', () => {
+test('native Base requires the versioned memory nodes, while existing presets remain available', () => {
   const info = objectInfo()
   const runtime = { comfyVersion: '0.31.0', pytorchVersion: '2.12.1+cu130' }
   const withoutNodes = inspectVideoCapabilities(info, runtime)
   const native = withoutNodes.presets.find(p => p.id === 'nativeBase')
   assert.ok(native)
   assert.equal(native.available, false)
-  assert.deepEqual(new Set(native.missingNodes), new Set(['MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward']))
+  assert.deepEqual(new Set(native.missingNodes), new Set(['MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward', 'MiniMaxReuseQKVAttention']))
   assert.equal(withoutNodes.presets.find(p => p.id === 'cinemaBase').available, true)
   assert.equal(withoutNodes.presets.find(p => p.id === 'nativeHigh').available, true)
   info.MiniMaxLowVRAMAttention = {}
   assert.equal(inspectVideoCapabilities(info, runtime).presets.find(p => p.id === 'nativeBase').available, false)
   info.MiniMaxChunkFeedForward = {}
+  assert.equal(inspectVideoCapabilities(info, runtime).presets.find(p => p.id === 'nativeBase').available, false)
+  info.MiniMaxReuseQKVAttention = {}
   const available = inspectVideoCapabilities(info, runtime)
   assert.deepEqual(available.presets.find(p => p.id === 'nativeBase').availableProfiles, ['int8ConvrotCu130'])
   assert.equal(resolveVideoModelProfile('nativeBase', available), 'int8ConvrotCu130')

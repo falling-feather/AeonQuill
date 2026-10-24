@@ -16,7 +16,7 @@ const blockedMutations = []
 const issues = []
 const checks = []
 const profiles = Object.values(VIDEO_MODEL_PROFILES)
-const info = Object.fromEntries([...DEFAULT_RUNTIME_REQUIREMENTS.requiredNodes, 'KSamplerSelect', 'MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward'].map(name => [name, {}]))
+const info = Object.fromEntries([...DEFAULT_RUNTIME_REQUIREMENTS.requiredNodes, 'KSamplerSelect', 'MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward', 'MiniMaxReuseQKVAttention'].map(name => [name, {}]))
 info.UNETLoader = { input: { required: { unet_name: [profiles.map(profile => profile.unetName)] } } }
 info.CLIPLoader = { input: { required: { clip_name: [profiles.map(profile => profile.clipName)] } } }
 info.VAELoader = { input: { required: { vae_name: [profiles.flatMap(profile => [profile.videoVaeName, profile.audioVaeName])] } } }
@@ -43,6 +43,7 @@ const proxy = createServer(async (request, response) => {
     if (pathname.startsWith('/object_info') && omitMemoryNodes) {
       delete value.MiniMaxLowVRAMAttention
       delete value.MiniMaxChunkFeedForward
+      delete value.MiniMaxReuseQKVAttention
     }
     response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
   } catch (error) {
