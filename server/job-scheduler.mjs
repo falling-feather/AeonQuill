@@ -3,7 +3,7 @@ import { statfs } from 'node:fs/promises'
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RESOURCE_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 const MIN_TIMEOUT_MS = 1_000
-const MAX_TIMEOUT_MS = 3 * 60 * 60 * 1_000
+const MAX_TIMEOUT_MS = 8 * 60 * 60 * 1_000
 const DEFAULT_STORAGE_RESERVE_BYTES = 128 * 1024 * 1024
 
 function schedulerError(code, message, status = 500) {

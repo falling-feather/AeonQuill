@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { videoExecutionTimeoutMs } from '../src/lib/video/videoPresetPolicy.mjs'
 import { extname, join, resolve, sep } from 'node:path'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -471,7 +472,7 @@ function validateVideoRequest(body) {
     throw Object.assign(new Error('不支持的画幅'), { status: 400 })
   }
   if (!VIDEO_DURATIONS[duration]) {
-    throw Object.assign(new Error('当前仅支持 5、10 或 15 秒'), { status: 400 })
+    throw Object.assign(new Error(`当前支持 ${Object.keys(VIDEO_DURATIONS).join('、')} 秒，具体以档位为准`), { status: 400 })
   }
   if (!VIDEO_PRESETS[preset]) {
     throw Object.assign(new Error('不支持的质量预设'), { status: 400 })
@@ -1006,7 +1007,7 @@ function newJob(request, inputPath, lastFramePath, options = {}) {
   const scheduling = createScheduling({
     resourceClass: 'gpu',
     priority: options.priority ?? 50,
-    timeoutMs: 2 * 60 * 60 * 1_000,
+    timeoutMs: videoExecutionTimeoutMs(request.preset, request.duration),
     idempotencyKey: options.idempotencyKey,
     attempt: options.attempt || 1,
     maxAttempts: 3,
@@ -4008,7 +4009,7 @@ async function prepareRecoveredJobs() {
       scheduling: createScheduling({
         resourceClass,
         priority: job.kind === 'video' ? 50 : resourceClass === 'gpu' ? 60 : 70,
-        timeoutMs: job.kind === 'video' ? 2 * 60 * 60 * 1_000 : imageTimeoutMs(job.request?.operation),
+        timeoutMs: job.kind === 'video' ? videoExecutionTimeoutMs(job.request?.preset, job.request?.duration) : imageTimeoutMs(job.request?.operation),
         idempotencyKey: `legacy-${job.id}`,
         queuedAt: job.createdAt || Date.now(),
       }),

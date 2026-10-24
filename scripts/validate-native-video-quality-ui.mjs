@@ -65,6 +65,14 @@ async function createProject(title, mode) {
 }
 
 try {
+  for (const [duration, frames] of [[8, 192], [12, 294]]) {
+    const response = await bridge.request('/api/video/prompt/compile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'text-to-video', prompt: 'A single continuous view of a rainy bookshop.', aspectRatio: '16:9', preset: 'nativeBase', duration, seed: 20261024, audio: true }) })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).plan.effectiveDurationSeconds, (frames - 1) / 24)
+  }
+  const unsupported = await bridge.request('/api/video/prompt/compile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'text-to-video', prompt: 'A rainy bookshop.', preset: 'nativeHigh', duration: 8 }) })
+  assert.equal(unsupported.status, 400)
+  checks.push('real bridge prompt API uses canonical 8s/12s frame timing and rejects long clips on the old native Turbo preset')
   browser = await chromium.launch({ channel: process.platform === 'win32' ? 'msedge' : undefined, headless: true, args: ['--disable-gpu'] })
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } })
   page = await context.newPage()
@@ -84,7 +92,14 @@ try {
   await expect(card.locator('dd').nth(1)).toHaveText('1344×768')
   await expect(page.getByRole('button', { name: '10s', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '15s', exact: true })).toBeDisabled()
-  checks.push('balanced VideoStudio selects native Base20 with matching native/delivery dimensions and 5s-only duration')
+  for (const [seconds, frames, actual] of [[8, 192, '8.00'], [12, 294, '12.25']]) {
+    const durationButton = page.getByRole('button', { name: `${seconds}s`, exact: true })
+    await expect(durationButton).toBeEnabled()
+    await durationButton.click()
+    await expect(durationButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByText(`原生母片 ${frames} 帧，约 ${actual} 秒。`, { exact: true })).toBeVisible()
+  }
+  checks.push('balanced VideoStudio selects 8s/12s native Base20 with 192/294 frames and explicit 12.25s mother-clip timing; 10s/15s remain disabled')
   await card.scrollIntoViewIfNeeded()
   await page.screenshot({ path: join(directory, `native-quality-${kind}-balanced.png`), fullPage: false })
 
@@ -106,7 +121,7 @@ try {
   await expect(selector.locator('option[value="nativeBase"]')).toBeEnabled({ timeout: 25_000 })
   await selector.selectOption('nativeBase')
   await expect(page.locator('.aq-video-quality-brief')).toContainText('1344×768')
-  await expect(page.locator('.aq-video-quality-brief')).toContainText('支持 5 秒')
+  await expect(page.locator('.aq-video-quality-brief')).toContainText('支持 5 / 8 / 12 秒')
   checks.push('smart-video execution exposes the same native Base20 preset and dimensional contract')
   await page.screenshot({ path: join(directory, `native-quality-${kind}-smart.png`), fullPage: false })
   assert.deepEqual(jobRequests, [])

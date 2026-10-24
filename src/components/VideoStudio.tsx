@@ -1,4 +1,4 @@
-import { VIDEO_PRESET_IDS, VIDEO_PRESET_PRESENTATIONS } from '../lib/video/videoPresetPolicy.mjs'
+import { VIDEO_PRESET_IDS, VIDEO_PRESET_PRESENTATIONS, VIDEO_DURATION_FRAMES, VIDEO_DURATION_OPTIONS } from '../lib/video/videoPresetPolicy.mjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -77,12 +77,6 @@ const motionLabels = {
   natural: '自然',
   dynamic: '强烈',
 } as const
-
-const durationFrames: Record<VideoJobRequest['duration'], number> = {
-  5: 124,
-  10: 243,
-  15: 362,
-}
 
 const phaseGroups: Array<{ label: string; phases: VideoJobPhase[] }> = [
   { label: '准备', phases: ['queued', 'preparing'] },
@@ -206,7 +200,7 @@ export function VideoStudio({
       scenario,
       aspectRatio,
       duration,
-      frameCount: durationFrames[duration],
+      frameCount: VIDEO_DURATION_FRAMES[duration],
       audio,
       hasLastFrame: mode === 'image-to-video' && Boolean(lastFrame),
       director,
@@ -392,7 +386,7 @@ export function VideoStudio({
         <section className="video-form-section">
           <span className="video-section-label">时长</span>
           <div className="choice-segment is-three compact">
-            {([5, 10, 15] as const).map((value) => (
+            {VIDEO_DURATION_OPTIONS.map((value) => (
               <button type="button" key={value} disabled={!selectedPreset.allowedDurations.includes(value)} className={duration === value ? 'is-active' : ''} aria-pressed={duration === value} onClick={() => setDuration(value)}>{value}s</button>
             ))}
           </div>
@@ -405,6 +399,7 @@ export function VideoStudio({
         </section>
       </div>
 
+      <p className="pipeline-note">原生母片 {VIDEO_DURATION_FRAMES[duration]} 帧，约 {(VIDEO_DURATION_FRAMES[duration] / 24).toFixed(2)} 秒。</p>
       <section className="video-form-section">
         <div className="video-section-label"><span>生成流水线</span><small>生成与交付尺寸分开</small></div>
         <div className="preset-options pipeline-options">

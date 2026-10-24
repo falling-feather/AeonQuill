@@ -1,3 +1,5 @@
+import { VIDEO_DURATION_FRAMES } from './videoPresetPolicy.mjs'
+
 export const H3_PROMPT_AGENT_SCHEMA_VERSION = 1
 export const H3_PROMPT_AGENT_VERSION = 'aeonquill-h3-shot-planner-v2'
 
@@ -180,8 +182,8 @@ export function compileH3Prompt(input) {
   const sourcePrompt = compact(input.sourcePrompt ?? input.prompt, 8_000)
   if (sourcePrompt.length < 2) fail('INVALID_H3_SOURCE_PROMPT', 'H3 source prompt must contain at least two characters')
   const duration = Number(input.duration)
-  if (![5, 10, 15].includes(duration)) fail('INVALID_H3_PROMPT_DURATION', 'H3 prompt duration must be 5, 10, or 15 seconds')
-  const frames = Number.isInteger(input.frameCount) && input.frameCount > 1 ? input.frameCount : Math.round(duration * 24)
+  if (!Object.hasOwn(VIDEO_DURATION_FRAMES, duration)) fail('INVALID_H3_PROMPT_DURATION', 'Unsupported H3 prompt duration')
+  const frames = Number.isInteger(input.frameCount) && input.frameCount > 1 ? input.frameCount : VIDEO_DURATION_FRAMES[duration]
   const effectiveDurationSeconds = (frames - 1) / 24
   const requestedScenario = Object.hasOwn(H3_SCENARIO_PRESETS, input.scenario) ? input.scenario : 'auto'
   const resolvedScenario = requestedScenario === 'auto'

@@ -1,3 +1,4 @@
+import type { VideoDuration } from './videoPresetPolicy.mjs'
 export type H3ScenarioId = 'auto' | 'cinematic' | 'shortDrama' | 'product' | 'portrait' | 'illustration'
 
 export type H3PromptDirector = {
@@ -57,7 +58,7 @@ export function compileH3Prompt(input: {
   prompt?: string
   scenario?: H3ScenarioId
   aspectRatio?: '16:9' | '9:16' | '1:1'
-  duration: 5 | 10 | 15
+  duration: VideoDuration
   frameCount?: number
   audio?: boolean
   hasLastFrame?: boolean

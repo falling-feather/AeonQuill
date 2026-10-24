@@ -1,6 +1,10 @@
 export type VideoPresetId = 'fast' | 'balanced' | 'delivery720' | 'nativeHigh' | 'cinemaBase' | 'master720' | 'nativeBase'
 export type VideoAspectRatio = '16:9' | '9:16' | '1:1'
-export type VideoDuration = 5 | 10 | 15
+export type VideoDuration = 5 | 8 | 10 | 12 | 15
+export const VIDEO_DURATION_FRAMES: Readonly<Record<VideoDuration, number>>
+export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[]
+export function videoExecutionTimeoutMs(presetId: VideoPresetId, duration: VideoDuration): number
+export type VideoMemoryOptimizations = Readonly<{ headChunks: number; feedForwardChunks: number; tokenThreshold: number }>
 export type VideoDimensions = Readonly<Record<VideoAspectRatio, Readonly<{ width: number; height: number }>>>
 export type VideoPresetPolicy = Readonly<{
   id: VideoPresetId; label: string; description: string; qualityClass: string
@@ -8,7 +12,9 @@ export type VideoPresetPolicy = Readonly<{
   nativeScale: string; delivery: string; preserveNative: boolean; minVramGb: number; minSystemRamGb: number
   allowedDurations: readonly VideoDuration[]; preferredModelProfiles: readonly string[]; allowedModelProfiles?: readonly string[]
   estimatedMinutes: Readonly<Partial<Record<VideoDuration, string>>>; validation: string; postprocessor?: string
-  memoryOptimizations?: Readonly<{ headChunks: number; feedForwardChunks: number; tokenThreshold: number }>
+  memoryOptimizations?: VideoMemoryOptimizations
+  memoryOptimizationsByDuration?: Readonly<Partial<Record<VideoDuration, VideoMemoryOptimizations>>>
+  executionTimeoutMsByDuration?: Readonly<Partial<Record<VideoDuration, number>>>
   requiredNodes?: readonly string[]
 }>
 export const VIDEO_PRESETS: Readonly<Record<VideoPresetId, VideoPresetPolicy>>

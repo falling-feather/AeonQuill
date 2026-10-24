@@ -49,14 +49,15 @@ with torch.inference_mode():
         mlp = MLP(32, 48, dtype=torch.float32, device='cpu', operations=torch.nn)
         values = torch.randn(tokens, 32)
         expected = mlp(values)
-        mlp.kj_num_chunks = 4
         mlp.kj_seq_threshold = 4096
-        compare('feed-forward-' + str(tokens), expected, patches.minimax_mlp_chunked_forward(mlp, values))
+        for chunks in [4, 16]:
+            mlp.kj_num_chunks = chunks
+            compare(f'feed-forward-{tokens}-chunks-{chunks}', expected, patches.minimax_mlp_chunked_forward(mlp, values))
 
     attention = Attention(224, 56, 4, 1e-6, dtype=torch.float32, device='cpu', operations=torch.nn)
     values = torch.randn(31, 224)
     expected = attention(values)
-    for chunks in [8, 10]:
+    for chunks in [8, 10, 28]:
         compare('attention-heads-' + str(chunks), expected, patches.minimax_attn_lowmem_forward(attention, values, transformer_options={'minimax_head_chunks': chunks}))
 
     block = DiTBlock(224, 56, 4, 256, 8, 1e-6, 1e-6, dtype=torch.float32, device='cpu', operations=torch.nn)
@@ -65,10 +66,11 @@ with torch.inference_mode():
     segments = [(0, 31, 0)]
     expected = block(values.clone(), time, segments, None)
     block.attn.forward = types.MethodType(patches.minimax_attn_lowmem_forward, block.attn)
-    block.mlp.kj_num_chunks = 4
     block.mlp.kj_seq_threshold = 16
     block.mlp.forward = types.MethodType(patches.minimax_mlp_chunked_forward, block.mlp)
-    compare('combined-block', expected, patches.minimax_block_lowmem_forward(block, values.clone(), time, segments, None, {'minimax_head_chunks': 8}))
+    for heads, chunks in [(8, 4), (28, 16)]:
+        block.mlp.kj_num_chunks = chunks
+        compare(f'combined-block-heads-{heads}-ff-{chunks}', expected, patches.minimax_block_lowmem_forward(block, values.clone(), time, segments, None, {'minimax_head_chunks': heads}))
 
 assert not torch.cuda.is_initialized(), 'CPU validation must not create a CUDA context'
 payload = {'status': 'passed', 'scope': 'small CPU tensors, import and computation only; not pretrained-model quality', 'core': comfyui_version.__version__, 'torch': torch.__version__, 'cudaContextInitialized': False, 'sourceCommit': json.loads((package/'source-lock.json').read_text(encoding='utf-8'))['sourceCommit'], 'results': results}

@@ -1,4 +1,4 @@
-import { assertVideoPresetModelProfile } from '../src/lib/video/videoPresetPolicy.mjs'
+import { assertVideoPresetModelProfile, VIDEO_DURATION_FRAMES } from '../src/lib/video/videoPresetPolicy.mjs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
@@ -27,11 +27,7 @@ export const WORKFLOW_VERSION = 'h3-quality-matrix-v4'
 export const VIDEO_DIMENSIONS = VIDEO_NATIVE_DIMENSIONS.preview
 export { VIDEO_PRESETS }
 
-export const VIDEO_DURATIONS = {
-  5: 124,
-  10: 243,
-  15: 362,
-}
+export const VIDEO_DURATIONS = VIDEO_DURATION_FRAMES
 
 export const REQUIRED_NODE_TYPES = [...new Set([...DEFAULT_RUNTIME_REQUIREMENTS.requiredNodes, 'KSamplerSelect'])]
 
@@ -140,7 +136,7 @@ export async function buildVideoWorkflow({
       code: 'VIDEO_PRESET_DURATION_UNSUPPORTED',
     })
   }
-  const maxFrames = Math.max(...presetConfig.allowedDurations.map(seconds => VIDEO_DURATIONS[seconds]))
+  const maxFrames = VIDEO_DURATIONS[duration]
   if (!Number.isSafeInteger(length) || length < 5 || length > maxFrames) {
     throw Object.assign(new Error(`${presetConfig.label} supports at most ${maxFrames} frames`), {
       code: 'VIDEO_PRESET_FRAME_COUNT_UNSUPPORTED',
@@ -181,8 +177,8 @@ export async function buildVideoWorkflow({
     }
     workflow['10'].inputs.model = ['1', 0]
   }
-  if (presetConfig.memoryOptimizations) {
-    const memory = presetConfig.memoryOptimizations
+  const memory = presetConfig.memoryOptimizationsByDuration?.[duration] ?? presetConfig.memoryOptimizations
+  if (memory) {
     workflow['18'] = { class_type: 'MiniMaxLowVRAMAttention', inputs: { model: workflow['8'].inputs.model, head_chunks: memory.headChunks } }
     workflow['19'] = { class_type: 'MiniMaxChunkFeedForward', inputs: { model: ['18', 0], chunks: memory.feedForwardChunks, seq_threshold: memory.tokenThreshold } }
     workflow['8'].inputs.model = ['19', 0]
@@ -238,7 +234,7 @@ export async function buildVideoWorkflow({
       sampler: presetConfig.sampler,
       loraStrength: presetConfig.loraStrength,
       lowVram: presetConfig.lowVram,
-      ...(presetConfig.memoryOptimizations ? { memoryOptimizations: presetConfig.memoryOptimizations } : {}),
+      ...(memory ? { memoryOptimizations: memory } : {}),
       audio,
       delivery: presetConfig.delivery,
       preserveNative: presetConfig.preserveNative,

@@ -1,3 +1,8 @@
+export const VIDEO_DURATION_FRAMES = Object.freeze({ 5: 124, 8: 192, 10: 243, 12: 294, 15: 362 })
+export const VIDEO_DURATION_OPTIONS = Object.freeze(Object.keys(VIDEO_DURATION_FRAMES).map(Number))
+
+const LONG_NATIVE_MEMORY = Object.freeze({ headChunks: 28, feedForwardChunks: 16, tokenThreshold: 4096 })
+
 const PREVIEW_DIMENSIONS = Object.freeze({
   '16:9': Object.freeze({ width: 608, height: 352 }),
   '9:16': Object.freeze({ width: 352, height: 608 }),
@@ -129,7 +134,7 @@ export const VIDEO_PRESETS = Object.freeze({
     id: 'nativeBase',
     label: '原生 768P Base20（实验）',
     qualityClass: 'base-master',
-    description: '原生母片，Base20不挂Turbo；低显存扩展降低内存峰值，耗时更长。仅限5秒。',
+    description: '原生母片，Base20不挂Turbo；5/8/12秒实验档，长片段使用更强分块，耗时显著增加。',
     steps: 20,
     samplingMode: 'base',
     sampler: 'res_multistep',
@@ -137,12 +142,14 @@ export const VIDEO_PRESETS = Object.freeze({
     loraStrength: 0,
     nativeScale: 'native768',
     delivery: 'native',
-    allowedDurations: Object.freeze([5]),
+    allowedDurations: Object.freeze([5, 8, 12]),
     preferredModelProfiles: Object.freeze(['int8ConvrotCu130']),
     allowedModelProfiles: Object.freeze(['int8ConvrotCu130']),
     memoryOptimizations: Object.freeze({ headChunks: 8, feedForwardChunks: 4, tokenThreshold: 4096 }),
+    memoryOptimizationsByDuration: Object.freeze({ 8: LONG_NATIVE_MEMORY, 12: LONG_NATIVE_MEMORY }),
+    executionTimeoutMsByDuration: Object.freeze({ 8: 4 * 60 * 60 * 1000, 12: 8 * 60 * 60 * 1000 }),
     requiredNodes: Object.freeze(['MiniMaxLowVRAMAttention', 'MiniMaxChunkFeedForward']),
-    estimatedMinutes: Object.freeze({ 5: '35–65' }),
+    estimatedMinutes: Object.freeze({ 5: '35–65', 8: '60–150', 12: '120–300' }),
     validation: '实验档：需要固定版本KJ低显存节点及INT8/cu130；真实画质和耗时以本机报告为准。',
   }),
   master720: Object.freeze({
@@ -168,6 +175,10 @@ export const VIDEO_PRESETS = Object.freeze({
 
 export const VIDEO_PRESET_IDS = Object.freeze(Object.keys(VIDEO_PRESETS))
 export const VIDEO_PRESET_DISPLAY_ORDER = Object.freeze(['master720', 'cinemaBase', 'nativeBase', 'balanced', 'nativeHigh', 'fast', 'delivery720'])
+
+export function videoExecutionTimeoutMs(presetId, duration) {
+  return VIDEO_PRESETS[presetId]?.executionTimeoutMsByDuration?.[duration] ?? 2 * 60 * 60 * 1000
+}
 
 export function assertVideoPresetModelProfile(presetId, profileId) {
   const preset = VIDEO_PRESETS[presetId]

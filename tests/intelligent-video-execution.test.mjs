@@ -105,6 +105,21 @@ function canonicalJson(value) {
   return JSON.stringify(value)
 }
 
+test('native 8s/12s selections preserve their requested buckets while old presets retain their existing rounding', () => {
+  for (const seconds of [8, 12]) {
+    const project = compileStoryProject({ kind: 'script', text: SCRIPT, aspectRatio: '16:9', frameStrategy: 'start-end', defaultShotSeconds: seconds, now: 1_800_000_000_000 })
+    const plan = createGenerationPlan(project, { now: project.updatedAt })
+    const shotId = project.scenes[0].shots[0].id
+    for (const preset of ['nativeBase', 'fast']) {
+      const checklist = createVideoExecutionChecklist(project, plan, { schemaVersion: 1, selections: [selection(shotId, { preset })] }, { runtime: READY_RUNTIME, assets: [], now: 1_800_000_001_000 })
+      assert.equal(checklist.items[0].request.duration, preset === 'nativeBase' ? seconds : seconds === 8 ? 10 : 15)
+      assertVideoExecutionChecklist(checklist)
+      const confirmation = createVideoExecutionConfirmation(checklist, { itemIds: [checklist.items[0].id], now: 1_800_000_002_000 })
+      assert.equal(compileConfirmedVideoRequests(checklist, confirmation)[0].request.duration, checklist.items[0].request.duration)
+    }
+  }
+})
+
 test('creates stable ready T2V checklist ids and deterministic H3 submission parameters', () => {
   const first = checklistFor()
   const second = checklistFor({}, { now: 1_900_000_000_000 })

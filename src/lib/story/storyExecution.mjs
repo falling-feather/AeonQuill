@@ -1,4 +1,4 @@
-import { VIDEO_PRESET_IDS } from '../video/videoPresetPolicy.mjs'
+import { VIDEO_PRESET_IDS, VIDEO_PRESETS, VIDEO_DURATION_FRAMES } from '../video/videoPresetPolicy.mjs'
 import { assertGenerationPlan, assertStoryProject, StoryContractError } from './storyProject.mjs'
 
 export const STORY_EXECUTION_SCHEMA_VERSION = 1
@@ -224,7 +224,10 @@ function workflowIdForMode(mode) {
     : CONTROLLED_H3_WORKFLOW_IDS.imageToVideo
 }
 
-function durationBucket(durationSeconds) {
+function durationBucket(durationSeconds, preset) {
+  const supportedBucket = VIDEO_PRESETS[preset].allowedDurations.find(value => value >= durationSeconds)
+  if (supportedBucket) return supportedBucket
+  // Keep the original request bucket when no supported duration fits, so later gates reject instead of shortening it.
   if (durationSeconds <= 5) return 5
   if (durationSeconds <= 10) return 10
   return 15
@@ -498,7 +501,7 @@ export function createVideoExecutionChecklist(project, plan, request, options) {
       mode: selection.mode,
       prompt: deterministicPrompt(project, context.scene, context.shot),
       aspectRatio: project.settings.aspectRatio,
-      duration: durationBucket(context.shot.durationSeconds),
+        duration: durationBucket(context.shot.durationSeconds, selection.preset),
       preset: selection.preset,
       seed: planTask.inputs.seed,
       audio: selection.audio,
@@ -549,7 +552,7 @@ function assertItemRequest(request, path) {
   if (!VIDEO_MODES.has(request.mode)) fail('INVALID_VIDEO_MODE', `${path}.mode is unsupported`)
   assertString(request.prompt, `${path}.prompt`, STORY_EXECUTION_LIMITS.maxPromptCharacters)
   if (!ASPECT_RATIOS.has(request.aspectRatio)) fail('INVALID_ASPECT_RATIO', `${path}.aspectRatio is unsupported`)
-  if (![5, 10, 15].includes(request.duration)) fail('INVALID_DURATION', `${path}.duration is unsupported`)
+  if (!Object.hasOwn(VIDEO_DURATION_FRAMES, request.duration)) fail('INVALID_DURATION', `${path}.duration is unsupported`)
   if (!PRESETS.has(request.preset)) fail('INVALID_VIDEO_PRESET', `${path}.preset is unsupported`)
   assertInteger(request.seed, `${path}.seed`, 0, Number.MAX_SAFE_INTEGER)
   if (typeof request.audio !== 'boolean') fail('INVALID_BOOLEAN', `${path}.audio must be boolean`)

@@ -394,7 +394,7 @@ export function SmartVideoWorkbench({
   const presetGuidance = { ...presentation, native: presentation.nativeSummaryByAspect[result.project.settings.aspectRatio] }
   const presetCapability = runtimeStatus?.videoCapabilities?.presets.find(({ id }) => id === preset)
   const selectedDuration = selectedShots[0]?.shot.durationSeconds
-  const selectedEstimate = presetGuidance.estimate[selectedDuration as 5 | 10 | 15]
+  const selectedEstimate = presetGuidance.estimate[selectedDuration as VideoJobRequest['duration']]
   const unsupportedDuration = selectedShots.some(({ shot }) => !presetGuidance.allowedDurations.some(value => value === shot.durationSeconds))
   const activeModelProfile = presetCapability?.availableProfiles[0]
   const shotCount = plannedShots.length

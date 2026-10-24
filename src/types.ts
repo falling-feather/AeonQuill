@@ -1,4 +1,4 @@
-import type { VideoPresetId } from './lib/video/videoPresetPolicy.mjs'
+import type { VideoPresetId, VideoDuration } from './lib/video/videoPresetPolicy.mjs'
 import type { WorkflowWeightSet } from './lib/workflowRecipes.mjs'
 import type { LoraBinding } from './lib/loraCompatibility.mjs'
 import type { ImageEffectParameters } from './lib/imageEffects.mjs'
@@ -388,7 +388,7 @@ export type VideoJobRequest = {
   prompt: string
   scenario?: H3ScenarioId
   aspectRatio: '16:9' | '9:16' | '1:1'
-  duration: 5 | 10 | 15
+  duration: VideoDuration
   preset: VideoPresetId
   modelProfile?: 'auto' | 'fp8Scaled4060' | 'int8ConvrotCu130'
   seed: number
