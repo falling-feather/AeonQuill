@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "h3-native-single-pass-long-duration",
-  "generatedAt": "2026-10-24T09:44:17.995Z",
+  "generatedAt": "2026-10-24T10:02:58.807Z",
   "measurementSetIncomplete": true,
   "unmeasuredRequestedSeconds": [
     12
@@ -394,6 +394,48 @@
         "reserved": 7698
       },
       "phase": "first full forward; projection and early attention blocks ran, no completed sampler step"
+    },
+    {
+      "attempt": "a8",
+      "kind": "agent-interrupted-performance-trial",
+      "source": {
+        "baseCommit": "b9bfecc9ab8b30b2d6f2211567f9ba9e7fa155d3",
+        "worktreeModified": false
+      },
+      "requestedSeconds": 12,
+      "startedAt": "2026-10-24T09:47:10.231Z",
+      "finishedAt": "2026-10-24T09:56:53.294Z",
+      "elapsedSeconds": 583.063,
+      "launchPolicy": {
+        "noVram": false,
+        "lowVram": true,
+        "reserveVramGb": 1.5,
+        "vramHeadroomGb": 4,
+        "cudaMallocAsyncDisabled": true,
+        "requestedAllocatorConfig": "backend:native,garbage_collection_threshold:0.6",
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none",
+        "torchVramFraction": 0.95,
+        "disableSmartMemory": true
+      },
+      "resource": {
+        "samples": 291,
+        "peakVramMiB": 7897,
+        "peakGpuPercent": 100
+      },
+      "completedSamplerSteps": 0,
+      "completedAttentionBlocksInFirstForward": 8,
+      "interruptedBy": "agent",
+      "reason": "Eight attention blocks reached within the first forward, which remained slow. Projection operations were short. Testing contiguous per-head-group inputs while preserving full sequence attention and all sampler settings; no proven OOM.",
+      "sharedGpuMemorySampleMiB": 1246,
+      "observedNativeMemoryMiB": {
+        "peakAllocated": 7048.996,
+        "projectionReserved": 7698,
+        "attentionEntryReserved": 6784
+      },
+      "adapterSha256": "847ebf4539da424940f63c03cd965a91a2ae3a9c2aaabc2e73244460499a8001"
     }
   ],
   "adapterValidation": {
@@ -517,6 +559,14 @@
         "maxAbsoluteDifference": 0
       },
       {
+        "case": "reuse-contiguous-full-sequence-head-groups",
+        "shape": [
+          31,
+          224
+        ],
+        "maxAbsoluteDifference": 0
+      },
+      {
         "case": "combined-block-heads-8-ff-4",
         "shape": [
           31,
@@ -542,22 +592,25 @@
       }
     ],
     "interfaceChecks": [
+      "bounded-contiguous-full-sequence-head-staging",
       "node-schema-and-isolated-model-patch",
       "invalid-chunk-settings-rejected",
       "unsupported-model-and-patch-conflict-rejected",
       "training-rejected"
     ],
-    "adapterSha256": "847ebf4539da424940f63c03cd965a91a2ae3a9c2aaabc2e73244460499a8001"
+    "adapterSha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70"
   },
   "nextExperiment": {
-    "attempt": "a8",
+    "attempt": "a9",
     "status": "prepared",
-    "functionalTrack": "V0.7.120",
+    "functionalTrack": "V0.7.121",
     "allocator": "native",
     "garbageCollectionThreshold": 0.6,
     "torchVramFraction": 0.95,
     "vramHeadroomGb": 4,
     "disableSmartMemory": true,
-    "change": "Explicitly release unused CUDA cache before QKV, before full-sequence attention, and after freeing the QKV buffer. The allocator policy matches a7."
+    "observedPackedTokens": 89033,
+    "headGroupStagingMiB": 130.4194,
+    "change": "Stage Q/K/V contiguously within each independent head group. Retain all tokens, head groups, projection chunks, phase cache release and sampler settings."
   }
 }

@@ -15,7 +15,7 @@
   ],
   "adapter": {
     "path": "attention_reuse.py",
-    "sha256": "847ebf4539da424940f63c03cd965a91a2ae3a9c2aaabc2e73244460499a8001",
+    "sha256": "27429a05507ebfce1d47c0faebdb6f8a7feaad5eae8e39ebdc88f6f03440ae70",
     "license": "GPL-3.0; derived from the pinned upstream attention implementation"
   },
   "testedCore": "ComfyUI 0.31.0 / PyTorch 2.12.1+cu130",

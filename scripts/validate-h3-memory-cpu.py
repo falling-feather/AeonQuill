@@ -88,6 +88,20 @@ with torch.inference_mode():
         compare('attention-heads-' + str(chunks), expected, patches.minimax_attn_lowmem_forward(attention, values, transformer_options={'minimax_head_chunks': chunks}))
     for chunks in [1, 8, 10, 28, 56]:
         compare('reuse-attention-heads-' + str(chunks), expected, reuse.attention_forward(attention, values, transformer_options={'minimax_head_chunks': chunks, 'aeonquill_h3_projection_chunks': 16}))
+    original_attention = patches.optimized_attention
+    staged_groups = []
+    def check_staging(q, k, v, heads, **kwargs):
+        assert all(tensor.is_contiguous() for tensor in [q, k, v]), 'A head group must be staged contiguously'
+        assert q.shape[1] == heads == 2 and q.shape[2] == values.shape[0], 'Keep the complete sequence within a bounded head group'
+        staged_groups.append(heads)
+        return original_attention(q, k, v, heads, **kwargs)
+    try:
+        patches.optimized_attention = check_staging
+        compare('reuse-contiguous-full-sequence-head-groups', expected, reuse.attention_forward(attention, values, transformer_options={'minimax_head_chunks': 28}))
+        assert len(staged_groups) == 28
+        interface_checks.append('bounded-contiguous-full-sequence-head-staging')
+    finally:
+        patches.optimized_attention = original_attention
 
     block = DiTBlock(224, 56, 4, 256, 8, 1e-6, 1e-6, dtype=torch.float32, device='cpu', operations=torch.nn)
     values = torch.randn(31, 224)

@@ -71,12 +71,17 @@ def attention_forward(self, x, rope_freqs=None, transformer_options=None):
     start = 0
     for count in [self.heads // groups + (1 if i < self.heads % groups else 0) for i in range(groups)]:
         end = start + count
-        value = upstream.optimized_attention(q[:, start:end], k[:, start:end], v[:, start:end], count, mask=None, skip_reshape=True, transformer_options=options)
+        # Stage only this head group. Reading the large packed QKV row stride
+        # repeatedly inside SDPA is costly when WDDM pages that storage.
+        q_group = q[:, start:end].contiguous()
+        k_group = k[:, start:end].contiguous()
+        v_group = v[:, start:end].contiguous()
+        value = upstream.optimized_attention(q_group, k_group, v_group, count, mask=None, skip_reshape=True, transformer_options=options)
         # This head group has been consumed on the current stream; future groups
         # use disjoint Q channels, while K and V remain untouched.
         output[:, start * self.head_dim:end * self.head_dim].copy_(value.squeeze(0))
         start = end
-        del value
+        del value, q_group, k_group, v_group
     del q, k, v, qkv
     result = project_rows(self.out_proj, output, chunks)
     del output
