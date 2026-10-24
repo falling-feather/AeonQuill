@@ -157,6 +157,58 @@
     "Elapsed time covers the generation run including model load, sampling and encoding; excludes initial Comfy startup and full weight SHA validation.",
     "NVML whole-card memory.used sampled approximately every 2 seconds, not an allocation-exact model-only peak.",
     "One prompt and seed in landscape T2V. No human blind quality or listening approval.",
-    "8s was generated from worktree changes above V0.7.114 before the V0.7.115/116 commits; do not relabel it as a clean release run."
+    "8s was generated from worktree changes above V0.7.114 before the V0.7.115/116 commits; do not relabel it as a clean release run.",
+    "The installed core documents lowvram as ineffective while DynamicVRAM is enabled. A new dynamic-loading trial uses extra vram-headroom; formal app/runtime configuration remains unchanged during the trials."
+  ],
+  "configurationExperiments": [
+    {
+      "kind": "agent-interrupted-memory-profile-trial",
+      "at": "2026-10-24T06:11:17.282562+00:00",
+      "source": {
+        "baseCommit": "674fc5dbc274420252292edad394ec68b0ba28f8",
+        "worktreeModified": false
+      },
+      "requestedSeconds": 12,
+      "promptId": "0af67753-1954-4241-b87c-1fbfea935d80",
+      "elapsedSeconds": 2053.202,
+      "resource": {
+        "samples": 1022,
+        "peakVramMiB": 7913,
+        "peakGpuPercent": 100
+      },
+      "completedSamplerSteps": 0,
+      "reason": "First forward had not completed after about 34 minutes; near-cap dedicated VRAM and about 2272MiB of shared GPU memory observed. Installed core ignores lowvram while dynamic VRAM is enabled. Retrying real CPU offload; this was not a proven model OOM.",
+      "interruptedBy": "agent",
+      "sharedGpuMemorySampleMiB": 2272,
+      "historyStatus": "error",
+      "graphSha256": "408acd745d8176323d21b94e65a978c97e928479e6a66576748481723f00118b"
+    },
+    {
+      "kind": "backend-access-violation",
+      "requestedSeconds": 12,
+      "elapsedSeconds": 169.359,
+      "source": {
+        "baseCommit": "e72c93ab8a577c68213d9ef1fa8e2b74a0a5d10e",
+        "worktreeModified": false
+      },
+      "launchPolicy": {
+        "noVram": true,
+        "lowVram": false,
+        "reserveVramGb": 1.5,
+        "fastDisk": true,
+        "disablePinnedMemory": true,
+        "cache": "none",
+        "preview": "none"
+      },
+      "resource": {
+        "samples": 85,
+        "peakVramMiB": 410,
+        "peakGpuPercent": 43
+      },
+      "completedSamplerSteps": 0,
+      "phase": "UNETLoader checkpoint load, after CPU text encoding",
+      "observedError": "Windows fatal access violation in torch.storage.__getitem__ via safetensors.get_tensor in the classic loader. Client then received fetch failed.",
+      "conclusion": "Classic NO_VRAM path did not work in this installed runtime. This is not a verified model OOM or a completed 12s inference."
+    }
   ]
 }
